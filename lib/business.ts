@@ -1,0 +1,134 @@
+import type { Outlet } from "@/types/domain";
+
+export const APP_TIME_ZONE = "Asia/Jakarta";
+
+type DateParts = {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  second: string;
+};
+
+function localParts(date = new Date()): DateParts {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+
+  return Object.fromEntries(parts.map((part) => [part.type, part.value])) as DateParts;
+}
+
+export function todayJakarta(date = new Date()) {
+  const p = localParts(date);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+export function timeJakarta(date = new Date()) {
+  const p = localParts(date);
+  return `${p.hour}:${p.minute}`;
+}
+
+export function hourJakarta(date = new Date()) {
+  return Number(localParts(date).hour);
+}
+
+export function addDays(dateString: string, days: number) {
+  const date = new Date(`${dateString}T00:00:00+07:00`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return todayJakarta(date);
+}
+
+export function getEffectiveDate(now = new Date()) {
+  const hour = hourJakarta(now);
+  if (hour < 6) {
+    return { date: addDays(todayJakarta(now), -1), usePrevDay: true };
+  }
+  return { date: todayJakarta(now), usePrevDay: false };
+}
+
+export function parseTimeToMinutes(time?: string | null) {
+  if (!time) return null;
+  const match = String(time).match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function dateTimeUtc(date: string, time?: string | null) {
+  const safeTime = time && /^\d{1,2}:\d{2}/.test(time) ? time.slice(0, 5) : "00:00";
+  return new Date(`${date}T${safeTime}:00+07:00`);
+}
+
+export function isTimeWithinWindow(current: string, start?: string | null, end?: string | null) {
+  const c = parseTimeToMinutes(current);
+  const s = parseTimeToMinutes(start);
+  const e = parseTimeToMinutes(end);
+  if (c === null || s === null || e === null) return false;
+  if (s <= e) return c >= s && c <= e;
+  return c >= s || c <= e;
+}
+
+export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {
+  if (Number(outlet.shift_mode) === 1) return 0;
+  const current = parseTimeToMinutes(timeJakarta(now)) ?? 0;
+  const shift2Start = parseTimeToMinutes(outlet.shift2_start);
+  if (shift2Start !== null && current >= shift2Start) return 2;
+  if (hourJakarta(now) < 6) return 2;
+  return 1;
+}
+
+export function shiftStartTime(outlet: Outlet, shift: 0 | 1 | 2) {
+  if (shift === 2) return outlet.shift2_start || outlet.shift1_start;
+  return outlet.shift1_start;
+}
+
+export function calculateSalary(
+  checkinTime: Date,
+  shiftStart: Date,
+  salaryPerShift: number,
+  lateTolerance: number,
+  deductionPerMinute: number
+) {
+  const diffMinutes = (checkinTime.getTime() - shiftStart.getTime()) / 60000;
+  const rawLateMinutes = Math.max(0, diffMinutes - lateTolerance);
+  const lateMinutes = Math.min(Math.floor(rawLateMinutes), 960);
+  const deduction = Math.min(lateMinutes * deductionPerMinute, salaryPerShift);
+  const finalSalary = Math.max(0, salaryPerShift - deduction);
+  return { lateMinutes, deduction, finalSalary };
+}
+
+export function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const radius = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export function normalizeCurrency(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value || 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+export function sanitizePathSegment(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+export function formatDateRangeStart(date?: string | null) {
+  return date || todayJakarta();
+}
