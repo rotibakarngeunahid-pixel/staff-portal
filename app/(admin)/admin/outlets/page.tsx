@@ -175,7 +175,7 @@ export default function AdminOutletsPage() {
               💡 Buka Google Maps di browser → arahkan ke lokasi outlet → salin URL dari address bar. Format yang terdeteksi otomatis:<br />
               • <code>https://www.google.com/maps/@-6.9054,107.6191,14z</code> (address bar)<br />
               • <code>https://www.google.com/maps/place/NamaTemp.../@-6.9054,107.6191,15z</code><br />
-              • URL "Copy link" place (mengandung <code>!3d</code> dan <code>!4d</code>)<br />
+              • URL &quot;Copy link&quot; place (mengandung <code>!3d</code> dan <code>!4d</code>)<br />
               ⚠️ Link pendek <code>maps.app.goo.gl</code> tidak bisa diparsing — gunakan URL lengkap. Radius 50–150m biasanya cukup.
             </p>
           </AdminSection>
