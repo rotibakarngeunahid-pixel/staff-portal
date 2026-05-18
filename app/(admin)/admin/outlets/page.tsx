@@ -50,14 +50,18 @@ export default function AdminOutletsPage() {
   useEffect(() => { load().catch((err: Error) => setMessage(err.message)); }, []);
 
   function parseMapsUrl(url: string): { lat: string; lng: string } | null {
-    // @lat,lng,zoom pattern (Google Maps standard)
-    const atMatch = url.match(/@(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    // @lat,lng,zoom — URL address bar standard Google Maps
+    const atMatch = url.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
     if (atMatch) return { lat: atMatch[1], lng: atMatch[2] };
-    // ?q=lat,lng or &q=lat,lng
-    const qMatch = url.match(/[?&]q=(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    // !3d{lat}!4d{lng} — URL share "Copy link" untuk Place tertentu
+    const lat3d = url.match(/!3d(-?\d+(?:\.\d+)?)/);
+    const lng4d = url.match(/!4d(-?\d+(?:\.\d+)?)/);
+    if (lat3d && lng4d) return { lat: lat3d[1], lng: lng4d[1] };
+    // ?q=lat,lng atau &q=lat,lng
+    const qMatch = url.match(/[?&]q=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
     if (qMatch) return { lat: qMatch[1], lng: qMatch[2] };
     // ll=lat,lng
-    const llMatch = url.match(/[?&]ll=(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    const llMatch = url.match(/[?&]ll=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
     if (llMatch) return { lat: llMatch[1], lng: llMatch[2] };
     return null;
   }
@@ -152,7 +156,7 @@ export default function AdminOutletsPage() {
           <AdminSection title="Informasi Dasar">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {f("name", "Nama Outlet", "text", "Contoh: Outlet Utama", true)}
-              {f("location_url", "Link Google Maps (otomatis isi koordinat)", "text", "https://maps.google.com/...")}
+              {f("location_url", "Link Google Maps (otomatis isi koordinat)", "text", "https://www.google.com/maps/@-6.9054,107.6191,14z")}
             </div>
             {form.lat && form.lng ? (
               <div style={{ marginTop: 8, padding: "8px 12px", background: "var(--success-bg)", border: "1px solid var(--success-border)", borderRadius: 10, fontSize: 12, fontWeight: 600, color: "var(--success)" }}>
@@ -168,7 +172,11 @@ export default function AdminOutletsPage() {
               {f("radius_m", "Radius (meter)", "number", "100", true)}
             </div>
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-              💡 Paste link Google Maps di atas → koordinat otomatis terisi. Atau isi manual: buka Google Maps → klik lokasi → salin koordinat. Radius 50–150m biasanya cukup.
+              💡 Buka Google Maps di browser → arahkan ke lokasi outlet → salin URL dari address bar. Format yang terdeteksi otomatis:<br />
+              • <code>https://www.google.com/maps/@-6.9054,107.6191,14z</code> (address bar)<br />
+              • <code>https://www.google.com/maps/place/NamaTemp.../@-6.9054,107.6191,15z</code><br />
+              • URL "Copy link" place (mengandung <code>!3d</code> dan <code>!4d</code>)<br />
+              ⚠️ Link pendek <code>maps.app.goo.gl</code> tidak bisa diparsing — gunakan URL lengkap. Radius 50–150m biasanya cukup.
             </p>
           </AdminSection>
 

@@ -1,21 +1,51 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarPlus, RefreshCw } from "lucide-react";
+import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, X } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
 import { ddmmyyyy } from "@/lib/format";
 
+type SlotStatus = "single" | "open" | "off" | "claimed" | string;
+
+type Slot = {
+  shift: number;
+  scheduleId: string | null;
+  staffName: string | null;
+  status: SlotStatus;
+  isMe: boolean;
+};
+
 type Day = {
   date: string;
-  slots: Array<{ shift: number; scheduleId: string | null; staffName: string | null; status: string; isMe: boolean }>;
+  slots: Slot[];
   leaves: Array<{ id: string; staff_name: string; status: string; reason: string | null; isMe: boolean }>;
 };
 
 type SchedulePayload = { ok: true; weekStart: string; days: Day[] };
 
+type LeaveModalState = { date: string; reason: string } | null;
+
 function isoToday() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function SlotBadge({ status, isMe }: { status: SlotStatus; isMe: boolean }) {
+  if (status === "off") return (
+    <span className="status-pill status-danger">Libur</span>
+  );
+  if (status === "single") return (
+    <span className="status-pill" style={{ background: "var(--surface-soft)", color: "var(--muted)", border: "1px solid var(--border)" }}>Full Day</span>
+  );
+  if (status === "claimed" && isMe) return (
+    <span className="status-pill status-ok">Shift Saya</span>
+  );
+  if (status === "claimed") return (
+    <span className="status-pill status-warn">Diambil</span>
+  );
+  return (
+    <span className="status-pill" style={{ background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}>Tersedia</span>
+  );
 }
 
 export default function StaffSchedulePage() {
@@ -23,6 +53,7 @@ export default function StaffSchedulePage() {
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [leaveModal, setLeaveModal] = useState<LeaveModalState>(null);
 
   async function load() {
     setBusy("Memuat jadwal...");
@@ -49,6 +80,7 @@ export default function StaffSchedulePage() {
 
   async function claim(date: string, shift: number) {
     setBusy("Mengambil shift...");
+    setError("");
     try {
       await apiFetch("/api/schedule/claim", { method: "POST", role: "staff", body: { date, shift } });
       await load();
@@ -60,6 +92,7 @@ export default function StaffSchedulePage() {
 
   async function cancel(scheduleId: string) {
     setBusy("Membatalkan shift...");
+    setError("");
     try {
       await apiFetch("/api/schedule/cancel", { method: "POST", role: "staff", body: { scheduleId } });
       await load();
@@ -69,13 +102,14 @@ export default function StaffSchedulePage() {
     }
   }
 
-  async function leave(date: string) {
-    const promptResult = window.prompt("Alasan cuti (opsional)");
-    if (promptResult === null) return;
-    const reason = promptResult;
+  async function submitLeave() {
+    if (!leaveModal) return;
     setBusy("Mengajukan cuti...");
+    setError("");
+    const { date, reason } = leaveModal;
+    setLeaveModal(null);
     try {
-      await apiFetch("/api/schedule/leave", { method: "POST", role: "staff", body: { date, reason } });
+      await apiFetch("/api/schedule/leave", { method: "POST", role: "staff", body: { date, reason: reason || null } });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengajukan cuti");
@@ -84,60 +118,229 @@ export default function StaffSchedulePage() {
   }
 
   return (
-    <StaffPage title="Jadwal" subtitle="Claim shift dan request libur">
-      <div className="mb-4 grid grid-cols-[1fr_auto] gap-2">
-        <input className="field" type="date" value={weekStart} onChange={(event) => setWeekStart(event.target.value)} />
-        <button className="btn btn-soft" onClick={load}>
-          <RefreshCw size={16} />
-        </button>
-      </div>
-      <button className="btn btn-soft mb-4 w-full text-sm" onClick={() => setWeekStart(nextWeek)}>
-        Minggu Berikutnya
-      </button>
-      {error ? <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
-      {busy ? <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-800">{busy}</p> : null}
-
-      <div className="space-y-3">
-        {(data?.days || []).map((day) => (
-          <section key={day.date} className="panel p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="font-black">{ddmmyyyy(day.date)}</h2>
-              <button className="btn btn-soft min-h-9 px-3 text-xs" onClick={() => leave(day.date)}>
-                <CalendarPlus size={15} />
-                Cuti
+    <>
+      {/* Leave modal */}
+      {leaveModal && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 200,
+          background: "rgba(15,23,42,0.55)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "flex-end", justifyContent: "center"
+        }}>
+          <div style={{
+            background: "#fff", borderRadius: "24px 24px 0 0",
+            padding: "24px 20px 32px", width: "min(100%, 480px)",
+            boxShadow: "0 -8px 40px rgba(15,23,42,0.18)"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h2 style={{ fontSize: 17, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)" }}>
+                Request Cuti
+              </h2>
+              <button
+                onClick={() => setLeaveModal(null)}
+                style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}
+              >
+                <X size={20} />
               </button>
             </div>
-            <div className="grid gap-2">
-              {day.slots.map((slot) => (
-                <div key={slot.shift} className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-black">{slot.shift === 0 ? "1 Shift" : `Shift ${slot.shift}`}</p>
-                      <p className="text-sm font-semibold text-slate-500">
-                        {slot.status === "single" ? "Jam buka sampai tutup" : slot.status === "off" ? "Libur" : slot.staffName || "Kosong"}
-                      </p>
-                    </div>
-                    {slot.status === "open" ? (
-                      <button className="btn btn-primary min-h-9 px-3 text-xs" onClick={() => claim(day.date, slot.shift)}>
-                        Ambil
-                      </button>
-                    ) : slot.isMe && slot.scheduleId ? (
-                      <button className="btn btn-soft min-h-9 px-3 text-xs" onClick={() => cancel(slot.scheduleId!)}>
-                        Batalkan
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
+            <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+              Tanggal: <strong>{ddmmyyyy(leaveModal.date)}</strong>
+            </p>
+            <label className="label">Alasan cuti (opsional)</label>
+            <textarea
+              className="field"
+              rows={3}
+              placeholder="Contoh: keperluan keluarga, sakit, dll."
+              value={leaveModal.reason}
+              onChange={(e) => setLeaveModal((prev) => prev ? { ...prev, reason: e.target.value } : null)}
+              style={{ resize: "none", marginBottom: 14 }}
+            />
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={submitLeave}>
+                <CalendarMinus size={16} /> Ajukan Cuti
+              </button>
+              <button className="btn btn-soft" style={{ flex: 1 }} onClick={() => setLeaveModal(null)}>
+                Batal
+              </button>
             </div>
-            {day.leaves.length ? (
-              <p className="mt-3 text-xs font-bold text-amber-700">
-                Cuti: {day.leaves.map((item) => item.staff_name).join(", ")}
-              </p>
-            ) : null}
-          </section>
-        ))}
-      </div>
-    </StaffPage>
+          </div>
+        </div>
+      )}
+
+      <StaffPage title="Jadwal" subtitle="Claim shift dan request libur">
+        {/* Week selector */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+          <input
+            className="field"
+            type="date"
+            value={weekStart}
+            onChange={(event) => setWeekStart(event.target.value)}
+          />
+          <button className="btn btn-soft" style={{ padding: "0 14px" }} onClick={load} disabled={Boolean(busy)}>
+            <RefreshCw size={16} style={busy ? { animation: "spin 1s linear infinite" } : undefined} />
+          </button>
+        </div>
+
+        <button
+          className="btn btn-soft"
+          style={{ width: "100%", fontSize: 13 }}
+          onClick={() => setWeekStart(nextWeek)}
+          disabled={Boolean(busy)}
+        >
+          Minggu Berikutnya <ChevronRight size={15} />
+        </button>
+
+        {/* Banners */}
+        {error && (
+          <div style={{
+            background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
+            borderRadius: 12, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
+          }}>
+            <span>⚠️ {error}</span>
+            <button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        {busy && (
+          <div style={{
+            background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
+            borderRadius: 12, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--warning)"
+          }}>
+            ⏳ {busy}
+          </div>
+        )}
+
+        {/* Days */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(data?.days || []).map((day) => {
+            const today = new Date().toISOString().slice(0, 10);
+            const isToday = day.date === today;
+            return (
+              <div
+                key={day.date}
+                className="panel"
+                style={{
+                  padding: 0, overflow: "hidden",
+                  border: isToday ? "2px solid var(--primary)" : undefined
+                }}
+              >
+                {/* Day header */}
+                <div style={{
+                  padding: "12px 16px",
+                  background: isToday
+                    ? "linear-gradient(135deg, rgba(192,57,43,0.08), rgba(192,57,43,0.04))"
+                    : "var(--surface-soft)",
+                  borderBottom: "1px solid var(--border)",
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <h2 style={{
+                      fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
+                      color: isToday ? "var(--primary)" : "var(--ink)"
+                    }}>
+                      {ddmmyyyy(day.date)}
+                    </h2>
+                    {isToday && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 800, letterSpacing: "0.5px",
+                        background: "var(--primary)", color: "#fff",
+                        borderRadius: 6, padding: "2px 7px", textTransform: "uppercase"
+                      }}>
+                        Hari ini
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn-soft"
+                    style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
+                    onClick={() => setLeaveModal({ date: day.date, reason: "" })}
+                    disabled={Boolean(busy)}
+                  >
+                    <CalendarMinus size={13} /> Cuti
+                  </button>
+                </div>
+
+                {/* Slots */}
+                <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  {day.slots.map((slot) => (
+                    <div
+                      key={slot.shift}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                        padding: "10px 12px",
+                        background: slot.isMe
+                          ? "rgba(22,163,74,0.06)"
+                          : slot.status === "off"
+                          ? "rgba(220,38,38,0.04)"
+                          : "#fafafa",
+                        borderRadius: 12,
+                        border: slot.isMe
+                          ? "1.5px solid var(--success-border)"
+                          : slot.status === "off"
+                          ? "1.5px solid var(--danger-border)"
+                          : "1px solid var(--border)"
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <p style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
+                          {slot.shift === 0 ? "Full Shift" : `Shift ${slot.shift}`}
+                        </p>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <SlotBadge status={slot.status} isMe={slot.isMe} />
+                          {slot.status === "claimed" && slot.staffName && !slot.isMe && (
+                            <span style={{ fontSize: 10, color: "var(--muted)" }}>{slot.staffName}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        {slot.status === "open" ? (
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 12, padding: "8px 16px", minHeight: 0 }}
+                            onClick={() => claim(day.date, slot.shift)}
+                            disabled={Boolean(busy)}
+                          >
+                            Ambil
+                          </button>
+                        ) : slot.isMe && slot.scheduleId ? (
+                          <button
+                            className="btn btn-soft"
+                            style={{ fontSize: 12, padding: "8px 14px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
+                            onClick={() => cancel(slot.scheduleId!)}
+                            disabled={Boolean(busy)}
+                          >
+                            Batal
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Leaves */}
+                {day.leaves.length > 0 && (
+                  <div style={{
+                    padding: "8px 14px 12px",
+                    display: "flex", alignItems: "center", gap: 6
+                  }}>
+                    <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
+                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>
+                      Cuti: {day.leaves.map((l) => l.staff_name + (l.isMe ? " (Saya)" : "")).join(", ")}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {data && data.days.length === 0 && (
+            <div className="panel" style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+              Tidak ada jadwal untuk minggu ini.
+            </div>
+          )}
+        </div>
+      </StaffPage>
+    </>
   );
 }

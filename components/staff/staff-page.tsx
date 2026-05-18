@@ -10,7 +10,7 @@ export function StaffPage({
     <div className="mobile-frame">
       <header className="staff-hdr">
         <Image
-          src="https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto,w_80/v1777572835/Untitled-2_tgjm4u.png"
+          src="https://owner-portal.rotibakarngeunah.my.id/wp-content/uploads/2026/05/cropped-Icon-Roti-Bakar-Ngeunah.webp"
           alt="Roti Bakar Ngeunah"
           width={38}
           height={38}

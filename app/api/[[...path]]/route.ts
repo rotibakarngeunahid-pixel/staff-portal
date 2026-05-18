@@ -390,17 +390,34 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const cfg = await configMap(db);
   const now = new Date();
   const start = dateTimeUtc(date, shiftStartTime(outlet, shift));
+
+  // Jika outlet 2 shift dan shift satunya libur, gaji jadi 2x (full shift)
+  let isFullShift2x = false;
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    const otherShift = shift === 1 ? 2 : 1;
+    const { data: otherOff } = await db
+      .from("shift_dayoff")
+      .select("id")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .eq("shift", otherShift)
+      .maybeSingle();
+    if (otherOff) isFullShift2x = true;
+  }
+
+  const effectiveSalary = normalizeCurrency(staff.salary_per_shift) * (isFullShift2x ? 2 : 1);
   const salary = calculateSalary(
     now,
     start,
-    normalizeCurrency(staff.salary_per_shift),
+    effectiveSalary,
     configNumber(cfg, "late_tolerance_minutes", 10),
     configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
   );
 
   const flags = [
     gpsLowAccuracy ? "GPS_LOW_ACCURACY" : "",
-    salary.lateMinutes > 0 ? "TELAT" : ""
+    salary.lateMinutes > 0 ? "TELAT" : "",
+    isFullShift2x ? "FULL_SHIFT_2X" : ""
   ]
     .filter(Boolean)
     .join(",");

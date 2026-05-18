@@ -322,6 +322,16 @@ export default function StaffHomePage() {
               </div>
             </div>
 
+            {/* GPS blocked warning */}
+            {gps.status === "bad" && nextState === "checkin" && (
+              <div style={{
+                background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
+                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)"
+              }}>
+                📍 Kamu terlalu jauh dari outlet ({gps.dist}m, batas {outlet?.radius_m}m). Pindah lebih dekat untuk absen masuk.
+              </div>
+            )}
+
             {/* Time info panel (after checkin) */}
             {att?.checkin_time && (
               <div className="panel animate-slide-up" style={{ padding: 16 }}>
@@ -335,8 +345,13 @@ export default function StaffHomePage() {
                     <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 24, fontWeight: 900 }}>{hhmm(att.checkout_time) || "—"}</p>
                   </div>
                 </div>
+                {String(att.flags || "").includes("FULL_SHIFT_2X") && (
+                  <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, fontWeight: 700, color: "var(--primary)" }}>
+                    🌟 Full Shift — shift lain libur, gaji 2x!
+                  </div>
+                )}
                 {att.late_minutes > 0 && (
-                  <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, fontWeight: 600, color: "var(--warning)" }}>
+                  <div style={{ marginTop: 6, textAlign: "center", fontSize: 12, fontWeight: 600, color: "var(--warning)" }}>
                     ⚠️ Telat {att.late_minutes} mnt · Potongan {rupiah(att.deduction)}
                   </div>
                 )}
@@ -350,15 +365,15 @@ export default function StaffHomePage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {nextState === "checkin" && (
                 <button
-                  className={`btn btn-primary btn-action${!busy ? " btn-glow" : ""}`}
+                  className={`btn btn-primary btn-action${!busy && gps.status === "ok" ? " btn-glow" : ""}`}
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Masuk",
                     onCapture: (url) => { closeCamera(); runAttendance("checkin", url); }
                   })}
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy) || gps.status === "bad"}
                 >
-                  <Camera size={20} /> Absen Masuk
+                  <Camera size={20} /> {gps.status === "bad" ? "Di Luar Area Outlet" : "Absen Masuk"}
                 </button>
               )}
 
