@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AdminPage } from "@/components/admin/admin-page";
+import { Plus, RefreshCw } from "lucide-react";
+import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
 
@@ -31,6 +32,8 @@ export default function AdminAttendancePage() {
   const [filters, setFilters] = useState({ dateFrom: "", dateTo: "", staffId: "", outletId: "", status: "" });
   const [manual, setManual] = useState({ staffId: "", outletId: "", date: new Date().toISOString().slice(0, 10), shift: "0", checkin_time: "09:00", checkout_time: "" });
   const [message, setMessage] = useState("");
+  const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
+  const [showManual, setShowManual] = useState(false);
 
   async function load() {
     const [attPayload, staffPayload, outletPayload] = await Promise.all([
@@ -44,19 +47,20 @@ export default function AdminAttendancePage() {
   }
 
   useEffect(() => {
-    load().catch((err: Error) => setMessage(err.message));
+    load().catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function addManual(event: React.FormEvent) {
     event.preventDefault();
-    setMessage("Menyimpan absen manual...");
+    setMessage("Menyimpan absen manual..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/attendance", { method: "POST", role: "admin", body: manual });
       await load();
-      setMessage("Absen manual tersimpan");
+      setShowManual(false);
+      setMessage("Absen manual tersimpan ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal");
+      setMessage(err instanceof Error ? err.message : "Gagal"); setMsgType("err");
     }
   }
 
@@ -66,92 +70,169 @@ export default function AdminAttendancePage() {
     const late = window.prompt("Menit terlambat", String(row.late_minutes));
     const deduction = window.prompt("Potongan", String(row.deduction));
     const finalSalary = window.prompt("Gaji final", String(row.final_salary));
-    setMessage("Menyimpan revisi...");
+    setMessage("Menyimpan revisi..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/attendance", {
         method: "PUT",
         role: "admin",
-        body: {
-          attendanceId: row.id,
-          revision_note: note,
-          late_minutes: late,
-          deduction,
-          final_salary: finalSalary
-        }
+        body: { attendanceId: row.id, revision_note: note, late_minutes: late, deduction, final_salary: finalSalary }
       });
       await load();
-      setMessage("Revisi tersimpan");
+      setMessage("Revisi tersimpan ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menyimpan revisi");
+      setMessage(err instanceof Error ? err.message : "Gagal menyimpan revisi"); setMsgType("err");
     }
   }
 
   return (
-    <AdminPage title="Data Absensi" subtitle="Filter, absen manual, dan revisi gaji">
-      <section className="panel mb-5 grid gap-3 p-4 md:grid-cols-6">
-        <input className="field" type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} />
-        <input className="field" type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} />
-        <select className="field" value={filters.staffId} onChange={(e) => setFilters({ ...filters, staffId: e.target.value })}>
-          <option value="">Semua staff</option>
-          {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        <select className="field" value={filters.outletId} onChange={(e) => setFilters({ ...filters, outletId: e.target.value })}>
-          <option value="">Semua outlet</option>
-          {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        <select className="field" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-          <option value="">Semua status</option>
-          <option value="present">Hadir</option>
-          <option value="late">Terlambat</option>
-          <option value="absent">Absen</option>
-          <option value="off">Off</option>
-        </select>
-        <button className="btn btn-primary" onClick={load}>Filter</button>
-      </section>
+    <AdminPage
+      title="Data Absensi"
+      subtitle="Filter, absen manual, dan revisi gaji"
+      action={
+        !showManual ? (
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => setShowManual(true)}>
+            <Plus size={15} /> Absen Manual
+          </button>
+        ) : null
+      }
+    >
+      <MsgBar message={message} type={msgType} />
 
-      <form className="panel mb-5 grid gap-3 p-4 md:grid-cols-6" onSubmit={addManual}>
-        <select className="field" value={manual.staffId} onChange={(e) => setManual({ ...manual, staffId: e.target.value })} required>
-          <option value="">Staff</option>
-          {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        <select className="field" value={manual.outletId} onChange={(e) => setManual({ ...manual, outletId: e.target.value })} required>
-          <option value="">Outlet</option>
-          {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        <input className="field" type="date" value={manual.date} onChange={(e) => setManual({ ...manual, date: e.target.value })} />
-        <select className="field" value={manual.shift} onChange={(e) => setManual({ ...manual, shift: e.target.value })}>
-          <option value="0">Full</option>
-          <option value="1">Shift 1</option>
-          <option value="2">Shift 2</option>
-        </select>
-        <input className="field" type="time" value={manual.checkin_time} onChange={(e) => setManual({ ...manual, checkin_time: e.target.value })} />
-        <button className="btn btn-primary">Tambah Manual</button>
-      </form>
-      <p className="mb-3 text-sm font-bold text-slate-500">{message}</p>
+      {/* Manual entry form */}
+      {showManual ? (
+        <AdminSection title="Tambah Absen Manual">
+          <form onSubmit={addManual}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+              <div>
+                <label className="label">Staff<span style={{ color: "var(--danger)" }}>*</span></label>
+                <select className="field" value={manual.staffId} onChange={(e) => setManual({ ...manual, staffId: e.target.value })} required>
+                  <option value="">Pilih staff</option>
+                  {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Outlet<span style={{ color: "var(--danger)" }}>*</span></label>
+                <select className="field" value={manual.outletId} onChange={(e) => setManual({ ...manual, outletId: e.target.value })} required>
+                  <option value="">Pilih outlet</option>
+                  {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Tanggal</label>
+                <input className="field" type="date" value={manual.date} onChange={(e) => setManual({ ...manual, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Shift</label>
+                <select className="field" value={manual.shift} onChange={(e) => setManual({ ...manual, shift: e.target.value })}>
+                  <option value="0">Full</option>
+                  <option value="1">Shift 1</option>
+                  <option value="2">Shift 2</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Jam Masuk</label>
+                <input className="field" type="time" value={manual.checkin_time} onChange={(e) => setManual({ ...manual, checkin_time: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Jam Pulang (opsional)</label>
+                <input className="field" type="time" value={manual.checkout_time} onChange={(e) => setManual({ ...manual, checkout_time: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}>
+                <Plus size={15} /> Tambah Absen
+              </button>
+              <button type="button" className="btn btn-soft" onClick={() => setShowManual(false)}>Batal</button>
+            </div>
+          </form>
+        </AdminSection>
+      ) : null}
 
-      <section className="panel overflow-x-auto">
-        <table className="data-table">
-          <thead>
-            <tr><th>Tanggal</th><th>Staff</th><th>Outlet</th><th>Shift</th><th>Masuk</th><th>Pulang</th><th>Telat</th><th>Gaji</th><th>Status Bayar</th><th>Aksi</th></tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
-                <td>{ddmmyyyy(row.date)}</td>
-                <td className="font-bold">{row.staff_name}</td>
-                <td>{row.outlet_name}</td>
-                <td>{row.shift === 0 ? "Full" : row.shift}</td>
-                <td>{hhmm(row.checkin_time)}</td>
-                <td>{hhmm(row.checkout_time)}</td>
-                <td>{row.late_minutes} mnt</td>
-                <td>{rupiah(row.final_salary)}</td>
-                <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
-                <td><button className="btn btn-soft min-h-9 px-3 text-xs" onClick={() => revise(row)}>Revisi</button></td>
+      {/* Filters */}
+      <AdminSection title="Filter Data">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr auto", gap: 12, alignItems: "flex-end" }}>
+          <div>
+            <label className="label">Dari Tanggal</label>
+            <input className="field" type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Sampai Tanggal</label>
+            <input className="field" type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Staff</label>
+            <select className="field" value={filters.staffId} onChange={(e) => setFilters({ ...filters, staffId: e.target.value })}>
+              <option value="">Semua staff</option>
+              {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Outlet</label>
+            <select className="field" value={filters.outletId} onChange={(e) => setFilters({ ...filters, outletId: e.target.value })}>
+              <option value="">Semua outlet</option>
+              {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Status</label>
+            <select className="field" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+              <option value="">Semua status</option>
+              <option value="present">Hadir</option>
+              <option value="late">Terlambat</option>
+              <option value="absent">Absen</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <button className="btn btn-primary" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={load}>
+            <RefreshCw size={14} /> Filter
+          </button>
+        </div>
+      </AdminSection>
+
+      {/* Table */}
+      <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)" }}>
+          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Hasil ({rows.length} data)</h2>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Tanggal</th>
+                <th>Staff</th>
+                <th>Outlet</th>
+                <th>Shift</th>
+                <th>Masuk</th>
+                <th>Pulang</th>
+                <th>Telat</th>
+                <th>Gaji</th>
+                <th>Status Bayar</th>
+                <th>Aksi</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={10} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+              ) : rows.map((row) => (
+                <tr key={row.id}>
+                  <td>{ddmmyyyy(row.date)}</td>
+                  <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                  <td>{row.outlet_name}</td>
+                  <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                  <td>{hhmm(row.checkin_time)}</td>
+                  <td>{hhmm(row.checkout_time)}</td>
+                  <td>{row.late_minutes} mnt</td>
+                  <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
+                  <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
+                  <td>
+                    <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => revise(row)}>Revisi</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </AdminPage>
   );
 }

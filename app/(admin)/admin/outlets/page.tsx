@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AdminPage } from "@/components/admin/admin-page";
+import { MapPin, Plus, RefreshCw } from "lucide-react";
+import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 
 type Outlet = {
@@ -24,199 +25,222 @@ type Outlet = {
 };
 
 const empty = {
-  name: "",
-  location_url: "",
-  lat: "",
-  lng: "",
-  radius_m: "100",
+  name: "", location_url: "", lat: "", lng: "", radius_m: "100",
   shift_mode: "1",
-  shift1_start: "09:00",
-  shift1_end: "17:00",
-  shift2_start: "",
-  shift2_end: "",
-  report_buka_start: "09:00",
-  report_buka_end: "11:00",
-  report_tutup_start: "20:00",
-  report_tutup_end: "01:00"
+  shift1_start: "09:00", shift1_end: "17:00",
+  shift2_start: "17:00", shift2_end: "01:00",
+  report_buka_start: "09:00", report_buka_end: "11:00",
+  report_tutup_start: "20:00", report_tutup_end: "01:00"
 };
-
-type FormKey = keyof typeof empty;
-type FormField = [FormKey, string, React.HTMLInputTypeAttribute];
+type F = typeof empty;
 
 export default function AdminOutletsPage() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
+  const [showForm, setShowForm] = useState(false);
 
   async function load() {
     const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
     setOutlets(payload.outlets);
   }
 
-  useEffect(() => {
-    load().catch((err: Error) => setMessage(err.message));
-  }, []);
+  useEffect(() => { load().catch((err: Error) => setMessage(err.message)); }, []);
 
-  function validateForm() {
-    if (!form.name.trim()) return "Nama outlet wajib diisi";
-    const lat = Number(form.lat);
-    const lng = Number(form.lng);
-    const radius = Number(form.radius_m);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "Latitude dan longitude wajib valid";
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return "Koordinat outlet di luar batas valid";
-    if (!Number.isFinite(radius) || radius <= 0) return "Radius meter wajib lebih dari 0";
-    if (!form.shift1_start || !form.shift1_end) return "Jam buka dan jam tutup wajib diisi";
-    if (form.shift_mode === "2" && (!form.shift2_start || !form.shift2_end)) return "Jam Shift 2 wajib diisi";
-    return "";
-  }
+  const f = (key: keyof F, label: string, type: string, placeholder?: string, required = false) => (
+    <div key={key}>
+      <label className="label">{label}{required ? <span style={{ color: "var(--danger)" }}>*</span> : null}</label>
+      <input
+        className="field"
+        type={type}
+        step={type === "number" ? "any" : undefined}
+        min={key === "radius_m" ? "1" : undefined}
+        placeholder={placeholder}
+        value={form[key]}
+        onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
+      />
+    </div>
+  );
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    const validationError = validateForm();
-    if (validationError) {
-      setMessage(validationError);
-      return;
-    }
-    setMessage("Menyimpan...");
+    const lat = Number(form.lat); const lng = Number(form.lng); const r = Number(form.radius_m);
+    if (!form.name.trim()) { setMessage("Nama outlet wajib diisi"); setMsgType("err"); return; }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) { setMessage("Koordinat GPS tidak valid"); setMsgType("err"); return; }
+    if (!Number.isFinite(r) || r <= 0) { setMessage("Radius harus lebih dari 0"); setMsgType("err"); return; }
+    if (form.shift_mode === "2" && (!form.shift2_start || !form.shift2_end)) { setMessage("Jam shift 2 wajib diisi"); setMsgType("err"); return; }
+    setMessage("Menyimpan..."); setMsgType("info");
     try {
-      const payload = {
-        ...form,
-        shift2_start: form.shift_mode === "2" ? form.shift2_start : "",
-        shift2_end: form.shift_mode === "2" ? form.shift2_end : ""
-      };
       await apiFetch("/api/admin/outlets", {
         method: editing ? "PUT" : "POST",
         role: "admin",
-        body: { ...payload, outletId: editing || undefined }
+        body: { ...form, outletId: editing || undefined, shift2_start: form.shift_mode === "2" ? form.shift2_start : "", shift2_end: form.shift_mode === "2" ? form.shift2_end : "" }
       });
-      setForm(empty);
-      setEditing(null);
+      setForm(empty); setEditing(null); setShowForm(false);
       await load();
-      setMessage("Tersimpan");
+      setMessage("Outlet tersimpan ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menyimpan");
+      setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
     }
   }
 
   function edit(row: Outlet) {
     setEditing(row.id);
     setForm({
-      ...empty,
-      name: row.name,
-      location_url: row.location_url || "",
-      lat: String(row.lat),
-      lng: String(row.lng),
-      radius_m: String(row.radius_m),
+      name: row.name, location_url: row.location_url || "",
+      lat: String(row.lat), lng: String(row.lng), radius_m: String(row.radius_m),
       shift_mode: String(row.shift_mode),
       shift1_start: row.shift1_start?.slice(0, 5) || "09:00",
       shift1_end: row.shift1_end?.slice(0, 5) || "17:00",
-      shift2_start: row.shift_mode === 2 ? row.shift2_start?.slice(0, 5) || "17:00" : "",
-      shift2_end: row.shift_mode === 2 ? row.shift2_end?.slice(0, 5) || "01:00" : "",
+      shift2_start: row.shift2_start?.slice(0, 5) || "17:00",
+      shift2_end: row.shift2_end?.slice(0, 5) || "01:00",
       report_buka_start: row.report_buka_start?.slice(0, 5) || "09:00",
       report_buka_end: row.report_buka_end?.slice(0, 5) || "11:00",
       report_tutup_start: row.report_tutup_start?.slice(0, 5) || "20:00",
       report_tutup_end: row.report_tutup_end?.slice(0, 5) || "01:00"
     });
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function updateField(key: FormKey, value: string) {
-    setForm((current) => ({ ...current, [key]: value }));
-  }
-
-  function updateShiftMode(value: string) {
-    setForm((current) => ({
-      ...current,
-      shift_mode: value,
-      shift2_start: value === "2" ? current.shift2_start || current.shift1_end || "17:00" : "",
-      shift2_end: value === "2" ? current.shift2_end || "01:00" : ""
-    }));
-  }
-
-  function renderInput([key, label, type]: FormField) {
-    const isRequired = ["name", "lat", "lng", "radius_m", "shift1_start", "shift1_end", "shift2_start", "shift2_end"].includes(key);
-    return (
-      <div key={key}>
-        <label className="label">{label}</label>
-        <input
-          className="field"
-          type={type}
-          required={isRequired}
-          min={key === "radius_m" ? 1 : undefined}
-          step={key === "lat" || key === "lng" ? "any" : undefined}
-          value={form[key]}
-          onChange={(e) => updateField(key, e.target.value)}
-        />
-      </div>
-    );
-  }
-
-  const isTwoShift = form.shift_mode === "2";
-  const baseFields: FormField[] = [
-    ["name", "Nama", "text"],
-    ["location_url", "URL Maps", "text"],
-    ["lat", "Latitude", "number"],
-    ["lng", "Longitude", "number"],
-    ["radius_m", "Radius meter", "number"]
-  ];
-  const shiftFields: FormField[] = isTwoShift
-    ? [
-        ["shift1_start", "Shift 1 mulai", "time"],
-        ["shift1_end", "Shift 1 selesai", "time"],
-        ["shift2_start", "Shift 2 mulai", "time"],
-        ["shift2_end", "Shift 2 selesai", "time"]
-      ]
-    : [
-        ["shift1_start", "Jam buka", "time"],
-        ["shift1_end", "Jam tutup", "time"]
-      ];
-  const reportFields: FormField[] = [
-    ["report_buka_start", "Laporan buka mulai", "time"],
-    ["report_buka_end", "Laporan buka selesai", "time"],
-    ["report_tutup_start", "Laporan tutup mulai", "time"],
-    ["report_tutup_end", "Laporan tutup selesai", "time"]
-  ];
+  const is2Shift = form.shift_mode === "2";
 
   return (
-    <AdminPage title="Manajemen Outlet" subtitle="Geofence, shift, dan window laporan">
-      <form className="panel mb-5 grid gap-3 p-4 md:grid-cols-4" noValidate onSubmit={submit}>
-        {baseFields.map(renderInput)}
-        <div>
-          <label className="label">Mode Shift</label>
-          <select className="field" value={form.shift_mode} onChange={(e) => updateShiftMode(e.target.value)}>
-            <option value="1">1 Shift</option>
-            <option value="2">2 Shift</option>
-          </select>
-        </div>
-        {shiftFields.map(renderInput)}
-        {reportFields.map(renderInput)}
-        <div className="flex items-end gap-2 md:col-span-4">
-          <button className="btn btn-primary">{editing ? "Update Outlet" : "Tambah Outlet"}</button>
-          {editing ? <button type="button" className="btn btn-soft" onClick={() => { setEditing(null); setForm(empty); }}>Batal</button> : null}
-          <span className="text-sm font-bold text-slate-500">{message}</span>
-        </div>
-      </form>
+    <AdminPage
+      title="Manajemen Outlet"
+      subtitle="Geofence, shift, dan jendela laporan"
+      action={
+        !showForm ? (
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => { setEditing(null); setForm(empty); setShowForm(true); }}>
+            <Plus size={15} /> Tambah Outlet
+          </button>
+        ) : null
+      }
+    >
+      <MsgBar message={message} type={msgType} />
 
-      <section className="grid gap-3 md:grid-cols-2">
-        {outlets.map((outlet) => (
-          <article key={outlet.id} className="panel p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-black">{outlet.name}</h2>
-                <p className="text-sm font-semibold text-slate-500">
-                  Radius {outlet.radius_m}m · {outlet.shift_mode === 2 ? "2 Shift" : "1 Shift"}
-                </p>
-                <p className="mt-2 text-sm font-bold text-slate-700">
-                  {outlet.shift_mode === 2
-                    ? `S1 ${outlet.shift1_start?.slice(0, 5)}-${outlet.shift1_end?.slice(0, 5)} · S2 ${outlet.shift2_start?.slice(0, 5)}-${outlet.shift2_end?.slice(0, 5)}`
-                    : `Jam ${outlet.shift1_start?.slice(0, 5)}-${outlet.shift1_end?.slice(0, 5)}`}
-                </p>
-              </div>
-              <button className="btn btn-soft min-h-9 px-3 text-xs" onClick={() => edit(outlet)}>Edit</button>
+      {/* Form */}
+      {showForm ? (
+        <form onSubmit={submit}>
+          <AdminSection title="Informasi Dasar">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {f("name", "Nama Outlet", "text", "Contoh: Outlet Utama", true)}
+              {f("location_url", "Link Google Maps", "text", "https://maps.google.com/...")}
             </div>
-          </article>
-        ))}
-      </section>
+          </AdminSection>
+
+          <AdminSection title="Lokasi GPS & Geofence" subtitle="Untuk validasi absensi staff">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              {f("lat", "Latitude", "number", "-6.123456", true)}
+              {f("lng", "Longitude", "number", "106.789012", true)}
+              {f("radius_m", "Radius (meter)", "number", "100", true)}
+            </div>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+              💡 Buka Google Maps → klik lokasi → salin koordinat. Radius 50-150m biasanya cukup.
+            </p>
+          </AdminSection>
+
+          <AdminSection title="Mode Shift & Jam Operasional">
+            <div style={{ marginBottom: 12 }}>
+              <label className="label">Mode Shift</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["1", "1 Shift (full day)"], ["2", "2 Shift (pagi & malam)"]].map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, shift_mode: val }))}
+                    style={{
+                      padding: "9px 16px", borderRadius: 10, border: "1.5px solid",
+                      borderColor: form.shift_mode === val ? "var(--primary)" : "var(--border)",
+                      background: form.shift_mode === val ? "rgba(192,57,43,.06)" : "#fff",
+                      color: form.shift_mode === val ? "var(--primary)" : "var(--muted)",
+                      fontWeight: 700, fontSize: 13, cursor: "pointer"
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {is2Shift ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+                {f("shift1_start", "Shift 1 Mulai", "time", "", true)}
+                {f("shift1_end", "Shift 1 Selesai", "time", "", true)}
+                {f("shift2_start", "Shift 2 Mulai", "time", "", true)}
+                {f("shift2_end", "Shift 2 Selesai", "time", "", true)}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {f("shift1_start", "Jam Buka", "time", "", true)}
+                {f("shift1_end", "Jam Tutup", "time", "", true)}
+              </div>
+            )}
+          </AdminSection>
+
+          <AdminSection title="Jendela Waktu Laporan" subtitle="Batas waktu staff bisa kirim laporan buka/tutup toko">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+              {f("report_buka_start", "🌅 Buka Dari", "time")}
+              {f("report_buka_end", "🌅 Buka Sampai", "time")}
+              {f("report_tutup_start", "🌙 Tutup Dari", "time")}
+              {f("report_tutup_end", "🌙 Tutup Sampai", "time")}
+            </div>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+              💡 Kosongkan jika tidak ingin membatasi waktu pengiriman laporan.
+            </p>
+          </AdminSection>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="submit" className="btn btn-primary">{editing ? "Update Outlet" : "Simpan Outlet"}</button>
+            <button type="button" className="btn btn-soft" onClick={() => { setEditing(null); setForm(empty); setShowForm(false); }}>Batal</button>
+          </div>
+        </form>
+      ) : null}
+
+      {/* Outlet list */}
+      {!showForm ? (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ fontSize: 14, fontWeight: 800 }}>Semua Outlet ({outlets.length})</h2>
+            <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load}>
+              <RefreshCw size={14} /> Refresh
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+            {outlets.map((outlet) => (
+              <div key={outlet.id} style={{ background: "#fff", borderRadius: 16, padding: 18, border: "1px solid var(--border)", boxShadow: "0 2px 10px rgba(0,0,0,.05)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <h3 style={{ fontSize: 16, fontWeight: 900 }}>{outlet.name}</h3>
+                    <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                      {outlet.shift_mode === 2 ? "2 Shift" : "1 Shift"} · Radius {outlet.radius_m}m
+                    </p>
+                  </div>
+                  <button className="btn btn-soft" style={{ fontSize: 12, padding: "7px 14px" }} onClick={() => edit(outlet)}>Edit</button>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
+                  {outlet.shift_mode === 2 ? (
+                    <>
+                      <span>⏰ S1: {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
+                      <span>⏰ S2: {outlet.shift2_start?.slice(0, 5)}–{outlet.shift2_end?.slice(0, 5)}</span>
+                    </>
+                  ) : (
+                    <span>⏰ {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
+                  )}
+                  {outlet.report_buka_start ? <span>🌅 Buka: {outlet.report_buka_start?.slice(0, 5)}–{outlet.report_buka_end?.slice(0, 5)}</span> : null}
+                  {outlet.report_tutup_start ? <span>🌙 Tutup: {outlet.report_tutup_start?.slice(0, 5)}–{outlet.report_tutup_end?.slice(0, 5)}</span> : null}
+                  {outlet.location_url ? (
+                    <a href={outlet.location_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                      <MapPin size={12} /> Lihat di Maps
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </AdminPage>
   );
 }

@@ -22,6 +22,14 @@ type DashboardPayload = {
   }>;
 };
 
+const METRICS = [
+  { key: "hadir", label: "Hadir", emoji: "👥", color: "#2980B9", bg: "#EBF5FB" },
+  { key: "outlets", label: "Outlet Aktif", emoji: "🏪", color: "#8E44AD", bg: "#F5EEF8" },
+  { key: "buka", label: "Laporan Buka", emoji: "🌅", color: "#27AE60", bg: "#E8F8F0" },
+  { key: "tutup", label: "Laporan Tutup", emoji: "🌙", color: "#E67E22", bg: "#FEF9E7" },
+  { key: "onduty", label: "On Duty", emoji: "⚡", color: "#C0392B", bg: "#FDEDEC" }
+];
+
 export default function AdminDashboardPage() {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [error, setError] = useState("");
@@ -39,69 +47,100 @@ export default function AdminDashboardPage() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
-  const metrics = data?.metrics;
+  const m = data?.metrics;
+  const metricValues = [
+    `${m?.presentStaff ?? "—"}/${m?.activeStaff ?? "—"}`,
+    m?.activeOutlets ?? "—",
+    m?.reportBuka ?? "—",
+    m?.reportTutup ?? "—",
+    data?.attendance.filter((r) => r.checkin_time && !r.checkout_time).length ?? "—"
+  ];
 
   return (
-    <AdminPage title="Dashboard" subtitle={data ? ddmmyyyy(data.date) : "Overview operasional hari ini"}>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <button className="btn btn-soft text-sm" onClick={load} disabled={loading}>
-          <RefreshCw size={16} />
-          Refresh
+    <AdminPage
+      title="Dashboard"
+      subtitle={data ? `Hari ini · ${ddmmyyyy(data.date)}` : "Overview operasional hari ini"}
+      action={
+        <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={load} disabled={loading}>
+          <RefreshCw size={15} /> Refresh
         </button>
-        {error ? <p className="text-sm font-bold text-red-700">{error}</p> : null}
-      </div>
+      }
+    >
+      {error ? (
+        <div style={{ background: "var(--danger-bg)", borderRadius: 12, padding: "12px 16px", fontSize: 13, fontWeight: 700, color: "var(--danger)", marginBottom: 16 }}>
+          {error}
+        </div>
+      ) : null}
 
-      <section className="grid gap-3 md:grid-cols-5">
-        {[
-          ["Staff Hadir", `${metrics?.presentStaff || 0}/${metrics?.activeStaff || 0}`],
-          ["Outlet Aktif", metrics?.activeOutlets || 0],
-          ["Laporan Buka", metrics?.reportBuka || 0],
-          ["Laporan Tutup", metrics?.reportTutup || 0],
-          ["On Duty", data?.attendance.filter((row) => row.checkin_time && !row.checkout_time).length || 0]
-        ].map(([label, value]) => (
-          <div className="metric" key={label}>
-            <p className="text-xs font-black uppercase text-slate-500">{label}</p>
-            <p className="mt-2 text-2xl font-black">{value}</p>
+      {/* Metric cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 20 }}>
+        {METRICS.map((metric, i) => (
+          <div
+            key={metric.key}
+            style={{
+              background: "#fff",
+              border: `1px solid ${metric.color}22`,
+              borderRadius: 14,
+              padding: "14px 12px",
+              textAlign: "center",
+              boxShadow: "0 2px 10px rgba(0,0,0,.05)"
+            }}
+          >
+            <div style={{ fontSize: 24, marginBottom: 6 }}>{metric.emoji}</div>
+            <div style={{ fontFamily: "var(--font-nunito, sans-serif)", fontSize: 22, fontWeight: 900, color: metric.color }}>
+              {metricValues[i]}
+            </div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted-light)", marginTop: 3, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+              {metric.label}
+            </div>
           </div>
         ))}
-      </section>
+      </div>
 
-      <section className="panel mt-5 overflow-x-auto">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Staff</th>
-              <th>Outlet</th>
-              <th>Shift</th>
-              <th>Masuk</th>
-              <th>Pulang</th>
-              <th>Status</th>
-              <th>Gaji</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.attendance || []).map((row) => (
-              <tr key={row.id}>
-                <td className="font-bold">{row.staff_name}</td>
-                <td>{row.outlet_name}</td>
-                <td>{row.shift === 0 ? "Full" : row.shift}</td>
-                <td>{hhmm(row.checkin_time)}</td>
-                <td>{hhmm(row.checkout_time)}</td>
-                <td>
-                  <span className={`status-pill ${row.checkout_time ? "status-ok" : "status-warn"}`}>
-                    {row.checkout_time ? "Selesai" : "Bertugas"}
-                  </span>
-                </td>
-                <td>{rupiah(row.final_salary)}</td>
+      {/* Attendance table */}
+      <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)" }}>
+          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Absensi Hari Ini</h2>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Staff</th>
+                <th>Outlet</th>
+                <th>Shift</th>
+                <th>Masuk</th>
+                <th>Pulang</th>
+                <th>Status</th>
+                <th>Gaji</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>Memuat...</td></tr>
+              ) : (data?.attendance || []).length === 0 ? (
+                <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Belum ada absensi hari ini</td></tr>
+              ) : (data?.attendance || []).map((row) => (
+                <tr key={row.id}>
+                  <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                  <td>{row.outlet_name}</td>
+                  <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                  <td>{hhmm(row.checkin_time)}</td>
+                  <td>{hhmm(row.checkout_time)}</td>
+                  <td>
+                    <span className={`status-pill ${row.checkout_time ? "status-ok" : "status-warn"}`}>
+                      {row.checkout_time ? "Selesai" : "Bertugas"}
+                    </span>
+                  </td>
+                  <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </AdminPage>
   );
 }

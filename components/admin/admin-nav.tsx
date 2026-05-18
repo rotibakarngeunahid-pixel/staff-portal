@@ -8,13 +8,13 @@ import {
   CalendarMinus,
   CalendarOff,
   ClipboardList,
+  FileImage,
   LayoutDashboard,
   LogOut,
   MapPinned,
   Settings,
   Store,
-  UsersRound,
-  FileImage
+  UsersRound
 } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
@@ -45,12 +45,17 @@ export function AdminNav() {
   }
 
   return (
-    <aside className="admin-sidebar">
-      <div className="mb-5">
-        <p className="text-xs font-black uppercase text-[var(--accent)]">RBN</p>
-        <h1 className="text-xl font-black text-white">Admin Portal</h1>
+    <aside className="admin-sidebar" style={{ display: "flex", flexDirection: "column" }}>
+      {/* Brand */}
+      <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+        <p style={{ fontSize: 9, fontWeight: 800, letterSpacing: "1.2px", textTransform: "uppercase", color: "var(--primary)", marginBottom: 2 }}>
+          Admin Portal
+        </p>
+        <h1 style={{ fontSize: 16, fontWeight: 900, color: "#fff", lineHeight: 1.2 }}>Roti Bakar Ngeunah</h1>
       </div>
-      <nav className="grid gap-1">
+
+      {/* Nav items */}
+      <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
         {items.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.href;
@@ -58,18 +63,47 @@ export function AdminNav() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-extrabold ${
-                active ? "bg-[var(--primary)] text-white shadow-sm" : "text-[var(--admin-sidebar-muted)] hover:bg-white/10 hover:text-white"
-              }`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 10,
+                padding: "9px 12px",
+                fontSize: 13,
+                fontWeight: 700,
+                textDecoration: "none",
+                background: active ? "var(--primary)" : "transparent",
+                color: active ? "#fff" : "var(--admin-sidebar-muted)",
+                transition: "background 0.15s, color 0.15s"
+              }}
             >
-              <Icon size={17} />
+              <Icon size={16} />
               {item.label}
             </Link>
           );
         })}
       </nav>
-      <button className="mt-5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-extrabold text-[var(--admin-sidebar-muted)] hover:bg-white/10 hover:text-white" onClick={logout}>
-        <LogOut size={17} />
+
+      {/* Logout */}
+      <button
+        onClick={logout}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          borderRadius: 10,
+          padding: "9px 12px",
+          fontSize: 13,
+          fontWeight: 700,
+          background: "transparent",
+          color: "var(--admin-sidebar-muted)",
+          border: "none",
+          cursor: "pointer",
+          width: "100%",
+          marginTop: 12
+        }}
+      >
+        <LogOut size={16} />
         Keluar
       </button>
     </aside>
