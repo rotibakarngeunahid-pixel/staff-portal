@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { StaffNav } from "@/components/staff/staff-nav";
 
 export function StaffPage({
@@ -6,16 +7,28 @@ export function StaffPage({
   children
 }: Readonly<{ title: string; subtitle?: string; children: React.ReactNode }>) {
   return (
-    <main className="mobile-frame px-4 pb-24 pt-5">
-      <header className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-extrabold uppercase text-[var(--primary)]">Roti Bakar Ngeunah</p>
-          <h1 className="text-2xl font-black text-[var(--ink)]">{title}</h1>
-          {subtitle ? <p className="mt-1 text-sm font-semibold text-[var(--muted)]">{subtitle}</p> : null}
+    <div className="mobile-frame">
+      <header className="staff-hdr">
+        <Image
+          src="https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto,w_80/v1777572835/Untitled-2_tgjm4u.png"
+          alt="Roti Bakar Ngeunah"
+          width={36}
+          height={36}
+          className="staff-hdr-logo"
+          priority
+        />
+        <div className="staff-hdr-info">
+          <h1>Roti Bakar Ngeunah</h1>
+          <p>{title}</p>
         </div>
       </header>
-      {children}
+      <main style={{ flex: 1, padding: "14px 16px 96px", display: "flex", flexDirection: "column", gap: "10px" }}>
+        {subtitle ? (
+          <p style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{subtitle}</p>
+        ) : null}
+        {children}
+      </main>
       <StaffNav />
-    </main>
+    </div>
   );
 }

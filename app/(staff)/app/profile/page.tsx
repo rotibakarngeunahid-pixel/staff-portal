@@ -30,38 +30,51 @@ export default function StaffProfilePage() {
       .catch((err: Error) => setError(err.message));
   }, []);
 
+  const profile = data?.profile;
+
   return (
-    <StaffPage title="Profil" subtitle="Data staff aktif">
-      {error ? <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
-      <section className="panel p-4">
-        <div className="flex items-center gap-4">
-          {data?.profile.photo_url ? (
-            <Image src={data.profile.photo_url} alt={data.profile.name} width={72} height={72} className="h-18 w-18 rounded-lg object-cover" />
-          ) : (
-            <div className="grid h-18 w-18 place-items-center rounded-lg bg-[var(--surface-soft)] text-2xl font-black text-[var(--primary)]">
-              {data?.profile.name?.slice(0, 1) || "S"}
-            </div>
-          )}
-          <div>
-            <h2 className="text-xl font-black">{data?.profile.name || "Memuat..."}</h2>
-            <p className="font-bold text-slate-500">{data?.outlet?.name || "Outlet belum ditentukan"}</p>
-          </div>
+    <StaffPage title="Profil Saya" subtitle="Data staff">
+      {error ? (
+        <div style={{ background: "var(--danger-bg)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>
+          {error}
         </div>
-      </section>
-      <section className="mt-4 grid gap-3">
+      ) : null}
+
+      <div className="prof-card">
+        {profile?.photo_url ? (
+          <Image
+            src={profile.photo_url}
+            alt={profile.name}
+            width={72}
+            height={72}
+            style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", border: "3px solid var(--border)", display: "block", margin: "0 auto 10px" }}
+          />
+        ) : (
+          <div style={{
+            width: 72, height: 72, borderRadius: "50%", background: "var(--primary)", color: "#fff",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 28, fontWeight: 900, margin: "0 auto 10px",
+            fontFamily: "var(--font-nunito, sans-serif)"
+          }}>
+            {profile?.name?.slice(0, 1).toUpperCase() || "S"}
+          </div>
+        )}
+        <p className="prof-name">{profile?.name || "Memuat..."}</p>
+        <p className="prof-outlet">{data?.outlet?.name || "Outlet belum ditentukan"}</p>
+
         {[
-          ["Status", data?.profile.active ? "Aktif" : "Nonaktif"],
-          ["Telepon", data?.profile.phone || "-"],
-          ["Alamat", data?.profile.address || "-"],
-          ["KTP", data?.profile.ktp_no || "-"],
-          ["Gaji per shift", rupiah(data?.profile.salary_per_shift || 0)]
-        ].map(([label, value]) => (
-          <div key={label} className="panel p-4">
-            <p className="text-xs font-extrabold uppercase text-slate-500">{label}</p>
-            <p className="mt-1 font-black">{value}</p>
+          ["Status", profile ? (profile.active ? "✅ Aktif" : "❌ Nonaktif") : "—"],
+          ["Telepon", profile?.phone || "—"],
+          ["Alamat", profile?.address || "—"],
+          ["No. KTP", profile?.ktp_no || "—"],
+          ["Gaji per shift", rupiah(profile?.salary_per_shift || 0)]
+        ].map(([key, value]) => (
+          <div key={key} className="prof-row">
+            <span className="prof-k">{key}</span>
+            <span className="prof-v">{value}</span>
           </div>
         ))}
-      </section>
+      </div>
     </StaffPage>
   );
 }

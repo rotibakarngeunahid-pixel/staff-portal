@@ -15,17 +15,40 @@ const items = [
 export function StaffNav() {
   const pathname = usePathname();
   return (
-    <nav className="fixed bottom-0 left-1/2 z-30 grid w-full max-w-[480px] -translate-x-1/2 grid-cols-5 border-t border-[var(--border)] bg-white">
+    <nav
+      style={{
+        position: "fixed",
+        bottom: 0,
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: "min(100%, 480px)",
+        zIndex: 30,
+        display: "grid",
+        gridTemplateColumns: "repeat(5, 1fr)",
+        borderTop: "1px solid var(--border)",
+        background: "#fff",
+        paddingBottom: "env(safe-area-inset-bottom)"
+      }}
+    >
       {items.map((item) => {
         const Icon = item.icon;
-        const active = pathname === item.href;
+        const active = pathname === item.href || pathname.startsWith(item.href + "?");
         return (
           <Link
             key={item.href}
             href={item.href}
-            className={`flex min-h-14 flex-col items-center justify-center gap-1 text-[0.68rem] font-extrabold ${
-              active ? "text-[var(--primary)]" : "text-[var(--muted)]"
-            }`}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 4,
+              minHeight: 56,
+              fontSize: "0.65rem",
+              fontWeight: 800,
+              color: active ? "var(--primary)" : "var(--muted-light)",
+              fontFamily: "var(--font-nunito, sans-serif)"
+            }}
           >
             <Icon size={18} aria-hidden="true" />
             <span>{item.label}</span>

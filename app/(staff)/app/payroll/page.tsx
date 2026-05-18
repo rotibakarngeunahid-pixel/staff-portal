@@ -40,70 +40,78 @@ export default function StaffPayrollPage() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   return (
-    <StaffPage title="Gaji" subtitle="Ringkasan gaji dan pembayaran">
-      {error ? <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
-      <button className="btn btn-soft mb-4 text-sm" onClick={load} disabled={loading}>
-        <RefreshCw size={16} />
-        Refresh
+    <StaffPage title="Info Gaji" subtitle="Ringkasan gaji dan pembayaran">
+      {error ? (
+        <div style={{ background: "var(--danger-bg)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>
+          {error}
+        </div>
+      ) : null}
+
+      <button className="btn btn-soft" style={{ fontSize: 12, padding: "9px 14px", alignSelf: "flex-start" }} onClick={load} disabled={loading}>
+        <RefreshCw size={14} /> Refresh
       </button>
 
-      <section className="grid gap-3">
-        <div className="metric">
-          <p className="text-xs font-extrabold uppercase text-slate-500">Gaji Diperoleh</p>
-          <p className="mt-1 text-2xl font-black">{rupiah(data?.summary.totalEarned || 0)}</p>
+      {/* Summary cards */}
+      <div className="pay-grid">
+        <div className="pay-card-full">
+          <p className="pay-label">Total Gaji Diperoleh</p>
+          <p className="pay-val">{rupiah(data?.summary.totalEarned || 0)}</p>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="metric">
-            <p className="text-xs font-extrabold uppercase text-slate-500">Dibayar</p>
-            <p className="mt-1 text-lg font-black text-green-700">{rupiah(data?.summary.totalPaid || 0)}</p>
-          </div>
-          <div className="metric">
-            <p className="text-xs font-extrabold uppercase text-slate-500">Saldo</p>
-            <p className="mt-1 text-lg font-black text-[var(--primary)]">{rupiah(data?.summary.balance || 0)}</p>
-          </div>
+        <div className="pay-card">
+          <p className="pay-label">Sudah Dibayar</p>
+          <p className="pay-val" style={{ color: "var(--success)" }}>{rupiah(data?.summary.totalPaid || 0)}</p>
         </div>
-      </section>
+        <div className="pay-card">
+          <p className="pay-label">Belum Dibayar</p>
+          <p className="pay-val" style={{ color: "var(--primary)" }}>{rupiah(data?.summary.balance || 0)}</p>
+        </div>
+      </div>
 
-      <section className="mt-5">
-        <h2 className="mb-2 text-base font-black">Rincian Shift</h2>
-        <div className="space-y-2">
-          {(data?.attendance || []).map((row) => (
-            <article key={row.id} className="panel p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-black">{ddmmyyyy(row.date)} · Shift {row.shift === 0 ? "Full" : row.shift}</p>
-                  <p className="text-sm font-semibold text-slate-500">
-                    {hhmm(row.checkin_time)} - {hhmm(row.checkout_time)}
-                  </p>
-                </div>
-                <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>
-                  {row.paid_status ? "Dibayar" : "Belum"}
-                </span>
+      {/* Attendance history */}
+      <div>
+        <h2 style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginTop: 4 }}>Rincian Shift</h2>
+        {loading ? <p style={{ fontSize: 12, color: "var(--muted)" }}>Memuat...</p> : null}
+        {(data?.attendance || []).map((row) => (
+          <div key={row.id} className="hist-item">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <p className="hist-date">{ddmmyyyy(row.date)} · Shift {row.shift === 0 ? "Full" : row.shift}</p>
+                <p className="hist-meta">{hhmm(row.checkin_time)} – {hhmm(row.checkout_time)}</p>
+                <p style={{ fontSize: 12, fontWeight: 700, marginTop: 4 }}>
+                  {rupiah(row.final_salary)}
+                  {row.deduction ? <span style={{ color: "var(--danger)", marginLeft: 6 }}>-{rupiah(row.deduction)}</span> : null}
+                </p>
               </div>
-              <p className="mt-2 text-sm font-bold">
-                Final {rupiah(row.final_salary)} {row.deduction ? `· Potongan ${rupiah(row.deduction)}` : ""}
-              </p>
-            </article>
-          ))}
-        </div>
-      </section>
+              <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>
+                {row.paid_status ? "Dibayar" : "Belum"}
+              </span>
+            </div>
+          </div>
+        ))}
+        {!loading && !(data?.attendance || []).length ? (
+          <p style={{ fontSize: 12, color: "var(--muted-light)", textAlign: "center", padding: "16px 0" }}>Belum ada data absensi</p>
+        ) : null}
+      </div>
 
-      <section className="mt-5">
-        <h2 className="mb-2 text-base font-black">Riwayat Pembayaran</h2>
-        <div className="space-y-2">
-          {(data?.payments || []).map((payment) => (
-            <article key={payment.id} className="panel p-3">
-              <p className="font-black">{rupiah(payment.amount)}</p>
-              <p className="text-sm font-semibold text-slate-500">{ddmmyyyy(payment.paid_at)} {hhmm(payment.paid_at)} · {payment.note || "Tanpa catatan"}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+      {/* Payments history */}
+      <div>
+        <h2 style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginTop: 4 }}>Riwayat Pembayaran</h2>
+        {(data?.payments || []).map((payment) => (
+          <div key={payment.id} className="hist-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <p className="hist-date">{ddmmyyyy(payment.paid_at)}</p>
+              <p className="hist-meta">{hhmm(payment.paid_at)} · {payment.note || "Tanpa catatan"}</p>
+            </div>
+            <p className="hist-amount">{rupiah(payment.amount)}</p>
+          </div>
+        ))}
+        {!loading && !(data?.payments || []).length ? (
+          <p style={{ fontSize: 12, color: "var(--muted-light)", textAlign: "center", padding: "16px 0" }}>Belum ada pembayaran</p>
+        ) : null}
+      </div>
     </StaffPage>
   );
 }

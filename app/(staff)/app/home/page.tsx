@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Clock, LogOut, MapPin, RefreshCw, Send } from "lucide-react";
+import { Camera, LogOut, RefreshCw, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { apiFetch, compressDataUrl, dataUrlFromFile } from "@/lib/client-api";
 import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
+import { haversineDistance } from "@/lib/business";
 import { StaffPage } from "@/components/staff/staff-page";
 import { useSessionStore } from "@/stores/session";
 
@@ -23,13 +24,15 @@ type Attendance = {
 type StatusPayload = {
   ok: true;
   staff: { name: string };
-  outlet: { name: string; radius_m: number; shift_mode: number };
+  outlet: { name: string; radius_m: number; shift_mode: number; lat: number; lng: number };
   date: string;
   shift: number;
   attendance: Attendance | null;
   reports: { type: "BUKA" | "TUTUP" }[];
   serverTime: string;
 };
+
+type GpsState = { dist: number | null; accuracy: number; status: "ok" | "bad" | "wait" };
 
 function getLocation() {
   return new Promise<GeolocationPosition>((resolve, reject) => {
@@ -47,6 +50,7 @@ export default function StaffHomePage() {
   const setStaffToken = useSessionStore((state) => state.setStaffToken);
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [selectedAction, setSelectedAction] = useState<"checkin" | "checkout" | null>(null);
+  const [gps, setGps] = useState<GpsState>({ dist: null, accuracy: 0, status: "wait" });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -64,11 +68,25 @@ export default function StaffHomePage() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
-  const reportTypes = useMemo(() => new Set((status?.reports || []).map((report) => report.type)), [status]);
+  // Real-time GPS watch
+  useEffect(() => {
+    if (!status?.outlet?.lat) return;
+    const outlet = status.outlet;
+    function onPos(pos: GeolocationPosition) {
+      const dist = haversineDistance(pos.coords.latitude, pos.coords.longitude, outlet.lat, outlet.lng);
+      const accuracy = Math.max(0, pos.coords.accuracy);
+      const maxDist = outlet.radius_m + Math.min(accuracy, outlet.radius_m * 0.3);
+      setGps({ dist: Math.round(dist), accuracy: Math.round(accuracy), status: dist <= maxDist ? "ok" : "bad" });
+    }
+    function onErr() { setGps({ dist: null, accuracy: 0, status: "wait" }); }
+    const id = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true });
+    return () => navigator.geolocation.clearWatch(id);
+  }, [status?.outlet]);
+
+  const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
+
   const nextState = useMemo(() => {
     const att = status?.attendance;
     if (!att?.checkin_time) return "checkin";
@@ -124,89 +142,144 @@ export default function StaffHomePage() {
     router.replace("/app/login");
   }
 
-  const attendance = status?.attendance;
+  const att = status?.attendance;
+  const outlet = status?.outlet;
+
+  // Status card config
+  const stateConfig = {
+    checkin: { emoji: "👋", title: "Belum Absen Masuk", sub: "Tap tombol di bawah untuk mulai shift", cls: "sc-neutral" },
+    report_buka: { emoji: "📋", title: "Laporan Buka Toko", sub: "Absen masuk tercatat. Kirim laporan buka toko sekarang", cls: "sc-working" },
+    report_tutup: { emoji: "📋", title: "Laporan Tutup Toko", sub: "Kirim laporan tutup toko sebelum absen pulang", cls: "sc-working" },
+    checkout: { emoji: "✅", title: "Siap Absen Pulang", sub: "Semua laporan sudah terkirim. Tap untuk absen pulang", cls: "sc-ready" },
+    done: { emoji: "🎉", title: "Shift Selesai!", sub: "Terima kasih. Sampai jumpa besok!", cls: "sc-done" }
+  };
+  const sc = loading ? null : stateConfig[nextState as keyof typeof stateConfig];
 
   return (
-    <StaffPage title="Absensi" subtitle={status ? `${status.outlet.name} · ${ddmmyyyy(status.date)}` : "Status hari ini"}>
+    <StaffPage title="Sistem Absensi" subtitle={outlet ? `${outlet.name} · ${ddmmyyyy(status?.date)}` : undefined}>
       <input ref={fileRef} type="file" accept="image/*" capture="user" className="hidden" onChange={onFileChange} />
 
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <button className="btn btn-soft text-sm" onClick={load} disabled={loading || Boolean(busy)}>
-          <RefreshCw size={16} />
-          Refresh
+      {/* Top action row */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+        <button className="btn btn-soft" style={{ flex: 1, fontSize: 12, padding: "9px 12px" }} onClick={load} disabled={loading || Boolean(busy)}>
+          <RefreshCw size={14} /> Refresh
         </button>
-        <button className="btn btn-soft text-sm" onClick={logout}>
-          <LogOut size={16} />
-          Keluar
+        <button className="btn btn-soft" style={{ flex: 1, fontSize: 12, padding: "9px 12px" }} onClick={logout}>
+          <LogOut size={14} /> Keluar
         </button>
       </div>
 
-      {error ? <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
-      {busy ? <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-800">{busy}</p> : null}
+      {/* Error / busy banners */}
+      {error ? (
+        <div style={{ background: "var(--danger-bg)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)" }}>
+          {error}
+        </div>
+      ) : null}
+      {busy ? (
+        <div style={{ background: "var(--warning-bg)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700, color: "#7B5E00" }}>
+          {busy}
+        </div>
+      ) : null}
 
-      <section className="panel p-4">
-        <div className="flex items-start justify-between gap-3">
+      {/* Status card */}
+      {loading ? (
+        <div className="status-card sc-neutral">
+          <div className="status-icon">⏳</div>
+          <h2 className="status-title">Memuat...</h2>
+          <p className="status-sub">Mengambil data absensi</p>
+        </div>
+      ) : sc ? (
+        <div className={`status-card ${sc.cls}`}>
+          <div className="status-icon">{sc.emoji}</div>
+          <h2 className="status-title">{sc.title}</h2>
+          <p className="status-sub">{sc.sub}</p>
+        </div>
+      ) : null}
+
+      {/* GPS bar */}
+      <div className="gps-bar">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className={`gps-dot gps-${gps.status}`} />
           <div>
-            <p className="text-xs font-extrabold uppercase text-slate-500">Status Shift</p>
-            <h2 className="mt-1 text-xl font-black">
-              {loading ? "Memuat..." : nextState === "done" ? "Selesai" : `Shift ${status?.shift === 0 ? "Full" : status?.shift}`}
-            </h2>
-          </div>
-          <span className={`status-pill ${attendance?.checkout_time ? "status-ok" : attendance?.checkin_time ? "status-warn" : "status-danger"}`}>
-            {attendance?.checkout_time ? "Selesai" : attendance?.checkin_time ? "Bertugas" : "Belum absen"}
-          </span>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
-            <p className="font-extrabold text-slate-500">Masuk</p>
-            <p className="mt-1 text-lg font-black">{hhmm(attendance?.checkin_time)}</p>
-          </div>
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
-            <p className="font-extrabold text-slate-500">Pulang</p>
-            <p className="mt-1 text-lg font-black">{hhmm(attendance?.checkout_time)}</p>
+            <p className="gps-label">Jarak ke Outlet</p>
+            <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 1 }}>
+              {gps.status === "wait" ? "Mendeteksi GPS..." : `Akurasi ±${gps.accuracy}m`}
+            </p>
           </div>
         </div>
-
-        <div className="mt-4 space-y-2 text-sm font-bold text-slate-600">
-          <p className="flex items-center gap-2">
-            <MapPin size={16} /> Radius outlet {status?.outlet.radius_m || 0} m
+        <div>
+          <p className={`gps-dist ${gps.status}`} style={{ textAlign: "right" }}>
+            {gps.dist !== null ? `${gps.dist}m` : "—"}
           </p>
-          <p className="flex items-center gap-2">
-            <Clock size={16} /> Telat {attendance?.late_minutes || 0} menit · Potongan {rupiah(attendance?.deduction || 0)}
-          </p>
-          <p className="flex items-center gap-2">
-            <CheckCircle2 size={16} /> Gaji final {rupiah(attendance?.final_salary || 0)}
+          <p style={{ fontSize: 10, color: "var(--muted-light)", textAlign: "right", marginTop: 1 }}>
+            {outlet ? `radius ${outlet.radius_m}m` : ""}
           </p>
         </div>
-      </section>
+      </div>
 
-      <section className="mt-4 grid gap-3">
+      {/* Time info panel */}
+      {att?.checkin_time ? (
+        <div className="panel" style={{ padding: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ textAlign: "center" }}>
+              <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "var(--muted-light)", letterSpacing: "0.5px" }}>Masuk</p>
+              <p style={{ fontFamily: "var(--font-nunito, sans-serif)", fontSize: 22, fontWeight: 900, marginTop: 4 }}>{hhmm(att.checkin_time)}</p>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "var(--muted-light)", letterSpacing: "0.5px" }}>Pulang</p>
+              <p style={{ fontFamily: "var(--font-nunito, sans-serif)", fontSize: 22, fontWeight: 900, marginTop: 4 }}>{hhmm(att.checkout_time) || "—"}</p>
+            </div>
+          </div>
+          {att.late_minutes > 0 ? (
+            <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, fontWeight: 600, color: "var(--warning)" }}>
+              ⚠️ Telat {att.late_minutes} menit · Potongan {rupiah(att.deduction)}
+            </div>
+          ) : null}
+          <div style={{ marginTop: 8, textAlign: "center", fontSize: 13, fontWeight: 800, color: "var(--success)" }}>
+            Gaji {rupiah(att.final_salary)}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Action buttons */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
         {nextState === "checkin" ? (
-          <button className="btn btn-primary min-h-14 text-base" onClick={() => choosePhoto("checkin")} disabled={Boolean(busy)}>
-            <Camera size={20} />
-            Absen Masuk
+          <button
+            className={`btn btn-primary btn-action${!busy ? " btn-glow" : ""}`}
+            onClick={() => choosePhoto("checkin")}
+            disabled={Boolean(busy)}
+          >
+            <Camera size={20} /> Absen Masuk
           </button>
         ) : null}
         {nextState === "report_buka" ? (
-          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push(`/app/report?type=BUKA&date=${status?.date}&shift=${status?.shift}`)}>
-            <Send size={20} />
-            Laporan Buka Toko
+          <button
+            className="btn btn-action"
+            style={{ background: "#2980B9", color: "#fff", boxShadow: "0 6px 24px rgba(41,128,185,.32)" }}
+            onClick={() => router.push(`/app/report?type=BUKA&date=${status?.date}&shift=${status?.shift}`)}
+          >
+            <Send size={20} /> Laporan Buka Toko
           </button>
         ) : null}
         {nextState === "report_tutup" ? (
-          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push(`/app/report?type=TUTUP&date=${status?.date}&shift=${status?.shift}`)}>
-            <Send size={20} />
-            Laporan Tutup Toko
+          <button
+            className="btn btn-action"
+            style={{ background: "#2980B9", color: "#fff", boxShadow: "0 6px 24px rgba(41,128,185,.32)" }}
+            onClick={() => router.push(`/app/report?type=TUTUP&date=${status?.date}&shift=${status?.shift}`)}
+          >
+            <Send size={20} /> Laporan Tutup Toko
           </button>
         ) : null}
         {nextState === "checkout" ? (
-          <button className="btn btn-danger min-h-14 text-base" onClick={() => choosePhoto("checkout")} disabled={Boolean(busy)}>
-            <Camera size={20} />
-            Absen Pulang
+          <button
+            className={`btn btn-danger btn-action${!busy ? " btn-glow" : ""}`}
+            onClick={() => choosePhoto("checkout")}
+            disabled={Boolean(busy)}
+          >
+            <Camera size={20} /> Absen Pulang
           </button>
         ) : null}
-      </section>
+      </div>
     </StaffPage>
   );
 }
