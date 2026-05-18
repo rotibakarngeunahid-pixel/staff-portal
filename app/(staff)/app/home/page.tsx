@@ -15,6 +15,7 @@ type Attendance = {
   id: string; date: string; shift: number;
   checkin_time: string | null; checkout_time: string | null;
   late_minutes: number; deduction: number; final_salary: number;
+  flags: string | null;
 };
 
 type StatusPayload = {
