@@ -58,8 +58,26 @@ export default function AdminOutletsPage() {
     load().catch((err: Error) => setMessage(err.message));
   }, []);
 
+  function validateForm() {
+    if (!form.name.trim()) return "Nama outlet wajib diisi";
+    const lat = Number(form.lat);
+    const lng = Number(form.lng);
+    const radius = Number(form.radius_m);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "Latitude dan longitude wajib valid";
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return "Koordinat outlet di luar batas valid";
+    if (!Number.isFinite(radius) || radius <= 0) return "Radius meter wajib lebih dari 0";
+    if (!form.shift1_start || !form.shift1_end) return "Jam buka dan jam tutup wajib diisi";
+    if (form.shift_mode === "2" && (!form.shift2_start || !form.shift2_end)) return "Jam Shift 2 wajib diisi";
+    return "";
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const validationError = validateForm();
+    if (validationError) {
+      setMessage(validationError);
+      return;
+    }
     setMessage("Menyimpan...");
     try {
       const payload = {
@@ -116,12 +134,15 @@ export default function AdminOutletsPage() {
   }
 
   function renderInput([key, label, type]: FormField) {
+    const isRequired = ["name", "lat", "lng", "radius_m", "shift1_start", "shift1_end", "shift2_start", "shift2_end"].includes(key);
     return (
       <div key={key}>
         <label className="label">{label}</label>
         <input
           className="field"
           type={type}
+          required={isRequired}
+          min={key === "radius_m" ? 1 : undefined}
           step={key === "lat" || key === "lng" ? "any" : undefined}
           value={form[key]}
           onChange={(e) => updateField(key, e.target.value)}
@@ -158,7 +179,7 @@ export default function AdminOutletsPage() {
 
   return (
     <AdminPage title="Manajemen Outlet" subtitle="Geofence, shift, dan window laporan">
-      <form className="panel mb-5 grid gap-3 p-4 md:grid-cols-4" onSubmit={submit}>
+      <form className="panel mb-5 grid gap-3 p-4 md:grid-cols-4" noValidate onSubmit={submit}>
         {baseFields.map(renderInput)}
         <div>
           <label className="label">Mode Shift</label>
