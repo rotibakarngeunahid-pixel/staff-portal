@@ -32,13 +32,25 @@ export default function AdminDayoffPage() {
 
   async function add(event: React.FormEvent) {
     event.preventDefault();
-    await apiFetch("/api/admin/dayoff", { method: "POST", role: "admin", body: form });
-    await load();
+    setMessage("Menyimpan hari libur...");
+    try {
+      await apiFetch("/api/admin/dayoff", { method: "POST", role: "admin", body: form });
+      await load();
+      setMessage("Hari libur disimpan");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menyimpan hari libur");
+    }
   }
 
   async function remove(id: string) {
-    await apiFetch("/api/admin/dayoff", { method: "DELETE", role: "admin", body: { id } });
-    await load();
+    setMessage("Menghapus hari libur...");
+    try {
+      await apiFetch("/api/admin/dayoff", { method: "DELETE", role: "admin", body: { id } });
+      await load();
+      setMessage("Hari libur dihapus");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menghapus hari libur");
+    }
   }
 
   return (

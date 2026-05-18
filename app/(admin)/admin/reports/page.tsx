@@ -59,9 +59,9 @@ export default function AdminReportsPage() {
                 <span className="status-pill status-ok">{items.length} foto</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {report.selfie ? <a href={report.selfie} target="_blank"><Image src={report.selfie} alt="Selfie laporan" width={240} height={180} className="aspect-[4/3] rounded-lg object-cover" /></a> : null}
+                {report.selfie ? <a href={report.selfie} target="_blank" rel="noreferrer"><Image src={report.selfie} alt="Selfie laporan" width={240} height={180} className="aspect-[4/3] rounded-lg object-cover" /></a> : null}
                 {items.map((item: any) => item.photo_url ? (
-                  <a key={item.label} href={item.photo_url} target="_blank">
+                  <a key={item.label} href={item.photo_url} target="_blank" rel="noreferrer">
                     <Image src={item.photo_url} alt={item.label} width={240} height={180} className="aspect-[4/3] rounded-lg object-cover" />
                     <p className="mt-1 text-xs font-bold">{item.label}</p>
                   </a>

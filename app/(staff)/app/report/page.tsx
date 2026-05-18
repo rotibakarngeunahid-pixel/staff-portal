@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, ImageIcon, Send } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
-import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
+import { apiFetch, compressDataUrl, dataUrlFromFile } from "@/lib/client-api";
 
 type ReportCfg = { id: string; label: string; required: boolean; example_photo_url: string | null; sort_order: number };
 
@@ -41,13 +41,13 @@ export default function StaffReportPage() {
 
   async function setItemPhoto(label: string, file?: File) {
     if (!file) return;
-    const dataUrl = await dataUrlFromFile(file);
+    const dataUrl = await compressDataUrl(await dataUrlFromFile(file));
     setPhotos((current) => ({ ...current, [label]: dataUrl }));
   }
 
   async function setSelfieFile(file?: File) {
     if (!file) return;
-    setSelfie(await dataUrlFromFile(file));
+    setSelfie(await compressDataUrl(await dataUrlFromFile(file)));
   }
 
   async function submit() {

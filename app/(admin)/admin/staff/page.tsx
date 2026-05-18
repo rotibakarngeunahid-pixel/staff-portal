@@ -62,8 +62,14 @@ export default function AdminStaffPage() {
 
   async function deactivate(id: string) {
     if (!window.confirm("Nonaktifkan staff ini?")) return;
-    await apiFetch("/api/admin/staff", { method: "DELETE", role: "admin", body: { staffId: id } });
-    await load();
+    setMessage("Menonaktifkan staff...");
+    try {
+      await apiFetch("/api/admin/staff", { method: "DELETE", role: "admin", body: { staffId: id } });
+      await load();
+      setMessage("Staff dinonaktifkan");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menonaktifkan staff");
+    }
   }
 
   return (

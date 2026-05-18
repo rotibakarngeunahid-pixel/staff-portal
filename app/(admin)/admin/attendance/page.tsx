@@ -66,18 +66,24 @@ export default function AdminAttendancePage() {
     const late = window.prompt("Menit terlambat", String(row.late_minutes));
     const deduction = window.prompt("Potongan", String(row.deduction));
     const finalSalary = window.prompt("Gaji final", String(row.final_salary));
-    await apiFetch("/api/admin/attendance", {
-      method: "PUT",
-      role: "admin",
-      body: {
-        attendanceId: row.id,
-        revision_note: note,
-        late_minutes: late,
-        deduction,
-        final_salary: finalSalary
-      }
-    });
-    await load();
+    setMessage("Menyimpan revisi...");
+    try {
+      await apiFetch("/api/admin/attendance", {
+        method: "PUT",
+        role: "admin",
+        body: {
+          attendanceId: row.id,
+          revision_note: note,
+          late_minutes: late,
+          deduction,
+          final_salary: finalSalary
+        }
+      });
+      await load();
+      setMessage("Revisi tersimpan");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menyimpan revisi");
+    }
   }
 
   return (

@@ -99,7 +99,7 @@ export default function StaffPayrollPage() {
           {(data?.payments || []).map((payment) => (
             <article key={payment.id} className="panel p-3">
               <p className="font-black">{rupiah(payment.amount)}</p>
-              <p className="text-sm font-semibold text-slate-500">{hhmm(payment.paid_at)} · {payment.note || "Tanpa catatan"}</p>
+              <p className="text-sm font-semibold text-slate-500">{ddmmyyyy(payment.paid_at)} {hhmm(payment.paid_at)} · {payment.note || "Tanpa catatan"}</p>
             </article>
           ))}
         </div>

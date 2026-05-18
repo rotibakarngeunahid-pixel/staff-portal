@@ -160,8 +160,12 @@ function parseItems(input: unknown): any[] {
   if (!input) return [];
   if (Array.isArray(input)) return input;
   if (typeof input === "string") {
-    const parsed = JSON.parse(input);
-    return Array.isArray(parsed) ? parsed : [];
+    try {
+      const parsed = JSON.parse(input);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
   return [];
 }

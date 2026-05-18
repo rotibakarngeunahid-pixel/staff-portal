@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, Clock, LogOut, MapPin, RefreshCw, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
+import { apiFetch, compressDataUrl, dataUrlFromFile } from "@/lib/client-api";
 import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
 import { StaffPage } from "@/components/staff/staff-page";
 import { useSessionStore } from "@/stores/session";
@@ -82,7 +82,8 @@ export default function StaffHomePage() {
     setBusy(action === "checkin" ? "Mengirim absen masuk..." : "Mengirim absen pulang...");
     setError("");
     try {
-      const [position, selfie] = await Promise.all([getLocation(), dataUrlFromFile(file)]);
+      const [position, rawSelfie] = await Promise.all([getLocation(), dataUrlFromFile(file)]);
+      const selfie = await compressDataUrl(rawSelfie);
       await apiFetch(`/api/attendance/${action}`, {
         method: "POST",
         role: "staff",

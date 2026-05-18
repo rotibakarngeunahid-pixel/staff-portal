@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   BadgeDollarSign,
   CalendarDays,
+  CalendarMinus,
+  CalendarOff,
   ClipboardList,
   LayoutDashboard,
   LogOut,
@@ -12,8 +14,7 @@ import {
   Settings,
   Store,
   UsersRound,
-  FileImage,
-  CalendarOff
+  FileImage
 } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
@@ -24,7 +25,7 @@ const items = [
   { href: "/admin/outlets", label: "Outlet", icon: Store },
   { href: "/admin/attendance", label: "Absensi", icon: ClipboardList },
   { href: "/admin/schedule", label: "Jadwal", icon: CalendarDays },
-  { href: "/admin/leave", label: "Cuti", icon: CalendarOff },
+  { href: "/admin/leave", label: "Cuti", icon: CalendarMinus },
   { href: "/admin/payroll", label: "Payroll", icon: BadgeDollarSign },
   { href: "/admin/reports", label: "Laporan", icon: FileImage },
   { href: "/admin/report-cfg", label: "Konfig Laporan", icon: MapPinned },

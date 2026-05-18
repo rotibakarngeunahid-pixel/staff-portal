@@ -82,3 +82,25 @@ export function dataUrlFromFile(file: File) {
     reader.readAsDataURL(file);
   });
 }
+
+export async function compressDataUrl(dataUrl: string, maxDim = 1400, quality = 0.8): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const { width, height } = img;
+      const longestSide = Math.max(width, height);
+      const scale = longestSide > maxDim ? maxDim / longestSide : 1;
+      const w = Math.round(width * scale);
+      const h = Math.round(height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(dataUrl); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => reject(new Error("Gagal memproses gambar"));
+    img.src = dataUrl;
+  });
+}

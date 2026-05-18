@@ -23,8 +23,14 @@ export default function AdminLeavePage() {
   }, []);
 
   async function update(leaveId: string, nextStatus: string) {
-    await apiFetch("/api/admin/leave", { method: "PUT", role: "admin", body: { leaveId, status: nextStatus } });
-    await load();
+    setMessage("Memperbarui status cuti...");
+    try {
+      await apiFetch("/api/admin/leave", { method: "PUT", role: "admin", body: { leaveId, status: nextStatus } });
+      await load();
+      setMessage("Status cuti diperbarui");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memperbarui status cuti");
+    }
   }
 
   return (

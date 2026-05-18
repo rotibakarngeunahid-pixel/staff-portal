@@ -70,7 +70,9 @@ export default function StaffSchedulePage() {
   }
 
   async function leave(date: string) {
-    const reason = window.prompt("Alasan cuti") || "";
+    const promptResult = window.prompt("Alasan cuti (opsional)");
+    if (promptResult === null) return;
+    const reason = promptResult;
     setBusy("Mengajukan cuti...");
     try {
       await apiFetch("/api/schedule/leave", { method: "POST", role: "staff", body: { date, reason } });
