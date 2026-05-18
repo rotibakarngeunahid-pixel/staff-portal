@@ -49,6 +49,28 @@ export default function AdminOutletsPage() {
 
   useEffect(() => { load().catch((err: Error) => setMessage(err.message)); }, []);
 
+  function parseMapsUrl(url: string): { lat: string; lng: string } | null {
+    // @lat,lng,zoom pattern (Google Maps standard)
+    const atMatch = url.match(/@(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    if (atMatch) return { lat: atMatch[1], lng: atMatch[2] };
+    // ?q=lat,lng or &q=lat,lng
+    const qMatch = url.match(/[?&]q=(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    if (qMatch) return { lat: qMatch[1], lng: qMatch[2] };
+    // ll=lat,lng
+    const llMatch = url.match(/[?&]ll=(-?\d+\.?\d+),(-?\d+\.?\d+)/);
+    if (llMatch) return { lat: llMatch[1], lng: llMatch[2] };
+    return null;
+  }
+
+  function onLocationUrlChange(url: string) {
+    const coords = parseMapsUrl(url);
+    if (coords) {
+      setForm((prev) => ({ ...prev, location_url: url, lat: coords.lat, lng: coords.lng }));
+    } else {
+      setForm((prev) => ({ ...prev, location_url: url }));
+    }
+  }
+
   const f = (key: keyof F, label: string, type: string, placeholder?: string, required = false) => (
     <div key={key}>
       <label className="label">{label}{required ? <span style={{ color: "var(--danger)" }}>*</span> : null}</label>
@@ -59,7 +81,10 @@ export default function AdminOutletsPage() {
         min={key === "radius_m" ? "1" : undefined}
         placeholder={placeholder}
         value={form[key]}
-        onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
+        onChange={(e) => {
+          if (key === "location_url") onLocationUrlChange(e.target.value);
+          else setForm((prev) => ({ ...prev, [key]: e.target.value }));
+        }}
       />
     </div>
   );
@@ -127,8 +152,13 @@ export default function AdminOutletsPage() {
           <AdminSection title="Informasi Dasar">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {f("name", "Nama Outlet", "text", "Contoh: Outlet Utama", true)}
-              {f("location_url", "Link Google Maps", "text", "https://maps.google.com/...")}
+              {f("location_url", "Link Google Maps (otomatis isi koordinat)", "text", "https://maps.google.com/...")}
             </div>
+            {form.lat && form.lng ? (
+              <div style={{ marginTop: 8, padding: "8px 12px", background: "var(--success-bg)", border: "1px solid var(--success-border)", borderRadius: 10, fontSize: 12, fontWeight: 600, color: "var(--success)" }}>
+                ✓ Koordinat terdeteksi otomatis: {form.lat}, {form.lng}
+              </div>
+            ) : null}
           </AdminSection>
 
           <AdminSection title="Lokasi GPS & Geofence" subtitle="Untuk validasi absensi staff">
@@ -138,7 +168,7 @@ export default function AdminOutletsPage() {
               {f("radius_m", "Radius (meter)", "number", "100", true)}
             </div>
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-              💡 Buka Google Maps → klik lokasi → salin koordinat. Radius 50-150m biasanya cukup.
+              💡 Paste link Google Maps di atas → koordinat otomatis terisi. Atau isi manual: buka Google Maps → klik lokasi → salin koordinat. Radius 50–150m biasanya cukup.
             </p>
           </AdminSection>
 

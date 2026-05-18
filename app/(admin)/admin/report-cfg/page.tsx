@@ -26,20 +26,34 @@ export default function AdminReportCfgPage() {
   async function loadOutlets() {
     const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
     setOutlets(payload.outlets);
-    if (!outletId && payload.outlets[0]) setOutletId(payload.outlets[0].id);
+    if (!outletId && payload.outlets[0]) {
+      // Pass the first outlet ID directly so loadItems doesn't see stale state
+      const firstId = payload.outlets[0].id;
+      setOutletId(firstId);
+      loadItemsFor(firstId, type).catch((err: Error) => setMessage(err.message));
+    }
   }
 
-  async function loadItems(nextOutlet = outletId) {
+  async function loadItemsFor(nextOutlet: string, nextType: "BUKA" | "TUTUP") {
     if (!nextOutlet) return;
+    setMessage(""); setMsgType("info");
     const payload = await apiFetch<{ ok: true; items: Item[] }>("/api/admin/report-cfg", {
       role: "admin",
-      body: { outletId: nextOutlet, type }
+      body: { outletId: nextOutlet, type: nextType }
     });
     setItems(payload.items);
   }
 
-  useEffect(() => { loadOutlets().catch((err: Error) => setMessage(err.message)); }, []);
-  useEffect(() => { loadItems().catch((err: Error) => setMessage(err.message)); }, [outletId, type]);
+  useEffect(() => {
+    loadOutlets().catch((err: Error) => setMessage(err.message));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!outletId) return;
+    loadItemsFor(outletId, type).catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outletId, type]);
 
   function update(index: number, patch: Partial<Item>) {
     setItems((cur) => cur.map((item, i) => (i === index ? { ...item, ...patch } : item)));
@@ -66,7 +80,7 @@ export default function AdminReportCfgPage() {
         role: "admin",
         body: { outletId, type, items: items.map((item, i) => ({ ...item, sort_order: i })) }
       });
-      await loadItems();
+      await loadItemsFor(outletId, type);
       setMessage("Konfigurasi tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
@@ -85,7 +99,7 @@ export default function AdminReportCfgPage() {
             <select
               className="field"
               value={outletId}
-              onChange={(e) => setOutletId(e.target.value)}
+              onChange={(e) => { setOutletId(e.target.value); setItems([]); }}
             >
               {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
@@ -97,7 +111,7 @@ export default function AdminReportCfgPage() {
                 <button
                   key={t}
                   type="button"
-                  onClick={() => setType(t)}
+                  onClick={() => { setType(t); setItems([]); }}
                   style={{
                     padding: "9px 20px", borderRadius: 10, border: "1.5px solid",
                     borderColor: type === t ? typeColor : "var(--border)",
