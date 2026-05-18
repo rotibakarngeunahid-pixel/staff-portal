@@ -12,6 +12,9 @@ export default function StaffReportPage() {
   const router = useRouter();
   const selfieRef = useRef<HTMLInputElement>(null);
   const [type, setType] = useState<"BUKA" | "TUTUP">("BUKA");
+  const [shiftDate, setShiftDate] = useState("");
+  const [shift, setShift] = useState<number | null>(null);
+  const [typeLocked, setTypeLocked] = useState(false);
   const [items, setItems] = useState<ReportCfg[]>([]);
   const [photos, setPhotos] = useState<Record<string, string>>({});
   const [selfie, setSelfie] = useState("");
@@ -22,7 +25,12 @@ export default function StaffReportPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incoming = params.get("type");
+    const incomingDate = params.get("date");
+    const incomingShift = params.get("shift");
     if (incoming === "TUTUP") setType("TUTUP");
+    if (incomingDate) setShiftDate(incomingDate);
+    if (incomingShift !== null) setShift(Number(incomingShift));
+    if (incoming === "BUKA" || incoming === "TUTUP") setTypeLocked(true);
   }, []);
 
   useEffect(() => {
@@ -62,6 +70,8 @@ export default function StaffReportPage() {
           nonce: crypto.randomUUID(),
           type,
           selfie,
+          shiftDate: shiftDate || undefined,
+          shift: shift !== null ? shift : undefined,
           items: items.map((item) => ({
             label: item.label,
             photo: photos[item.label] || "",
@@ -79,13 +89,15 @@ export default function StaffReportPage() {
 
   return (
     <StaffPage title={`Laporan ${type}`} subtitle="Upload foto sesuai konfigurasi outlet">
-      <div className="mb-4 grid grid-cols-2 gap-2">
-        {(["BUKA", "TUTUP"] as const).map((value) => (
-          <button key={value} className={`btn ${type === value ? "btn-primary" : "btn-soft"}`} onClick={() => setType(value)}>
-            {value}
-          </button>
-        ))}
-      </div>
+      {!typeLocked && (
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          {(["BUKA", "TUTUP"] as const).map((value) => (
+            <button key={value} className={`btn ${type === value ? "btn-primary" : "btn-soft"}`} onClick={() => setType(value)}>
+              {value}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error ? <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
 

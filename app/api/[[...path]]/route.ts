@@ -8,9 +8,12 @@ import {
   detectShift,
   getEffectiveDate,
   haversineDistance,
+  isTimeWithinWindow,
   normalizeCurrency,
+  parseTimeToMinutes,
   sanitizePathSegment,
   shiftStartTime,
+  timeJakarta,
   todayJakarta
 } from "@/lib/business";
 import { sendReportNotification } from "@/lib/email";
@@ -372,8 +375,14 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   if (existingError) throw existingError;
   if (existing) throw new HttpError("Absen masuk untuk shift ini sudah tercatat", 409, "ALREADY_CHECKED_IN");
 
+  const accuracy = Math.max(0, numberBody(body, "accuracy", 0));
   const distance = haversineDistance(lat, lng, outlet.lat, outlet.lng);
-  const outsideRadius = distance > outlet.radius_m;
+  const radius = outlet.radius_m;
+  const maxDist = radius + Math.min(accuracy, radius * 0.3);
+  if (distance > maxDist) {
+    throw new HttpError(`Kamu di luar area outlet (${Math.round(distance)}m dari pusat)`, 400, "OUTSIDE_RADIUS");
+  }
+  const gpsLowAccuracy = accuracy > radius * 3;
   const selfie = body.selfie || body.photo;
   const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
   if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
@@ -390,7 +399,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   );
 
   const flags = [
-    outsideRadius ? `OUTSIDE_RADIUS:${Math.round(distance)}m` : "",
+    gpsLowAccuracy ? "GPS_LOW_ACCURACY" : "",
     salary.lateMinutes > 0 ? "TELAT" : ""
   ]
     .filter(Boolean)
@@ -436,14 +445,14 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     );
   }
 
-  await logAudit(db, "checkin", staff.name, { date, shift, distance: Math.round(distance), outsideRadius });
+  await logAudit(db, "checkin", staff.name, { date, shift, distance: Math.round(distance), gpsLowAccuracy });
   return ok({
     attendance: inserted,
     checkin_time: now.toISOString(),
     late_minutes: salary.lateMinutes,
     deduction: salary.deduction,
     final_salary: salary.finalSalary,
-    outside_radius: outsideRadius,
+    gps_low_accuracy: gpsLowAccuracy,
     distance_m: Math.round(distance)
   });
 }
@@ -526,6 +535,60 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
   const type = reportType(body);
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
+
+  const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
+  const { data: checkinRows, error: attCheckError } = await db
+    .from("attendance")
+    .select("id")
+    .eq("staff_id", staff.id)
+    .eq("date", date)
+    .in("shift", allowedShifts)
+    .not("checkin_time", "is", null)
+    .limit(1);
+  if (attCheckError) throw attCheckError;
+  if (!checkinRows || checkinRows.length === 0) {
+    throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
+  }
+
+  const nowTime = timeJakarta();
+  if (type === "BUKA" && outlet.report_buka_start && outlet.report_buka_end) {
+    const bukaStartMin = parseTimeToMinutes(outlet.report_buka_start) ?? 0;
+    const bukaEndMin = parseTimeToMinutes(outlet.report_buka_end) ?? 0;
+    const crossMidnight = bukaStartMin > bukaEndMin;
+    if (!crossMidnight && !isTimeWithinWindow(nowTime, outlet.report_buka_start, outlet.report_buka_end)) {
+      throw new HttpError(
+        `Laporan BUKA hanya bisa dikirim antara ${outlet.report_buka_start} - ${outlet.report_buka_end}`,
+        400,
+        "OUTSIDE_REPORT_WINDOW"
+      );
+    }
+  }
+  if (type === "TUTUP" && outlet.report_tutup_start && outlet.report_tutup_end) {
+    const tutupStartMin = parseTimeToMinutes(outlet.report_tutup_start) ?? 0;
+    const tutupEndMin = parseTimeToMinutes(outlet.report_tutup_end) ?? 0;
+    const crossMidnight = tutupStartMin > tutupEndMin;
+    if (crossMidnight) {
+      const gracedMin = (tutupEndMin + 30) % (24 * 60);
+      const gracedStr = `${String(Math.floor(gracedMin / 60)).padStart(2, "0")}:${String(gracedMin % 60).padStart(2, "0")}`;
+      if (!isTimeWithinWindow(nowTime, outlet.report_tutup_start, gracedStr)) {
+        throw new HttpError(
+          `Laporan TUTUP hanya bisa dikirim antara ${outlet.report_tutup_start} - ${outlet.report_tutup_end}`,
+          400,
+          "OUTSIDE_REPORT_WINDOW"
+        );
+      }
+    } else {
+      const currentMin = parseTimeToMinutes(nowTime) ?? 0;
+      if (currentMin < tutupStartMin) {
+        throw new HttpError(
+          `Laporan TUTUP hanya bisa dikirim setelah ${outlet.report_tutup_start}`,
+          400,
+          "OUTSIDE_REPORT_WINDOW"
+        );
+      }
+    }
+  }
+
   const inputItems = parseItems(body.items);
 
   const { data: cfgItems, error: cfgError } = await db

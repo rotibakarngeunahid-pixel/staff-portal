@@ -189,13 +189,13 @@ export default function StaffHomePage() {
           </button>
         ) : null}
         {nextState === "report_buka" ? (
-          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push("/app/report?type=BUKA")}>
+          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push(`/app/report?type=BUKA&date=${status?.date}&shift=${status?.shift}`)}>
             <Send size={20} />
             Laporan Buka Toko
           </button>
         ) : null}
         {nextState === "report_tutup" ? (
-          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push("/app/report?type=TUTUP")}>
+          <button className="btn btn-primary min-h-14 text-base" onClick={() => router.push(`/app/report?type=TUTUP&date=${status?.date}&shift=${status?.shift}`)}>
             <Send size={20} />
             Laporan Tutup Toko
           </button>
