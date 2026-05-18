@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ImageIcon, Trash2, Upload } from "lucide-react";
 import { AdminPage } from "@/components/admin/admin-page";
-import { apiFetch } from "@/lib/client-api";
+import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
 
 type Outlet = { id: string; name: string };
-type Item = { id?: string; label: string; required: boolean; sort_order: number };
+type Item = {
+  id?: string;
+  label: string;
+  required: boolean;
+  sort_order: number;
+  example_photo_url?: string | null;
+  example_photo?: string;
+};
 
 export default function AdminReportCfgPage() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -43,6 +51,15 @@ export default function AdminReportCfgPage() {
     setItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   }
 
+  async function setExamplePhoto(index: number, file?: File) {
+    if (!file) return;
+    update(index, { example_photo: await dataUrlFromFile(file) });
+  }
+
+  function removeExamplePhoto(index: number) {
+    update(index, { example_photo: "", example_photo_url: null });
+  }
+
   async function save() {
     setMessage("Menyimpan...");
     try {
@@ -72,22 +89,61 @@ export default function AdminReportCfgPage() {
           <option value="BUKA">BUKA</option>
           <option value="TUTUP">TUTUP</option>
         </select>
-        <button className="btn btn-soft" onClick={() => setItems([...items, { label: "", required: true, sort_order: items.length }])}>Tambah Item</button>
+        <button className="btn btn-soft" onClick={() => setItems([...items, { label: "", required: true, sort_order: items.length, example_photo_url: null }])}>Tambah Item</button>
         <button className="btn btn-primary" onClick={save}>Simpan</button>
       </section>
       <p className="mb-3 text-sm font-bold text-slate-500">{message}</p>
       <section className="panel overflow-x-auto">
         <table className="data-table">
-          <thead><tr><th>Urutan</th><th>Label</th><th>Wajib</th><th>Aksi</th></tr></thead>
+          <thead><tr><th>Urutan</th><th>Label</th><th>Wajib</th><th>Contoh Foto</th><th>Aksi</th></tr></thead>
           <tbody>
-            {items.map((item, index) => (
-              <tr key={item.id || index}>
-                <td>{index + 1}</td>
-                <td><input className="field" value={item.label} onChange={(e) => update(index, { label: e.target.value })} /></td>
-                <td><input type="checkbox" checked={item.required} onChange={(e) => update(index, { required: e.target.checked })} /></td>
-                <td><button className="btn btn-danger min-h-9 px-3 text-xs" onClick={() => setItems(items.filter((_, i) => i !== index))}>Hapus</button></td>
-              </tr>
-            ))}
+            {items.map((item, index) => {
+              const preview = item.example_photo || item.example_photo_url;
+              return (
+                <tr key={item.id || index}>
+                  <td>{index + 1}</td>
+                  <td><input className="field min-w-56" value={item.label} onChange={(e) => update(index, { label: e.target.value })} /></td>
+                  <td>
+                    <label className="inline-flex items-center gap-2 text-sm font-extrabold text-[var(--muted)]">
+                      <input type="checkbox" checked={item.required} onChange={(e) => update(index, { required: e.target.checked })} />
+                      Wajib
+                    </label>
+                  </td>
+                  <td>
+                    <div className="flex min-w-60 items-center gap-3">
+                      {preview ? (
+                        <a href={preview} target="_blank" rel="noreferrer" className="block h-16 w-16 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-soft)]">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={preview} alt={`Contoh ${item.label || "foto"}`} className="h-full w-full object-cover" />
+                        </a>
+                      ) : (
+                        <div className="grid h-16 w-16 place-items-center rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-soft)] text-[var(--muted)]">
+                          <ImageIcon size={20} />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <label className="btn btn-soft min-h-9 px-3 text-xs">
+                          <Upload size={14} />
+                          {preview ? "Ubah" : "Upload"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(event) => setExamplePhoto(index, event.target.files?.[0])}
+                          />
+                        </label>
+                        {preview ? (
+                          <button type="button" className="btn btn-danger min-h-9 px-3 text-xs" onClick={() => removeExamplePhoto(index)}>
+                            <Trash2 size={14} />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td><button className="btn btn-danger min-h-9 px-3 text-xs" onClick={() => setItems(items.filter((_, i) => i !== index))}>Hapus</button></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>

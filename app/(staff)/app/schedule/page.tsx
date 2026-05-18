@@ -110,9 +110,9 @@ export default function StaffSchedulePage() {
                 <div key={slot.shift} className="rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-black">Shift {slot.shift}</p>
+                      <p className="font-black">{slot.shift === 0 ? "1 Shift" : `Shift ${slot.shift}`}</p>
                       <p className="text-sm font-semibold text-slate-500">
-                        {slot.status === "off" ? "Libur" : slot.staffName || "Kosong"}
+                        {slot.status === "single" ? "Jam buka sampai tutup" : slot.status === "off" ? "Libur" : slot.staffName || "Kosong"}
                       </p>
                     </div>
                     {slot.status === "open" ? (

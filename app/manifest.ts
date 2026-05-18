@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Absensi dan laporan operasional staff Roti Bakar Ngeunah",
     start_url: "/app/login",
     display: "standalone",
-    background_color: "#FFF8F2",
-    theme_color: "#C0392B",
+    background_color: "#F4F6FA",
+    theme_color: "#B42318",
     icons: [
       {
         src: "https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto,w_192/v1777572835/Untitled-2_tgjm4u.png",

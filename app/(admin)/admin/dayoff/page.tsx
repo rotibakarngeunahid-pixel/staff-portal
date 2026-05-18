@@ -19,9 +19,10 @@ export default function AdminDayoffPage() {
       apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" }),
       apiFetch<{ ok: true; dayoff: Dayoff[] }>("/api/admin/dayoff", { role: "admin", body: { outletId: form.outletId } })
     ]);
-    setOutlets(outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2));
+    const shiftOutlets = outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2);
+    setOutlets(shiftOutlets);
     setDayoff(offPayload.dayoff);
-    if (!form.outletId && outletPayload.outlets[0]) setForm((current) => ({ ...current, outletId: outletPayload.outlets[0].id }));
+    if (!form.outletId && shiftOutlets[0]) setForm((current) => ({ ...current, outletId: shiftOutlets[0].id }));
   }
 
   useEffect(() => {

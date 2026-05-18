@@ -24,7 +24,7 @@ export function StaffNav() {
             key={item.href}
             href={item.href}
             className={`flex min-h-14 flex-col items-center justify-center gap-1 text-[0.68rem] font-extrabold ${
-              active ? "text-[var(--primary)]" : "text-slate-500"
+              active ? "text-[var(--primary)]" : "text-[var(--muted)]"
             }`}
           >
             <Icon size={18} aria-hidden="true" />

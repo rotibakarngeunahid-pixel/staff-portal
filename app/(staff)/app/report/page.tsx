@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, Send } from "lucide-react";
+import { Camera, ImageIcon, Send } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
 
@@ -136,6 +136,23 @@ export default function StaffReportPage() {
                 />
               </label>
             </div>
+            {item.example_photo_url ? (
+              <a
+                href={item.example_photo_url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 grid grid-cols-[4rem_1fr] items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-2"
+              >
+                <span className="block h-16 w-16 overflow-hidden rounded-lg bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.example_photo_url} alt={`Contoh ${item.label}`} className="h-full w-full object-cover" />
+                </span>
+                <span className="flex items-center gap-2 text-sm font-extrabold text-[var(--muted)]">
+                  <ImageIcon size={16} />
+                  Contoh foto yang benar
+                </span>
+              </a>
+            ) : null}
             {photos[item.label] ? (
               <button
                 className="mt-3 text-xs font-extrabold text-red-700"

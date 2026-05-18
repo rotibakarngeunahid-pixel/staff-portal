@@ -22,9 +22,10 @@ export default function AdminSchedulePage() {
       apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" }),
       apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" })
     ]);
-    setOutlets(outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2));
+    const shiftOutlets = outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2);
+    setOutlets(shiftOutlets);
     setStaff(staffPayload.staff);
-    if (!outletId && outletPayload.outlets[0]) setOutletId(outletPayload.outlets[0].id);
+    if (!outletId && shiftOutlets[0]) setOutletId(shiftOutlets[0].id);
   }
 
   async function loadSchedule(nextOutletId = outletId) {

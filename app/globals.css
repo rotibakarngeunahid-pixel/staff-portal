@@ -1,19 +1,21 @@
 @import "tailwindcss";
 
 :root {
-  --primary: #c0392b;
-  --primary-dark: #922b21;
-  --primary-light: #e74c3c;
-  --accent: #f39c12;
-  --success: #27ae60;
-  --warning: #f39c12;
-  --danger: #e74c3c;
-  --muted: #6b7280;
+  --primary: #b42318;
+  --primary-dark: #8f1d18;
+  --primary-light: #d64b40;
+  --accent: #f6b73c;
+  --success: #16803c;
+  --warning: #b76b00;
+  --danger: #b42318;
+  --muted: #5f6b7a;
   --surface: #ffffff;
-  --surface-soft: #fff7ed;
-  --border: #ead7c8;
-  --ink: #24110b;
-  --admin-sidebar: #1a1a2e;
+  --surface-soft: #f6f8fb;
+  --border: #d8dee8;
+  --ink: #151922;
+  --page-bg: #f4f6fa;
+  --admin-sidebar: #222c3b;
+  --admin-sidebar-muted: #c8d1df;
 }
 
 * {
@@ -22,14 +24,14 @@
 
 html {
   min-height: 100%;
-  background: #fff8f2;
+  background: var(--page-bg);
 }
 
 body {
   min-height: 100%;
   margin: 0;
   color: var(--ink);
-  background: #fff8f2;
+  background: var(--page-bg);
 }
 
 button,
@@ -54,16 +56,14 @@ a {
 
 .app-shell {
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(255, 248, 242, 0.98), rgba(255, 255, 255, 0.98)),
-    radial-gradient(circle at top left, rgba(246, 184, 0, 0.18), transparent 32rem);
+  background: var(--page-bg);
 }
 
 .mobile-frame {
   width: min(100%, 480px);
   min-height: 100vh;
   margin: 0 auto;
-  background: #fff8f2;
+  background: var(--page-bg);
 }
 
 .btn {
@@ -87,7 +87,7 @@ a {
 .btn-primary {
   background: var(--primary);
   color: white;
-  box-shadow: 0 8px 20px rgba(192, 57, 43, 0.2);
+  box-shadow: 0 8px 20px rgba(180, 35, 24, 0.18);
 }
 
 .btn-primary:hover {
@@ -117,7 +117,7 @@ a {
 
 .field:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.12);
+  box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.12);
 }
 
 .label {
@@ -125,14 +125,14 @@ a {
   margin-bottom: 0.35rem;
   font-size: 0.75rem;
   font-weight: 800;
-  color: #7a4b3c;
+  color: var(--muted);
 }
 
 .panel {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: white;
-  box-shadow: 0 8px 26px rgba(82, 35, 12, 0.06);
+  box-shadow: 0 8px 26px rgba(24, 32, 44, 0.06);
 }
 
 .metric {
@@ -153,13 +153,13 @@ a {
 }
 
 .status-ok {
-  background: #e8f7ef;
+  background: #e7f6ec;
   color: #166534;
 }
 
 .status-warn {
-  background: #fff7df;
-  color: #92400e;
+  background: #fff4d6;
+  color: #874d00;
 }
 
 .status-danger {
@@ -171,12 +171,12 @@ a {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
-  background: #f7f8fa;
+  background: var(--page-bg);
 }
 
 .admin-sidebar {
   background: var(--admin-sidebar);
-  color: #e2e8f0;
+  color: var(--admin-sidebar-muted);
   padding: 1rem;
 }
 
@@ -193,14 +193,14 @@ a {
 
 .data-table th,
 .data-table td {
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
   padding: 0.72rem;
   text-align: left;
   vertical-align: top;
 }
 
 .data-table th {
-  color: #6b7280;
+  color: var(--muted);
   font-size: 0.74rem;
   text-transform: uppercase;
 }

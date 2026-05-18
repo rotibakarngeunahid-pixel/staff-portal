@@ -636,20 +636,38 @@ async function staffWeeklySchedule(db: Db, request: NextRequest, body: Body) {
 }
 
 async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo: string, staffId?: string) {
-  const [{ data: schedules, error }, { data: leaves, error: leaveError }, { data: dayoffs, error: offError }] =
+  const [
+    { data: outlet, error: outletError },
+    { data: schedules, error },
+    { data: leaves, error: leaveError },
+    { data: dayoffs, error: offError }
+  ] =
     await Promise.all([
+      db.from("outlets").select("id,shift_mode").eq("id", outletId).single(),
       db.from("shift_schedule").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("leave_requests").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("shift_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo)
     ]);
+  if (outletError) throw outletError;
   if (error) throw error;
   if (leaveError) throw leaveError;
   if (offError) throw offError;
 
+  const shiftNumbers = Number(outlet?.shift_mode) === 2 ? [1, 2] : [0];
   const days = [];
   for (let index = 0; index < 7; index += 1) {
     const date = addDays(dateFrom, index);
-    const slots = [1, 2].map((shift) => {
+    const slots = shiftNumbers.map((shift) => {
+      if (shift === 0) {
+        return {
+          shift,
+          scheduleId: null,
+          staffId: null,
+          staffName: null,
+          status: "single",
+          isMe: false
+        };
+      }
       const off = (dayoffs || []).some((item) => item.date === date && item.shift === shift);
       const rec = (schedules || []).find((item) => item.date === date && item.shift === shift);
       return {
@@ -679,6 +697,7 @@ async function claimShift(db: Db, request: NextRequest, body: Body) {
   const date = stringBody(body, "date");
   const shift = Number(body.shift) as 1 | 2;
   if (!date || ![1, 2].includes(shift)) throw new HttpError("Tanggal dan shift wajib diisi");
+  if (Number(outlet.shift_mode) !== 2) throw new HttpError("Outlet 1 shift tidak memakai claim shift");
 
   const { data: off } = await db
     .from("shift_dayoff")
@@ -945,17 +964,18 @@ async function adminOutlets(db: Db, method: string, body: Body) {
     return ok({ outlets: (data || []).map(toOutlet) });
   }
 
+  const shiftMode = Number(body.shift_mode || 1) === 2 ? 2 : 1;
   const payload = {
     name: stringBody(body, "name"),
     location_url: stringBody(body, "location_url") || null,
     lat: numberBody(body, "lat"),
     lng: numberBody(body, "lng"),
     radius_m: numberBody(body, "radius_m", 100),
-    shift_mode: Number(body.shift_mode || 1),
+    shift_mode: shiftMode,
     shift1_start: stringBody(body, "shift1_start", "09:00"),
     shift1_end: stringBody(body, "shift1_end", "17:00"),
-    shift2_start: stringBody(body, "shift2_start") || null,
-    shift2_end: stringBody(body, "shift2_end") || null,
+    shift2_start: shiftMode === 2 ? stringBody(body, "shift2_start") || null : null,
+    shift2_end: shiftMode === 2 ? stringBody(body, "shift2_end") || null : null,
     report_buka_start: stringBody(body, "report_buka_start") || null,
     report_buka_end: stringBody(body, "report_buka_end") || null,
     report_tutup_start: stringBody(body, "report_tutup_start") || null,
@@ -1189,6 +1209,9 @@ async function adminSchedule(db: Db, method: string, body: Body) {
     const date = stringBody(body, "date");
     const shift = Number(body.shift) as 1 | 2;
     if (!outletId || !date || ![1, 2].includes(shift)) throw new HttpError("Outlet, tanggal, dan shift wajib diisi");
+    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode").eq("id", outletId).single();
+    if (outletError) throw outletError;
+    if (Number(outlet.shift_mode) !== 2) throw new HttpError("Jadwal shift hanya untuk outlet 2 shift");
 
     if (body.status === "off") {
       const { data, error } = await db
@@ -1339,17 +1362,34 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
   if (method === "POST") {
     const items = parseItems(body.items);
     if (items.length) {
-      await db.from("report_cfg").delete().eq("outlet_id", outletId).eq("type", type);
-      const payload = items
-        .filter((item) => String(item.label || "").trim())
-        .map((item, index) => ({
+      const payload = [];
+      for (const [index, item] of items.entries()) {
+        const label = String(item.label || "").trim();
+        if (!label) continue;
+        const existingExampleUrl =
+          typeof item.example_photo_url === "string" && !item.example_photo_url.startsWith("data:")
+            ? item.example_photo_url
+            : null;
+        const uploadedExampleUrl = item.example_photo
+          ? await uploadImage(db, `reports/examples/${outletId}/${type}/${crypto.randomUUID()}.jpg`, item.example_photo)
+          : "";
+        payload.push({
           outlet_id: outletId,
           type,
-          label: String(item.label).trim(),
+          label,
           required: item.required !== false,
-          example_photo_url: item.example_photo_url || null,
+          example_photo_url: uploadedExampleUrl || existingExampleUrl,
           sort_order: Number(item.sort_order ?? index)
-        }));
+        });
+      }
+
+      const { error: deleteError } = await db.from("report_cfg").delete().eq("outlet_id", outletId).eq("type", type);
+      if (deleteError) throw deleteError;
+      if (!payload.length) {
+        await logAudit(db, "admin_save_report_cfg", "Admin", { outletId, type, count: 0 });
+        return ok({ items: [] });
+      }
+
       const { data, error } = await db.from("report_cfg").insert(payload).select("*").order("sort_order");
       if (error) throw error;
       await logAudit(db, "admin_save_report_cfg", "Admin", { outletId, type, count: payload.length });
@@ -1418,6 +1458,9 @@ async function adminDayoff(db: Db, method: string, body: Body) {
     const dateTo = stringBody(body, "dateTo") || dateFrom;
     const shifts = body.shifts ? parseItems(body.shifts) : [Number(body.shift || 1)];
     if (!outletId || !dateFrom) throw new HttpError("Outlet dan tanggal wajib diisi");
+    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode").eq("id", outletId).single();
+    if (outletError) throw outletError;
+    if (Number(outlet.shift_mode) !== 2) throw new HttpError("Hari libur shift hanya untuk outlet 2 shift");
     const payload = [];
     for (let date = dateFrom; date <= dateTo; date = addDays(date, 1)) {
       for (const shift of shifts) {

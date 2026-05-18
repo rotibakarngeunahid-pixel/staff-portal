@@ -11,8 +11,8 @@ export function AdminPage({
       <main className="admin-main">
         <header className="mb-5">
           <p className="text-xs font-black uppercase text-[var(--primary)]">Roti Bakar Ngeunah</p>
-          <h1 className="text-2xl font-black text-slate-950">{title}</h1>
-          {subtitle ? <p className="mt-1 text-sm font-semibold text-slate-500">{subtitle}</p> : null}
+          <h1 className="text-2xl font-black text-[var(--ink)]">{title}</h1>
+          {subtitle ? <p className="mt-1 text-sm font-semibold text-[var(--muted)]">{subtitle}</p> : null}
         </header>
         {children}
       </main>
