@@ -15,11 +15,21 @@ const dmSans = DM_Sans({
   display: "swap"
 });
 
+const LOGO_URL = "https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto/v1777572835/Untitled-2_tgjm4u.png";
+
 export const metadata: Metadata = {
   title: "Roti Bakar Ngeunah Staff Portal",
   description: "Absensi, laporan toko, jadwal shift, dan payroll staff Roti Bakar Ngeunah",
   applicationName: "RBN Staff Portal",
-  manifest: "/manifest.webmanifest"
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: `${LOGO_URL}`, sizes: "any", type: "image/png" }
+    ],
+    apple: [
+      { url: `${LOGO_URL}`, sizes: "180x180" }
+    ]
+  }
 };
 
 export const viewport: Viewport = {

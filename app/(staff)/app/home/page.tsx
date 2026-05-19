@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ImageIcon, LogOut, RefreshCw, Send, X } from "lucide-react";
+import { Camera, CheckCircle2, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { apiFetch, compressDataUrl } from "@/lib/client-api";
 import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
@@ -24,6 +24,9 @@ type StatusPayload = {
   outlet: { name: string; radius_m: number; shift_mode: number; lat: number; lng: number };
   date: string;
   shift: number;
+  isFullShift?: boolean;
+  offShift?: number | null;
+  activeShift?: number | null;
   attendance: Attendance | null;
   reports: { type: "BUKA" | "TUTUP" }[];
   serverTime: string;
@@ -34,7 +37,23 @@ type ReportCfgItem = {
   example_photo_url: string | null; sort_order: number;
 };
 
-type GpsState = { dist: number | null; accuracy: number; status: "ok" | "bad" | "wait" };
+/* ─── GPS states ─── */
+type GpsStatus =
+  | "unsupported"
+  | "permission_denied"
+  | "locating"
+  | "ready"
+  | "outside_radius"
+  | "low_accuracy"
+  | "timeout";
+
+type GpsState = {
+  status: GpsStatus;
+  dist: number | null;
+  accuracy: number;
+  lat: number | null;
+  lng: number | null;
+};
 
 /* ─── Camera slot descriptor ─── */
 type CameraSlot = {
@@ -54,6 +73,16 @@ const STATE_CONFIG: Record<NextState, { emoji: string; title: string; sub: strin
   done:         { emoji: "🎉", title: "Shift Selesai!",         sub: "Terima kasih atas kerja kerasmu hari ini. Sampai jumpa!", cls: "sc-done"  }
 };
 
+const GPS_LABEL: Record<GpsStatus, string> = {
+  unsupported:      "GPS tidak didukung browser ini",
+  permission_denied: "Izin lokasi ditolak — buka pengaturan browser",
+  locating:         "Mendeteksi lokasi...",
+  ready:            "Lokasi terdeteksi",
+  outside_radius:   "Di luar area outlet",
+  low_accuracy:     "Akurasi GPS terlalu rendah",
+  timeout:          "GPS timeout — ketuk Retry"
+};
+
 export default function StaffHomePage() {
   const router = useRouter();
   const setStaffToken = useSessionStore((s) => s.setStaffToken);
@@ -65,7 +94,8 @@ export default function StaffHomePage() {
   const [error, setError] = useState("");
 
   /* ─── GPS ─── */
-  const [gps, setGps] = useState<GpsState>({ dist: null, accuracy: 0, status: "wait" });
+  const [gps, setGps] = useState<GpsState>({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
+  const watchIdRef = useRef<number | null>(null);
 
   /* ─── Camera overlay ─── */
   const [camera, setCamera] = useState<CameraSlot | null>(null);
@@ -107,19 +137,64 @@ export default function StaffHomePage() {
   useEffect(() => { load(); }, [load]);
 
   /* ─── GPS watch ─── */
+  function startGpsWatch(outlet: StatusPayload["outlet"]) {
+    if (!navigator.geolocation) {
+      setGps({ status: "unsupported", dist: null, accuracy: 0, lat: null, lng: null });
+      return;
+    }
+
+    setGps({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
+
+    function onPos(pos: GeolocationPosition) {
+      const { latitude, longitude, accuracy } = pos.coords;
+      const dist = Math.round(haversineDistance(latitude, longitude, outlet.lat, outlet.lng));
+      const acc = Math.max(0, Math.round(accuracy));
+      const maxDist = outlet.radius_m + Math.min(acc, outlet.radius_m * 0.3);
+
+      let gpsStatus: GpsStatus;
+      if (acc > outlet.radius_m * 3) {
+        gpsStatus = "low_accuracy";
+      } else if (dist > maxDist) {
+        gpsStatus = "outside_radius";
+      } else {
+        gpsStatus = "ready";
+      }
+      setGps({ status: gpsStatus, dist, accuracy: acc, lat: latitude, lng: longitude });
+    }
+
+    function onErr(err: GeolocationPositionError) {
+      if (err.code === 1 /* PERMISSION_DENIED */) {
+        setGps({ status: "permission_denied", dist: null, accuracy: 0, lat: null, lng: null });
+      } else if (err.code === 3 /* TIMEOUT */) {
+        setGps({ status: "timeout", dist: null, accuracy: 0, lat: null, lng: null });
+      } else {
+        setGps({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
+      }
+    }
+
+    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = navigator.geolocation.watchPosition(onPos, onErr, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 30000
+    });
+  }
+
   useEffect(() => {
     if (!status?.outlet?.lat) return;
-    const outlet = status.outlet;
-    function onPos(pos: GeolocationPosition) {
-      const dist = haversineDistance(pos.coords.latitude, pos.coords.longitude, outlet.lat, outlet.lng);
-      const acc = Math.max(0, pos.coords.accuracy);
-      const maxDist = outlet.radius_m + Math.min(acc, outlet.radius_m * 0.3);
-      setGps({ dist: Math.round(dist), accuracy: Math.round(acc), status: dist <= maxDist ? "ok" : "bad" });
-    }
-    function onErr() { setGps({ dist: null, accuracy: 0, status: "wait" }); }
-    const id = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true });
-    return () => navigator.geolocation.clearWatch(id);
+    startGpsWatch(status.outlet);
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.outlet]);
+
+  function retryGps() {
+    if (status?.outlet) startGpsWatch(status.outlet);
+  }
 
   /* ─── Load report config when entering report state ─── */
   useEffect(() => {
@@ -135,15 +210,6 @@ export default function StaffHomePage() {
       .finally(() => setReportItemsLoading(false));
   }, [nextState]);
 
-  /* ─── GPS position (one-shot for attendance) ─── */
-  function getPosition(): Promise<GeolocationPosition> {
-    return new Promise((resolve, reject) =>
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true, timeout: 12000, maximumAge: 20000
-      })
-    );
-  }
-
   /* ─── Open camera helper ─── */
   function openCamera(slot: CameraSlot) { setCamera(slot); }
   function closeCamera() { setCamera(null); }
@@ -153,23 +219,28 @@ export default function StaffHomePage() {
     setBusy(action === "checkin" ? "Mengirim absen masuk..." : "Mengirim absen pulang...");
     setError("");
     try {
-      const [position, selfie] = await Promise.all([
-        getPosition(),
-        compressDataUrl(selfieDataUrl)
-      ]);
-      await apiFetch(`/api/attendance/${action}`, {
-        method: "POST",
-        role: "staff",
-        body: {
-          nonce: crypto.randomUUID(),
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          selfie,
-          shift: status?.shift,
-          shiftDate: status?.date
+      const selfie = await compressDataUrl(selfieDataUrl);
+
+      // Checkin uses the cached GPS fix — no re-fetch needed
+      // Checkout does not require GPS (only server validates reports)
+      const body: Record<string, unknown> = {
+        nonce: crypto.randomUUID(),
+        selfie,
+        shift: status?.shift,
+        shiftDate: status?.date
+      };
+      if (action === "checkin") {
+        if (gps.lat === null || gps.lng === null) {
+          setError("Lokasi GPS belum siap. Tunggu hingga GPS ready lalu coba lagi.");
+          setBusy("");
+          return;
         }
-      });
+        body.lat = gps.lat;
+        body.lng = gps.lng;
+        body.accuracy = gps.accuracy;
+      }
+
+      await apiFetch(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Aksi gagal");
@@ -228,6 +299,20 @@ export default function StaffHomePage() {
   const isReportState = nextState === "report_buka" || nextState === "report_tutup";
   const reportType = nextState === "report_buka" ? "BUKA" : "TUTUP";
   const reportTypeColor = reportType === "BUKA" ? "#2563EB" : "#7C3AED";
+  const isFullShift = Boolean(status?.isFullShift);
+
+  /* ─── Checkin button state ─── */
+  const gpsReady = gps.status === "ready";
+  const checkinDisabled = Boolean(busy) || !gpsReady;
+  const checkinLabel = {
+    unsupported:       "GPS tidak didukung",
+    permission_denied: "Izin Lokasi Ditolak",
+    locating:          "Menunggu GPS...",
+    ready:             "Absen Masuk",
+    outside_radius:    `Di Luar Area (${gps.dist ?? "—"}m)`,
+    low_accuracy:      "Akurasi GPS Rendah",
+    timeout:           "GPS Timeout"
+  }[gps.status];
 
   return (
     <>
@@ -296,23 +381,44 @@ export default function StaffHomePage() {
               <div key={nextState} className={`status-card ${sc.cls} animate-slide-up`}>
                 <div className="status-icon">{sc.emoji}</div>
                 <h2 className="status-title">{sc.title}</h2>
+                {isFullShift && nextState === "checkin" && (
+                  <div style={{ marginBottom: 6 }}>
+                    <span style={{
+                      display: "inline-block", background: "var(--primary)", color: "#fff",
+                      fontSize: 11, fontWeight: 800, borderRadius: 8, padding: "3px 10px", letterSpacing: "0.4px"
+                    }}>
+                      FULL SHIFT
+                    </span>
+                  </div>
+                )}
                 <p className="status-sub">{sc.sub}</p>
               </div>
             ) : null}
 
+            {/* Full shift info banner */}
+            {isFullShift && !loading && (
+              <div style={{
+                background: "var(--primary-bg, #EEF2FF)", border: "1.5px solid var(--primary-border, #C7D2FE)",
+                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--primary)"
+              }}>
+                🌟 Full Shift aktif — Shift {status?.offShift} libur. Gaji 2x hari ini!
+              </div>
+            )}
+
             {/* GPS bar */}
             <div className="gps-bar">
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div className={`gps-dot gps-${gps.status}`} />
+                <div className={`gps-dot gps-${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} />
                 <div>
                   <p className="gps-label">GPS · Jarak ke Outlet</p>
                   <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 1 }}>
-                    {gps.status === "wait" ? "Mendeteksi lokasi..." : `Akurasi ±${gps.accuracy}m`}
+                    {GPS_LABEL[gps.status]}
+                    {gps.accuracy > 0 && gps.status !== "locating" ? ` · ±${gps.accuracy}m` : ""}
                   </p>
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <p className={`gps-dist ${gps.status}`}>
+                <p className={`gps-dist ${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`}>
                   {gps.dist !== null ? `${gps.dist}m` : "—"}
                 </p>
                 {outlet && (
@@ -323,13 +429,30 @@ export default function StaffHomePage() {
               </div>
             </div>
 
-            {/* GPS blocked warning */}
-            {gps.status === "bad" && nextState === "checkin" && (
-              <div style={{
-                background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
-                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)"
-              }}>
+            {/* GPS status messages */}
+            {gps.status === "permission_denied" && nextState === "checkin" && (
+              <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
+                🔒 Izin lokasi ditolak. Buka pengaturan browser dan aktifkan izin lokasi untuk aplikasi ini, lalu refresh halaman.
+              </div>
+            )}
+            {gps.status === "outside_radius" && nextState === "checkin" && (
+              <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
                 📍 Kamu terlalu jauh dari outlet ({gps.dist}m, batas {outlet?.radius_m}m). Pindah lebih dekat untuk absen masuk.
+              </div>
+            )}
+            {gps.status === "low_accuracy" && nextState === "checkin" && (
+              <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
+                📡 Akurasi GPS terlalu rendah (±{gps.accuracy}m). Pindah ke tempat terbuka atau tunggu GPS membaik.
+              </div>
+            )}
+            {(gps.status === "timeout" || gps.status === "locating") && nextState === "checkin" && (
+              <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "var(--muted)", fontWeight: 600 }}>
+                  {gps.status === "timeout" ? "⏰ GPS timeout." : "⏳ Menunggu sinyal GPS..."}
+                </span>
+                <button className="btn btn-soft" style={{ fontSize: 11, padding: "5px 10px" }} onClick={retryGps}>
+                  <MapPin size={12} /> Retry
+                </button>
               </div>
             )}
 
@@ -366,15 +489,15 @@ export default function StaffHomePage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {nextState === "checkin" && (
                 <button
-                  className={`btn btn-primary btn-action${!busy && gps.status === "ok" ? " btn-glow" : ""}`}
+                  className={`btn btn-primary btn-action${gpsReady && !busy ? " btn-glow" : ""}`}
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Masuk",
                     onCapture: (url) => { closeCamera(); runAttendance("checkin", url); }
                   })}
-                  disabled={Boolean(busy) || gps.status === "bad"}
+                  disabled={checkinDisabled}
                 >
-                  <Camera size={20} /> {gps.status === "bad" ? "Di Luar Area Outlet" : "Absen Masuk"}
+                  <Camera size={20} /> {busy ? busy : checkinLabel}
                 </button>
               )}
 
@@ -419,7 +542,7 @@ export default function StaffHomePage() {
               <div style={{ textAlign: "right" }}>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{ddmmyyyy(status?.date)}</p>
                 <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
-                  {status?.shift === 0 ? "Full shift" : `Shift ${status?.shift}`}
+                  {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
                 </p>
               </div>
             </div>
@@ -427,12 +550,12 @@ export default function StaffHomePage() {
             {/* GPS bar (compact) */}
             <div className="gps-bar" style={{ padding: "10px 14px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div className={`gps-dot gps-${gps.status}`} />
+                <div className={`gps-dot gps-${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} />
                 <p className="gps-label" style={{ fontSize: 11 }}>
-                  {gps.status === "wait" ? "Mendeteksi GPS..." : `GPS · ±${gps.accuracy}m`}
+                  {gps.status === "locating" ? "Mendeteksi GPS..." : `GPS · ±${gps.accuracy}m`}
                 </p>
               </div>
-              <p className={`gps-dist ${gps.status}`} style={{ fontSize: 16 }}>
+              <p className={`gps-dist ${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} style={{ fontSize: 16 }}>
                 {gps.dist !== null ? `${gps.dist}m` : "—"}
               </p>
             </div>

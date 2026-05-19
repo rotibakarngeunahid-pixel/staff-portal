@@ -309,15 +309,37 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan untuk staff ini", 400, "NO_OUTLET");
 
   const effective = stringBody(body, "date") || getEffectiveDate().date;
-  const shift = Number(body.shift || detectShift(outlet)) as 0 | 1 | 2;
+  const rawShift = detectShift(outlet);
   const cfg = await configMap(db);
+
+  // Detect full shift scenario for 2-shift outlets
+  let effectiveShift: 0 | 1 | 2 = rawShift;
+  let isFullShift = false;
+  let offShift: number | null = null;
+  let activeShift: number | null = null;
+
+  if (outlet.shift_mode === 2) {
+    const { data: dayoffs } = await db
+      .from("shift_dayoff")
+      .select("shift")
+      .eq("outlet_id", outlet.id)
+      .eq("date", effective);
+    const offSet = new Set((dayoffs || []).map((d: any) => Number(d.shift)));
+    const shift1Off = offSet.has(1);
+    const shift2Off = offSet.has(2);
+    if (shift1Off && !shift2Off) {
+      isFullShift = true; offShift = 1; activeShift = 2; effectiveShift = 0;
+    } else if (shift2Off && !shift1Off) {
+      isFullShift = true; offShift = 2; activeShift = 1; effectiveShift = 0;
+    }
+  }
 
   const { data: attendance, error: attendanceError } = await db
     .from("attendance")
     .select("*")
     .eq("staff_id", staff.id)
     .eq("date", effective)
-    .eq("shift", shift)
+    .eq("shift", effectiveShift)
     .maybeSingle();
   if (attendanceError) throw attendanceError;
 
@@ -329,13 +351,14 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     .order("submitted_at", { ascending: false });
   if (reportsError) throw reportsError;
 
+  const scheduleShift = isFullShift ? (activeShift ?? 1) : (effectiveShift || 1);
   const { data: schedule } = outlet.shift_mode === 2
     ? await db
         .from("shift_schedule")
         .select("*")
         .eq("outlet_id", outlet.id)
         .eq("date", effective)
-        .eq("shift", shift || 1)
+        .eq("shift", scheduleShift)
         .maybeSingle()
     : { data: null };
 
@@ -344,7 +367,10 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     outlet,
     config: cfg,
     date: effective,
-    shift,
+    shift: effectiveShift,
+    isFullShift,
+    offShift,
+    activeShift,
     attendance,
     reports: reports || [],
     schedule,
@@ -360,10 +386,24 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
 
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
-  const shift = Number(body.shift || detectShift(outlet)) as 0 | 1 | 2;
+  // Use nullish coalescing to allow shift=0 (full shift) to pass through correctly
+  const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
+  const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
   const lat = numberBody(body, "lat", NaN);
   const lng = numberBody(body, "lng", NaN);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new HttpError("Lokasi GPS wajib dikirim");
+
+  // Reject checkin if the target shift is marked as off
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    const { data: thisOff } = await db
+      .from("shift_dayoff")
+      .select("id")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .eq("shift", shift)
+      .maybeSingle();
+    if (thisOff) throw new HttpError("Shift ini sedang libur, tidak bisa absen masuk", 400, "SHIFT_OFF");
+  }
 
   const { data: existing, error: existingError } = await db
     .from("attendance")
@@ -389,20 +429,25 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
 
   const cfg = await configMap(db);
   const now = new Date();
+  // Full shift always starts at shift1_start; shiftStartTime(outlet, 0) already returns shift1_start
   const start = dateTimeUtc(date, shiftStartTime(outlet, shift));
 
-  // Jika outlet 2 shift dan shift satunya libur, gaji jadi 2x (full shift)
+  // Full shift: shift=0 for 2-shift outlet always means full shift (other shift is off)
   let isFullShift2x = false;
-  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
-    const otherShift = shift === 1 ? 2 : 1;
-    const { data: otherOff } = await db
-      .from("shift_dayoff")
-      .select("id")
-      .eq("outlet_id", outlet.id)
-      .eq("date", date)
-      .eq("shift", otherShift)
-      .maybeSingle();
-    if (otherOff) isFullShift2x = true;
+  if (outlet.shift_mode === 2) {
+    if (shift === 0) {
+      isFullShift2x = true;
+    } else if (shift === 1 || shift === 2) {
+      const otherShift = shift === 1 ? 2 : 1;
+      const { data: otherOff } = await db
+        .from("shift_dayoff")
+        .select("id")
+        .eq("outlet_id", outlet.id)
+        .eq("date", date)
+        .eq("shift", otherShift)
+        .maybeSingle();
+      if (otherOff) isFullShift2x = true;
+    }
   }
 
   const effectiveSalary = normalizeCurrency(staff.salary_per_shift) * (isFullShift2x ? 2 : 1);
@@ -481,7 +526,9 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
-  const shift = Number(body.shift || detectShift(outlet)) as 0 | 1 | 2;
+  // Allow shift=0 (full shift) to pass — same fix as checkin
+  const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
+  const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
 
   const { data: attendance, error: attendanceError } = await db
     .from("attendance")
@@ -1298,6 +1345,23 @@ async function adminSchedule(db: Db, method: string, body: Body) {
     if (Number(outlet.shift_mode) !== 2) throw new HttpError("Jadwal shift hanya untuk outlet 2 shift");
 
     if (body.status === "off") {
+      // Prevent both shifts from being off on the same date
+      const otherShift = shift === 1 ? 2 : 1;
+      const { data: otherOff } = await db
+        .from("shift_dayoff")
+        .select("id")
+        .eq("outlet_id", outletId)
+        .eq("date", date)
+        .eq("shift", otherShift)
+        .maybeSingle();
+      if (otherOff) {
+        throw new HttpError(
+          "Tidak bisa meliburkan kedua shift pada tanggal yang sama. Minimal satu shift harus aktif.",
+          400,
+          "BOTH_SHIFTS_OFF"
+        );
+      }
+
       const { data, error } = await db
         .from("shift_schedule")
         .upsert(
@@ -1444,12 +1508,47 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
   if (!outletId) throw new HttpError("Outlet wajib dipilih");
 
   if (method === "POST") {
-    const items = parseItems(body.items);
-    if (items.length) {
+    const isBatchMode = Array.isArray(body.items);
+
+    if (isBatchMode) {
+      // Explicit clear operation — separate from normal save
+      if (body.clearAll === true || body.clearAll === "true") {
+        const { error: delErr } = await db.from("report_cfg").delete().eq("outlet_id", outletId).eq("type", type);
+        if (delErr) throw delErr;
+        await logAudit(db, "admin_clear_report_cfg", "Admin", { outletId, type });
+        return ok({ items: [], cleared: true });
+      }
+
+      const items = parseItems(body.items);
+      if (items.length === 0) {
+        throw new HttpError(
+          "Tidak bisa menyimpan tanpa item. Gunakan tombol 'Kosongkan Konfigurasi' untuk menghapus semua item.",
+          400,
+          "EMPTY_ITEMS"
+        );
+      }
+
+      // Step 1: Validate ALL labels before any DB write
+      const seenLabels = new Set<string>();
+      for (const [index, item] of items.entries()) {
+        const label = String(item.label || "").trim();
+        if (label.length < 2) {
+          throw new HttpError(`Item ${index + 1}: label wajib diisi (minimal 2 karakter)`, 400, "INVALID_LABEL");
+        }
+        if (label.length > 80) {
+          throw new HttpError(`Item ${index + 1}: label terlalu panjang (maksimal 80 karakter)`, 400, "INVALID_LABEL");
+        }
+        const normalized = label.toLowerCase();
+        if (seenLabels.has(normalized)) {
+          throw new HttpError(`Label "${label}" duplikat — setiap label harus unik`, 400, "DUPLICATE_LABEL");
+        }
+        seenLabels.add(normalized);
+      }
+
+      // Step 2: Upload images (after validation)
       const payload = [];
       for (const [index, item] of items.entries()) {
         const label = String(item.label || "").trim();
-        if (!label) continue;
         const existingExampleUrl =
           typeof item.example_photo_url === "string" && !item.example_photo_url.startsWith("data:")
             ? item.example_photo_url
@@ -1467,25 +1566,25 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
         });
       }
 
+      // Step 3: Delete old, then insert new (only after validation + upload succeed)
       const { error: deleteError } = await db.from("report_cfg").delete().eq("outlet_id", outletId).eq("type", type);
       if (deleteError) throw deleteError;
-      if (!payload.length) {
-        await logAudit(db, "admin_save_report_cfg", "Admin", { outletId, type, count: 0 });
-        return ok({ items: [] });
-      }
-
       const { data, error } = await db.from("report_cfg").insert(payload).select("*").order("sort_order");
       if (error) throw error;
       await logAudit(db, "admin_save_report_cfg", "Admin", { outletId, type, count: payload.length });
       return ok({ items: data || [] });
     }
 
+    // Single item insert
+    const label = stringBody(body, "label");
+    if (label.length < 2) throw new HttpError("Label wajib diisi (minimal 2 karakter)", 400, "INVALID_LABEL");
+    if (label.length > 80) throw new HttpError("Label terlalu panjang (maksimal 80 karakter)", 400, "INVALID_LABEL");
     const { data, error } = await db
       .from("report_cfg")
       .insert({
         outlet_id: outletId,
         type,
-        label: stringBody(body, "label"),
+        label,
         required: body.required === undefined ? true : body.required === true || body.required === "true",
         example_photo_url: body.example_photo
           ? await uploadImage(db, `reports/examples/${outletId}/${type}/${crypto.randomUUID()}.jpg`, body.example_photo)
@@ -1503,7 +1602,13 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
     const id = stringBody(body, "id");
     if (!id) throw new HttpError("ID konfigurasi wajib diisi");
     const updates: Body = {};
-    ["label", "required", "sort_order", "example_photo_url"].forEach((key) => {
+    if (body.label !== undefined) {
+      const label = String(body.label || "").trim();
+      if (label.length < 2) throw new HttpError("Label wajib diisi (minimal 2 karakter)", 400, "INVALID_LABEL");
+      if (label.length > 80) throw new HttpError("Label terlalu panjang (maksimal 80 karakter)", 400, "INVALID_LABEL");
+      updates.label = label;
+    }
+    ["required", "sort_order", "example_photo_url"].forEach((key) => {
       if (body[key] !== undefined) updates[key] = body[key];
     });
     if (body.example_photo) updates.example_photo_url = await uploadImage(db, `reports/examples/${outletId}/${type}/${id}.jpg`, body.example_photo);
@@ -1545,17 +1650,43 @@ async function adminDayoff(db: Db, method: string, body: Body) {
     const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode").eq("id", outletId).single();
     if (outletError) throw outletError;
     if (Number(outlet.shift_mode) !== 2) throw new HttpError("Hari libur shift hanya untuk outlet 2 shift");
-    const payload = [];
+    const payload: { outlet_id: string; date: string; shift: number }[] = [];
     for (let date = dateFrom; date <= dateTo; date = addDays(date, 1)) {
       for (const shift of shifts) {
         if ([1, 2].includes(Number(shift))) payload.push({ outlet_id: outletId, date, shift: Number(shift) });
       }
       if (payload.length > 366 * 2) break;
     }
-    const { data, error } = await db.from("shift_dayoff").upsert(payload, { onConflict: "outlet_id,date,shift" }).select("*");
+
+    // Prevent making both shifts off on any date in the range
+    const otherShiftNums = [...new Set(payload.map((item) => (item.shift === 1 ? 2 : 1)))];
+    const { data: conflicting } = await db
+      .from("shift_dayoff")
+      .select("date,shift")
+      .eq("outlet_id", outletId)
+      .gte("date", dateFrom)
+      .lte("date", dateTo)
+      .in("shift", otherShiftNums);
+    const conflictDates = new Set((conflicting || []).map((item: any) => item.date as string));
+    const failedDates = payload.filter((item) => conflictDates.has(item.date)).map((item) => item.date);
+    const validPayload = payload.filter((item) => !conflictDates.has(item.date));
+
+    if (failedDates.length > 0 && validPayload.length === 0) {
+      throw new HttpError(
+        `Tidak bisa meliburkan kedua shift. Semua tanggal ditolak karena shift lain sudah libur: ${[...new Set(failedDates)].join(", ")}`,
+        400,
+        "BOTH_SHIFTS_OFF"
+      );
+    }
+
+    if (!validPayload.length) {
+      return ok({ dayoff: [], skipped: failedDates });
+    }
+
+    const { data, error } = await db.from("shift_dayoff").upsert(validPayload, { onConflict: "outlet_id,date,shift" }).select("*");
     if (error) throw error;
-    await logAudit(db, "admin_dayoff_add", "Admin", { outletId, dateFrom, dateTo, count: payload.length });
-    return ok({ dayoff: data || [] });
+    await logAudit(db, "admin_dayoff_add", "Admin", { outletId, dateFrom, dateTo, count: validPayload.length, skipped: failedDates.length });
+    return ok({ dayoff: data || [], skipped: failedDates });
   }
 
   if (method === "DELETE") {
