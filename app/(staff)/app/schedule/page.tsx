@@ -28,13 +28,21 @@ type Slot = {
   isDayoff: boolean;
 };
 
+type Leave = {
+  id: string;
+  staff_name: string;
+  status: string;
+  reason: string | null;
+  isMe: boolean;
+};
+
 type Day = {
   date: string;
   slots: Slot[];
   assignments: Assignment[];
   myAssignment: Assignment | null;
   myDayoff: { id: string; reason: string | null } | null;
-  leaves: Array<{ id: string; staff_name: string; status: string; reason: string | null; isMe: boolean }>;
+  leaves: Leave[];
 };
 
 type SchedulePayload = { ok: true; weekStart: string; days: Day[] };
@@ -165,6 +173,19 @@ export default function StaffSchedulePage() {
     }
   }
 
+  async function cancelLeaveRequest(leaveId: string) {
+    if (!window.confirm("Batalkan permintaan libur ini?")) return;
+    setBusy("Membatalkan permintaan libur...");
+    setError("");
+    try {
+      await apiFetch("/api/schedule/leave", { method: "DELETE", role: "staff", body: { leaveId } });
+      await load();
+    } catch (err) {
+      setError(humanError(err));
+      setBusy("");
+    }
+  }
+
   return (
     <>
       {/* Modal ajukan libur */}
@@ -210,6 +231,15 @@ export default function StaffSchedulePage() {
       )}
 
       <StaffPage title="Jadwal" subtitle="Pilih shift dan ajukan libur">
+        {/* Info H-1 */}
+        <div style={{
+          background: "rgba(37,99,235,0.06)", border: "1.5px solid rgba(37,99,235,0.18)",
+          borderRadius: 12, padding: "10px 14px", fontSize: 12, color: "#1D4ED8", lineHeight: 1.55
+        }}>
+          <strong>📅 Aturan H-1:</strong> Pilih atau batalkan shift, dan ajukan/batalkan libur hanya bisa dilakukan <strong>sehari sebelum</strong> tanggal yang dimaksud.
+          Untuk keperluan mendadak di hari yang sama, hubungi admin langsung.
+        </div>
+
         {/* Pemilih minggu */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
           <input
@@ -278,8 +308,12 @@ export default function StaffSchedulePage() {
             {(data?.days || []).map((day) => {
               const today = isoToday();
               const isToday = day.date === today;
+              const isPast = day.date < today;
+              // Staff hanya bisa beraksi untuk tanggal BESOK atau lebih jauh (H-1 cutoff)
+              const isActionable = day.date > today;
               const hasMyAssignment = Boolean(day.myAssignment);
               const isMyDayoff = Boolean(day.myDayoff);
+              const myPendingLeave = day.leaves.find((l) => l.isMe && l.status === "pending");
 
               return (
                 <div
@@ -288,7 +322,7 @@ export default function StaffSchedulePage() {
                   style={{
                     padding: 0, overflow: "hidden",
                     border: isToday ? "2px solid var(--primary)" : undefined,
-                    opacity: isMyDayoff ? 0.75 : 1
+                    opacity: isPast ? 0.65 : isMyDayoff ? 0.75 : 1
                   }}
                 >
                   {/* Header hari */}
@@ -316,16 +350,31 @@ export default function StaffSchedulePage() {
                         <span className="status-pill status-danger" style={{ fontSize: 9 }}>Libur</span>
                       )}
                     </div>
-                    <button
-                      className="btn btn-soft"
-                      style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
-                      onClick={() => setLeaveModal({ date: day.date, reason: "" })}
-                      disabled={Boolean(busy) || isMyDayoff}
-                      title="Ajukan permintaan libur untuk tanggal ini"
-                    >
-                      <CalendarMinus size={13} /> Ajukan Libur
-                    </button>
+                    {/* Tombol ajukan libur hanya untuk tanggal yang bisa diaksi */}
+                    {isActionable && !isMyDayoff && !myPendingLeave && (
+                      <button
+                        className="btn btn-soft"
+                        style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
+                        onClick={() => setLeaveModal({ date: day.date, reason: "" })}
+                        disabled={Boolean(busy)}
+                        title="Ajukan permintaan libur untuk tanggal ini"
+                      >
+                        <CalendarMinus size={13} /> Ajukan Libur
+                      </button>
+                    )}
                   </div>
+
+                  {/* Notice H-1 untuk hari ini dan masa lalu */}
+                  {(isToday || isPast) && !isMyDayoff && (
+                    <div style={{
+                      padding: "7px 14px",
+                      background: "rgba(100,116,139,0.06)",
+                      borderBottom: "1px solid var(--border)",
+                      fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6
+                    }}>
+                      🔒 {isToday ? "Sudah melewati batas H-1 — untuk perubahan mendadak, hubungi admin." : "Tanggal sudah lewat."}
+                    </div>
+                  )}
 
                   {/* Dayoff banner */}
                   {isMyDayoff && (
@@ -341,7 +390,7 @@ export default function StaffSchedulePage() {
                     <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                       {day.slots.map((slot) => {
                         const isOpen = slot.status === "open" || (!slot.assignmentId && !slot.scheduleId && slot.status !== "off" && slot.status !== "single" && slot.status !== "dayoff");
-                        const canCancel = slot.isMe && (slot.assignmentId || slot.scheduleId) && slot.status !== "locked" && slot.status !== "completed";
+                        const canCancel = isActionable && slot.isMe && (slot.assignmentId || slot.scheduleId) && slot.status !== "locked" && slot.status !== "completed";
 
                         return (
                           <div
@@ -375,8 +424,8 @@ export default function StaffSchedulePage() {
                             </div>
 
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                              {/* Tombol ambil shift (hanya jika slot tersedia dan belum punya assignment) */}
-                              {isOpen && !hasMyAssignment && (
+                              {/* Tombol ambil shift hanya jika isActionable */}
+                              {isActionable && isOpen && !hasMyAssignment && (
                                 <>
                                   {slot.shift === 1 && (
                                     <button
@@ -411,8 +460,8 @@ export default function StaffSchedulePage() {
                                 </>
                               )}
 
-                              {/* Tombol ambil Full Shift untuk outlet 2 shift (hanya jika kedua slot masih kosong) */}
-                              {slot.shift === 1 && isOpen && !hasMyAssignment && day.slots.every((s) => s.status === "open" || (!s.assignmentId && !s.scheduleId)) && (
+                              {/* Tombol ambil Full Shift untuk outlet 2 shift */}
+                              {isActionable && slot.shift === 1 && isOpen && !hasMyAssignment && day.slots.every((s) => s.status === "open" || (!s.assignmentId && !s.scheduleId)) && (
                                 <button
                                   className="btn btn-soft"
                                   style={{ fontSize: 11, padding: "7px 12px", minHeight: 0, fontWeight: 800 }}
@@ -465,13 +514,30 @@ export default function StaffSchedulePage() {
                     </div>
                   )}
 
-                  {/* Leaves */}
+                  {/* Permintaan libur */}
                   {day.leaves.length > 0 && (
-                    <div style={{ padding: "8px 14px 12px", display: "flex", alignItems: "center", gap: 6 }}>
-                      <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
-                      <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>
-                        Permintaan libur: {day.leaves.map((l) => l.staff_name + (l.isMe ? " (Saya)" : "")).join(", ")}
-                      </p>
+                    <div style={{ padding: "8px 14px 12px" }}>
+                      {day.leaves.map((leave) => (
+                        <div key={leave.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                          <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
+                          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)", flex: 1 }}>
+                            {leave.isMe ? "Permintaan liburmu" : `Libur: ${leave.staff_name}`}
+                            {leave.status === "approved" && <span style={{ marginLeft: 4, color: "var(--success)" }}>(disetujui)</span>}
+                            {leave.status === "pending" && leave.isMe && <span style={{ marginLeft: 4, fontWeight: 400, color: "var(--muted)" }}>(menunggu persetujuan)</span>}
+                          </p>
+                          {/* Tombol batalkan hanya untuk permintaan milik sendiri yang masih pending dan masih H-1 */}
+                          {leave.isMe && leave.status === "pending" && isActionable && (
+                            <button
+                              className="btn btn-soft"
+                              style={{ fontSize: 10, padding: "4px 10px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
+                              onClick={() => cancelLeaveRequest(leave.id)}
+                              disabled={Boolean(busy)}
+                            >
+                              Batalkan
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -501,6 +567,8 @@ function humanError(err: unknown): string {
     return "Anda tidak memiliki izin untuk melakukan aksi ini.";
   if (msg.includes("500") || msg.includes("server"))
     return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  if (msg.includes("DEADLINE_PASSED") || msg.includes("H-1") || msg.includes("sehari sebelumnya"))
+    return msg;
   if (msg.includes("SHIFT_TAKEN") || msg.includes("diambil"))
     return msg;
   if (msg.includes("ALREADY_SCHEDULED") || msg.includes("sudah memiliki jadwal"))

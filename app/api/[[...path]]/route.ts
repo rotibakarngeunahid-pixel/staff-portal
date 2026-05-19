@@ -963,6 +963,12 @@ async function claimShift(db: Db, request: NextRequest, body: Body) {
   const shift = Number(body.shift) as 1 | 2;
   if (!date || ![1, 2].includes(shift)) throw new HttpError("Tanggal dan shift wajib diisi");
   if (Number(outlet.shift_mode) !== 2) throw new HttpError("Outlet 1 shift tidak memakai claim shift");
+  if (date <= todayJakarta()) {
+    throw new HttpError(
+      "Jadwal hanya bisa diatur H-1 (sehari sebelumnya). Untuk perubahan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
+    );
+  }
 
   const { data: off } = await db
     .from("shift_dayoff")
@@ -1020,6 +1026,12 @@ async function cancelShift(db: Db, request: NextRequest, body: Body) {
     .maybeSingle();
   if (existingError) throw existingError;
   if (!existing || existing.staff_id !== staff.id) throw new HttpError("Shift tidak ditemukan", 404);
+  if (existing.date <= todayJakarta()) {
+    throw new HttpError(
+      "Pembatalan jadwal hanya bisa dilakukan H-1 (sehari sebelumnya). Untuk perubahan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
+    );
+  }
   const { data, error } = await db
     .from("shift_schedule")
     .update({
@@ -1043,6 +1055,12 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan");
   const date = stringBody(body, "date");
   if (!date) throw new HttpError("Tanggal cuti wajib diisi");
+  if (date <= todayJakarta()) {
+    throw new HttpError(
+      "Pengajuan libur hanya bisa dilakukan H-1 (sehari sebelumnya). Untuk keperluan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
+    );
+  }
   const { data, error } = await db
     .from("leave_requests")
     .upsert(
@@ -1069,6 +1087,23 @@ async function cancelLeave(db: Db, request: NextRequest, body: Body) {
   const leaveId = stringBody(body, "leaveId");
   if (!leaveId) throw new HttpError("Leave ID wajib diisi");
   const { staff } = await getStaffWithOutlet(db, session.sub);
+
+  // Fetch dulu untuk validasi kepemilikan, status, dan H-1 cutoff
+  const { data: leaveRow, error: fetchErr } = await db
+    .from("leave_requests")
+    .select("id,date,status,staff_id")
+    .eq("id", leaveId)
+    .maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!leaveRow || leaveRow.staff_id !== staff.id) throw new HttpError("Permintaan libur tidak ditemukan", 404);
+  if (leaveRow.status === "cancelled") throw new HttpError("Permintaan libur sudah dibatalkan");
+  if (leaveRow.date <= todayJakarta()) {
+    throw new HttpError(
+      "Pembatalan libur hanya bisa dilakukan H-1 (sehari sebelumnya). Untuk keperluan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
+    );
+  }
+
   const { data, error } = await db
     .from("leave_requests")
     .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
@@ -2035,6 +2070,13 @@ async function selectShift(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Outlet ini hanya menggunakan Full Shift", 400, "INVALID_SHIFT_TYPE");
   }
 
+  if (date <= todayJakarta()) {
+    throw new HttpError(
+      "Jadwal hanya bisa diatur H-1 (sehari sebelumnya). Untuk perubahan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
+    );
+  }
+
   // Cek staff dayoff
   const { data: dayoff } = await db
     .from("staff_dayoff")
@@ -2142,6 +2184,13 @@ async function cancelAssignment(db: Db, request: NextRequest, body: Body) {
       "Jadwal sudah dikunci karena kamu sudah absen masuk. Hubungi admin untuk koreksi.",
       400,
       "SCHEDULE_LOCKED"
+    );
+  }
+
+  if (assignment.date <= todayJakarta()) {
+    throw new HttpError(
+      "Pembatalan jadwal hanya bisa dilakukan H-1 (sehari sebelumnya). Untuk perubahan mendadak, hubungi admin.",
+      400, "DEADLINE_PASSED"
     );
   }
 

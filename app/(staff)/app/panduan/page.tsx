@@ -18,7 +18,7 @@ const SECTIONS: Section[] = [
     emoji: "🗓️",
     title: "Alur Kerja Harian",
     steps: [
-      { icon: "1️⃣", title: "Pilih Jadwal", desc: "Buka menu Jadwal → pilih Shift 1, Shift 2, atau Full Shift sebelum jam kerja dimulai." },
+      { icon: "1️⃣", title: "Pilih Jadwal (H-1)", desc: "Buka menu Jadwal → pilih Shift 1, Shift 2, atau Full Shift SEHARI SEBELUM tanggal shift. Lewat dari itu hanya admin yang bisa ubah." },
       { icon: "2️⃣", title: "Absen Masuk", desc: "Buka Home → izinkan GPS → tunggu GPS siap → ambil selfie → tap Absen Masuk." },
       { icon: "3️⃣", title: "Laporan Buka Toko", desc: "Setelah absen masuk, isi laporan buka toko dengan foto yang diminta admin." },
       { icon: "4️⃣", title: "Laporan Tutup Toko", desc: "Sebelum pulang, isi laporan tutup toko dengan foto kondisi toko saat penutupan." },
@@ -82,14 +82,17 @@ const SECTIONS: Section[] = [
     steps: [
       { icon: "📅", title: "Buka Menu Jadwal", desc: "Tap ikon Jadwal di menu bawah layar." },
       { icon: "👀", title: "Lihat Jadwal Minggu Ini", desc: "Akan muncul daftar hari dalam seminggu beserta slot shift yang tersedia." },
+      { icon: "⏰", title: "Aturan H-1", desc: "Pilih shift hanya bisa dilakukan SEHARI SEBELUM tanggal shift. Contoh: shift Selasa harus dipilih paling lambat hari Senin. Hari yang sudah lewat atau hari ini terkunci otomatis." },
       { icon: "👆", title: "Pilih Shift", desc: "Tap tombol 'Ambil Shift 1', 'Ambil Shift 2', atau 'Ambil Full Shift' pada hari yang diinginkan." },
       { icon: "✅", title: "Jadwal Tersimpan", desc: "Kartu 'Jadwal Saya' akan muncul dengan detail shift yang dipilih." },
-      { icon: "❌", title: "Batalkan Shift", desc: "Tap tombol 'Batalkan Jadwal' jika perlu membatalkan. Hanya bisa dalam batas waktu yang ditentukan." }
+      { icon: "❌", title: "Batalkan Shift", desc: "Tap tombol 'Batal' jika perlu membatalkan. Hanya bisa dilakukan H-1 (sehari sebelum). Setelah absen masuk, jadwal terkunci dan tidak bisa dibatalkan sendiri." },
+      { icon: "🆘", title: "Perubahan Mendadak", desc: "Jika ada keperluan mendadak di hari yang sama (hari H), hubungi admin langsung. Hanya admin yang bisa mengubah jadwal di hari yang sama." }
     ],
     tips: [
       "Full Shift = kerja dua shift sekaligus (gaji 2x)",
       "Satu outlet hanya boleh 1 orang per slot shift",
-      "Pilih jadwal sebelum jam kerja dimulai"
+      "Pilih jadwal sebelum hari H (sehari sebelumnya)",
+      "Hari ini dan hari lalu sudah terkunci — hubungi admin untuk koreksi"
     ]
   },
   {
@@ -97,14 +100,18 @@ const SECTIONS: Section[] = [
     emoji: "🏖️",
     title: "Cara Mengajukan Libur",
     steps: [
-      { icon: "📋", title: "Hubungi Admin", desc: "Pengajuan libur dilakukan melalui admin (pemilik toko). Admin yang menginput libur ke dalam sistem." },
-      { icon: "🔔", title: "Status Libur Muncul di Home", desc: "Jika sudah diinput admin, halaman Home akan menampilkan kartu 'Hari Ini Kamu Libur' dengan keterangan alasan." },
+      { icon: "⏰", title: "Aturan H-1", desc: "Pengajuan libur hanya bisa dilakukan SEHARI SEBELUM tanggal libur. Contoh: libur Selasa harus diajukan paling lambat hari Senin." },
+      { icon: "📋", title: "Ajukan via Jadwal", desc: "Buka menu Jadwal → cari tanggal yang diinginkan → tap tombol 'Ajukan Libur'. Permintaan akan menunggu persetujuan admin." },
+      { icon: "❌", title: "Batalkan Permintaan Libur", desc: "Jika sudah mengajukan libur tapi ingin membatalkan, tap tombol 'Batalkan' di samping permintaan libur. Hanya bisa dibatalkan sebelum admin menyetujui dan masih H-1." },
+      { icon: "🔔", title: "Status Libur Muncul di Home", desc: "Jika sudah disetujui admin, halaman Home akan menampilkan kartu 'Hari Ini Kamu Libur' dengan keterangan alasan." },
       { icon: "🚫", title: "Tidak Bisa Absen Saat Libur", desc: "Tombol absen tidak tersedia ketika status libur aktif. Ini normal — tidak perlu panik." },
-      { icon: "🔄", title: "Cuti Disetujui", desc: "Jika ada permintaan cuti yang disetujui, libur akan otomatis terdaftar di sistem." }
+      { icon: "🆘", title: "Libur Mendadak", desc: "Jika ada keperluan mendadak di hari yang sama, hubungi admin langsung. Hanya admin yang bisa menginput libur mendadak." }
     ],
     tips: [
-      "Beritahu admin jauh hari sebelum tanggal libur",
-      "Cek status jadwal di halaman Jadwal untuk memastikan libur sudah tercatat"
+      "Ajukan libur jauh hari sebelum tanggal yang diinginkan",
+      "H-1 = sehari sebelumnya adalah batas terakhir pengajuan mandiri",
+      "Libur mendadak hari ini: hubungi admin secara langsung",
+      "Cek status di halaman Jadwal untuk memastikan libur sudah tercatat"
     ]
   },
   {
@@ -233,7 +240,7 @@ export default function PanduanPage() {
         fontSize: 12, color: "var(--muted)", lineHeight: 1.6
       }}>
         <strong style={{ color: "var(--ink)" }}>Alur singkat:</strong>{" "}
-        Pilih Jadwal → Absen Masuk → Laporan Buka → Laporan Tutup → Absen Pulang
+        Pilih Jadwal (H-1) → Absen Masuk → Laporan Buka → Laporan Tutup → Absen Pulang
       </div>
 
       {/* Sections */}
