@@ -51,19 +51,20 @@ function SlotBadge({ status, isMe }: { status: SlotStatus; isMe: boolean }) {
 export default function StaffSchedulePage() {
   const [weekStart, setWeekStart] = useState(isoToday());
   const [data, setData] = useState<SchedulePayload | null>(null);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [leaveModal, setLeaveModal] = useState<LeaveModalState>(null);
 
   async function load() {
-    setBusy("Memuat jadwal...");
+    setLoading(true);
     setError("");
     try {
       setData(await apiFetch<SchedulePayload>("/api/schedule/weekly", { role: "staff", body: { weekStart } }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat jadwal");
+      setError(humanError(err));
     } finally {
-      setBusy("");
+      setLoading(false);
     }
   }
 
@@ -85,7 +86,7 @@ export default function StaffSchedulePage() {
       await apiFetch("/api/schedule/claim", { method: "POST", role: "staff", body: { date, shift } });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal mengambil shift");
+      setError(humanError(err));
       setBusy("");
     }
   }
@@ -97,14 +98,14 @@ export default function StaffSchedulePage() {
       await apiFetch("/api/schedule/cancel", { method: "POST", role: "staff", body: { scheduleId } });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal membatalkan shift");
+      setError(humanError(err));
       setBusy("");
     }
   }
 
   async function submitLeave() {
     if (!leaveModal) return;
-    setBusy("Mengajukan cuti...");
+    setBusy("Mengajukan libur...");
     setError("");
     const { date, reason } = leaveModal;
     setLeaveModal(null);
@@ -112,7 +113,7 @@ export default function StaffSchedulePage() {
       await apiFetch("/api/schedule/leave", { method: "POST", role: "staff", body: { date, reason: reason || null } });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal mengajukan cuti");
+      setError(humanError(err));
       setBusy("");
     }
   }
@@ -133,7 +134,7 @@ export default function StaffSchedulePage() {
           }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <h2 style={{ fontSize: 17, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)" }}>
-                Request Cuti
+                Ajukan Libur
               </h2>
               <button
                 onClick={() => setLeaveModal(null)}
@@ -145,7 +146,7 @@ export default function StaffSchedulePage() {
             <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
               Tanggal: <strong>{ddmmyyyy(leaveModal.date)}</strong>
             </p>
-            <label className="label">Alasan cuti (opsional)</label>
+            <label className="label">Alasan libur (opsional)</label>
             <textarea
               className="field"
               rows={3}
@@ -156,7 +157,7 @@ export default function StaffSchedulePage() {
             />
             <div style={{ display: "flex", gap: 10 }}>
               <button className="btn btn-primary" style={{ flex: 1 }} onClick={submitLeave}>
-                <CalendarMinus size={16} /> Ajukan Cuti
+                <CalendarMinus size={16} /> Ajukan Libur
               </button>
               <button className="btn btn-soft" style={{ flex: 1 }} onClick={() => setLeaveModal(null)}>
                 Batal
@@ -175,8 +176,8 @@ export default function StaffSchedulePage() {
             value={weekStart}
             onChange={(event) => setWeekStart(event.target.value)}
           />
-          <button className="btn btn-soft" style={{ padding: "0 14px" }} onClick={load} disabled={Boolean(busy)}>
-            <RefreshCw size={16} style={busy ? { animation: "spin 1s linear infinite" } : undefined} />
+          <button className="btn btn-soft" style={{ padding: "0 14px" }} onClick={load} disabled={loading || Boolean(busy)}>
+            <RefreshCw size={16} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
           </button>
         </div>
 
@@ -184,7 +185,7 @@ export default function StaffSchedulePage() {
           className="btn btn-soft"
           style={{ width: "100%", fontSize: 13 }}
           onClick={() => setWeekStart(nextWeek)}
-          disabled={Boolean(busy)}
+          disabled={loading || Boolean(busy)}
         >
           Minggu Berikutnya <ChevronRight size={15} />
         </button>
@@ -211,136 +212,166 @@ export default function StaffSchedulePage() {
           </div>
         )}
 
-        {/* Days */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {(data?.days || []).map((day) => {
-            const today = new Date().toISOString().slice(0, 10);
-            const isToday = day.date === today;
-            return (
-              <div
-                key={day.date}
-                className="panel"
-                style={{
-                  padding: 0, overflow: "hidden",
-                  border: isToday ? "2px solid var(--primary)" : undefined
-                }}
-              >
-                {/* Day header */}
-                <div style={{
-                  padding: "12px 16px",
-                  background: isToday
-                    ? "linear-gradient(135deg, rgba(192,57,43,0.08), rgba(192,57,43,0.04))"
-                    : "var(--surface-soft)",
-                  borderBottom: "1px solid var(--border)",
-                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <h2 style={{
-                      fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
-                      color: isToday ? "var(--primary)" : "var(--ink)"
-                    }}>
-                      {ddmmyyyy(day.date)}
-                    </h2>
-                    {isToday && (
-                      <span style={{
-                        fontSize: 9, fontWeight: 800, letterSpacing: "0.5px",
-                        background: "var(--primary)", color: "#fff",
-                        borderRadius: 6, padding: "2px 7px", textTransform: "uppercase"
-                      }}>
-                        Hari ini
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    className="btn btn-soft"
-                    style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
-                    onClick={() => setLeaveModal({ date: day.date, reason: "" })}
-                    disabled={Boolean(busy)}
-                  >
-                    <CalendarMinus size={13} /> Cuti
-                  </button>
+        {/* Loading skeleton */}
+        {loading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="panel" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "12px 16px", background: "var(--surface-soft)", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ height: 16, width: 100, borderRadius: 6, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
                 </div>
-
-                {/* Slots */}
-                <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-                  {day.slots.map((slot) => (
-                    <div
-                      key={slot.shift}
-                      style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-                        padding: "10px 12px",
-                        background: slot.isMe
-                          ? "rgba(22,163,74,0.06)"
-                          : slot.status === "off"
-                          ? "rgba(220,38,38,0.04)"
-                          : "#fafafa",
-                        borderRadius: 12,
-                        border: slot.isMe
-                          ? "1.5px solid var(--success-border)"
-                          : slot.status === "off"
-                          ? "1.5px solid var(--danger-border)"
-                          : "1px solid var(--border)"
-                      }}
+                <div style={{ padding: "10px 14px" }}>
+                  <div style={{ height: 44, borderRadius: 10, background: "var(--surface-soft)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Days */
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {(data?.days || []).map((day) => {
+              const today = new Date().toISOString().slice(0, 10);
+              const isToday = day.date === today;
+              return (
+                <div
+                  key={day.date}
+                  className="panel"
+                  style={{
+                    padding: 0, overflow: "hidden",
+                    border: isToday ? "2px solid var(--primary)" : undefined
+                  }}
+                >
+                  {/* Day header */}
+                  <div style={{
+                    padding: "12px 16px",
+                    background: isToday
+                      ? "linear-gradient(135deg, rgba(192,57,43,0.08), rgba(192,57,43,0.04))"
+                      : "var(--surface-soft)",
+                    borderBottom: "1px solid var(--border)",
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <h2 style={{
+                        fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
+                        color: isToday ? "var(--primary)" : "var(--ink)"
+                      }}>
+                        {ddmmyyyy(day.date)}
+                      </h2>
+                      {isToday && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 800, letterSpacing: "0.5px",
+                          background: "var(--primary)", color: "#fff",
+                          borderRadius: 6, padding: "2px 7px", textTransform: "uppercase"
+                        }}>
+                          Hari ini
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      className="btn btn-soft"
+                      style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
+                      onClick={() => setLeaveModal({ date: day.date, reason: "" })}
+                      disabled={Boolean(busy)}
                     >
-                      <div style={{ flex: 1 }}>
-                        <p style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
-                          {slot.shift === 0 ? "Full Shift" : `Shift ${slot.shift}`}
-                        </p>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <SlotBadge status={slot.status} isMe={slot.isMe} />
-                          {slot.status === "claimed" && slot.staffName && !slot.isMe && (
-                            <span style={{ fontSize: 10, color: "var(--muted)" }}>{slot.staffName}</span>
-                          )}
+                      <CalendarMinus size={13} /> Libur
+                    </button>
+                  </div>
+
+                  {/* Slots */}
+                  <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                    {day.slots.map((slot) => (
+                      <div
+                        key={slot.shift}
+                        style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                          padding: "10px 12px",
+                          background: slot.isMe
+                            ? "rgba(22,163,74,0.06)"
+                            : slot.status === "off"
+                            ? "rgba(220,38,38,0.04)"
+                            : "#fafafa",
+                          borderRadius: 12,
+                          border: slot.isMe
+                            ? "1.5px solid var(--success-border)"
+                            : slot.status === "off"
+                            ? "1.5px solid var(--danger-border)"
+                            : "1px solid var(--border)"
+                        }}
+                      >
+                        <div style={{ flex: 1 }}>
+                          <p style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
+                            {slot.shift === 0 ? "Full Shift" : `Shift ${slot.shift}`}
+                          </p>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <SlotBadge status={slot.status} isMe={slot.isMe} />
+                            {slot.status === "claimed" && slot.staffName && !slot.isMe && (
+                              <span style={{ fontSize: 10, color: "var(--muted)" }}>{slot.staffName}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          {slot.status === "open" ? (
+                            <button
+                              className="btn btn-primary"
+                              style={{ fontSize: 12, padding: "8px 16px", minHeight: 0 }}
+                              onClick={() => claim(day.date, slot.shift)}
+                              disabled={Boolean(busy)}
+                            >
+                              Ambil
+                            </button>
+                          ) : slot.isMe && slot.scheduleId ? (
+                            <button
+                              className="btn btn-soft"
+                              style={{ fontSize: 12, padding: "8px 14px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
+                              onClick={() => cancel(slot.scheduleId!)}
+                              disabled={Boolean(busy)}
+                            >
+                              Batal
+                            </button>
+                          ) : null}
                         </div>
                       </div>
-                      <div>
-                        {slot.status === "open" ? (
-                          <button
-                            className="btn btn-primary"
-                            style={{ fontSize: 12, padding: "8px 16px", minHeight: 0 }}
-                            onClick={() => claim(day.date, slot.shift)}
-                            disabled={Boolean(busy)}
-                          >
-                            Ambil
-                          </button>
-                        ) : slot.isMe && slot.scheduleId ? (
-                          <button
-                            className="btn btn-soft"
-                            style={{ fontSize: 12, padding: "8px 14px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
-                            onClick={() => cancel(slot.scheduleId!)}
-                            disabled={Boolean(busy)}
-                          >
-                            Batal
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Leaves */}
-                {day.leaves.length > 0 && (
-                  <div style={{
-                    padding: "8px 14px 12px",
-                    display: "flex", alignItems: "center", gap: 6
-                  }}>
-                    <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
-                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>
-                      Cuti: {day.leaves.map((l) => l.staff_name + (l.isMe ? " (Saya)" : "")).join(", ")}
-                    </p>
+                    ))}
                   </div>
-                )}
-              </div>
-            );
-          })}
 
-          {data && data.days.length === 0 && (
-            <div className="panel" style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-              Tidak ada jadwal untuk minggu ini.
-            </div>
-          )}
-        </div>
+                  {/* Leaves */}
+                  {day.leaves.length > 0 && (
+                    <div style={{
+                      padding: "8px 14px 12px",
+                      display: "flex", alignItems: "center", gap: 6
+                    }}>
+                      <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
+                      <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>
+                        Libur: {day.leaves.map((l) => l.staff_name + (l.isMe ? " (Saya)" : "")).join(", ")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {data && data.days.length === 0 && (
+              <div className="panel" style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+                Tidak ada jadwal untuk minggu ini.
+              </div>
+            )}
+          </div>
+        )}
       </StaffPage>
     </>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Data belum berhasil dimuat. Periksa koneksi internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk melakukan aksi ini.";
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  return msg || "Terjadi kesalahan. Coba lagi.";
 }

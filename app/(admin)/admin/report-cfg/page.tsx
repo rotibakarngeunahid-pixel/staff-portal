@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, GripVertical, ImageIcon, Plus, Save, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, ImageIcon, Plus, Save, Trash2, Upload } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
 
@@ -45,9 +45,11 @@ export default function AdminReportCfgPage() {
   const [outletId, setOutletId] = useState("");
   const [type, setType] = useState<"BUKA" | "TUTUP">("BUKA");
   const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [clearing, setClearing] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   async function loadOutlets() {
     const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
@@ -55,28 +57,35 @@ export default function AdminReportCfgPage() {
     if (!outletId && payload.outlets[0]) {
       const firstId = payload.outlets[0].id;
       setOutletId(firstId);
-      loadItemsFor(firstId, type).catch((err: Error) => setMessage(err.message));
+      loadItemsFor(firstId, type).catch((err: Error) => setMessage(humanError(err)));
     }
   }
 
   async function loadItemsFor(nextOutlet: string, nextType: "BUKA" | "TUTUP") {
     if (!nextOutlet) return;
+    setLoading(true);
     setMessage(""); setMsgType("info");
-    const payload = await apiFetch<{ ok: true; items: Item[] }>("/api/admin/report-cfg", {
-      role: "admin",
-      body: { outletId: nextOutlet, type: nextType }
-    });
-    setItems(payload.items.map((item) => ({ ...item, _error: "" })));
+    try {
+      const payload = await apiFetch<{ ok: true; items: Item[] }>("/api/admin/report-cfg", {
+        role: "admin",
+        body: { outletId: nextOutlet, type: nextType }
+      });
+      setItems(payload.items.map((item) => ({ ...item, _error: "" })));
+    } catch (err) {
+      setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    loadOutlets().catch((err: Error) => setMessage(err.message));
+    loadOutlets().catch((err: Error) => setMessage(humanError(err)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!outletId) return;
-    loadItemsFor(outletId, type).catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
+    loadItemsFor(outletId, type).catch((err: Error) => { setMessage(humanError(err)); setMsgType("err"); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outletId, type]);
 
@@ -103,6 +112,16 @@ export default function AdminReportCfgPage() {
     setItems((cur) => validateItems(cur.filter((_, i) => i !== index)));
   }
 
+  function moveItem(index: number, direction: "up" | "down") {
+    setItems((cur) => {
+      const next = [...cur];
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= next.length) return cur;
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return validateItems(next);
+    });
+  }
+
   const hasErrors = items.some((item) => Boolean(item._error));
 
   async function save() {
@@ -122,12 +141,12 @@ export default function AdminReportCfgPage() {
       await loadItemsFor(outletId, type);
       setMessage(`Konfigurasi tersimpan ✓ — ${result.items.length} item`); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
     }
   }
 
   async function clearAll() {
-    if (!window.confirm(`Hapus semua konfigurasi laporan ${type} untuk outlet ini? Tindakan ini tidak bisa dibatalkan.`)) return;
+    setConfirmClear(false);
     setClearing(true);
     setMessage("Menghapus konfigurasi..."); setMsgType("info");
     try {
@@ -139,7 +158,7 @@ export default function AdminReportCfgPage() {
       setItems([]);
       setMessage("Semua konfigurasi dihapus ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menghapus"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
     } finally {
       setClearing(false);
     }
@@ -149,6 +168,52 @@ export default function AdminReportCfgPage() {
 
   return (
     <AdminPage title="Konfigurasi Laporan" subtitle="Atur item foto wajib per outlet dan tipe laporan">
+      {/* Confirm clear dialog */}
+      {confirmClear && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 300,
+          background: "rgba(15,23,42,0.55)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 20
+        }}>
+          <div style={{
+            background: "#fff", borderRadius: 20, padding: "24px 24px 20px", width: "min(100%, 400px)",
+            boxShadow: "0 8px 40px rgba(15,23,42,0.18)"
+          }}>
+            <div style={{ textAlign: "center", marginBottom: 16 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🗑️</div>
+              <h2 style={{ fontSize: 17, fontWeight: 900, marginBottom: 8 }}>Hapus Semua Konfigurasi?</h2>
+              <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.55 }}>
+                Semua item laporan <strong>{type}</strong> untuk outlet ini akan dihapus permanen.<br />
+                Tindakan ini tidak bisa dibatalkan.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                className="btn btn-soft"
+                style={{ flex: 1, fontSize: 13 }}
+                onClick={() => setConfirmClear(false)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                style={{
+                  flex: 1, fontSize: 13, fontWeight: 800,
+                  background: "var(--danger-bg)", color: "var(--danger)",
+                  border: "1.5px solid var(--danger-border)", borderRadius: 12,
+                  padding: "10px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6
+                }}
+                onClick={clearAll}
+                disabled={clearing}
+              >
+                <Trash2 size={14} /> Ya, Hapus Semua
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Selector */}
       <AdminSection title="Pilih Outlet & Tipe Laporan">
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
@@ -190,17 +255,21 @@ export default function AdminReportCfgPage() {
 
       {/* Items */}
       <AdminSection
-        title={`Item Laporan ${type} (${items.length} item)`}
-        subtitle="Setiap item memerlukan foto dari staff saat laporan"
+        title={`Item Laporan ${type} (${loading ? "..." : items.length} item)`}
+        subtitle="Urutan dari atas ke bawah menentukan urutan pengambilan foto oleh staff"
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-          {items.length === 0 ? (
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "24px 16px", color: "var(--muted-light)", fontSize: 13 }}>
+              Memuat konfigurasi...
+            </div>
+          ) : items.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--muted-light)", fontSize: 13, border: "2px dashed var(--border)", borderRadius: 12 }}>
               Belum ada item. Klik &quot;Tambah Item&quot; untuk memulai.
             </div>
           ) : null}
 
-          {items.map((item, index) => {
+          {!loading && items.map((item, index) => {
             const preview = item.example_photo || item.example_photo_url;
             const hasErr = Boolean(item._error);
             return (
@@ -217,10 +286,39 @@ export default function AdminReportCfgPage() {
                   alignItems: "flex-start"
                 }}
               >
-                {/* Drag handle / number */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 8 }}>
-                  <GripVertical size={16} style={{ color: "var(--muted-light)" }} />
-                  <span style={{ fontSize: 12, fontWeight: 800, color: "var(--muted-light)", minWidth: 18 }}>{index + 1}</span>
+                {/* Order controls / number */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, paddingTop: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "var(--muted-light)", minWidth: 18, textAlign: "center" }}>{index + 1}</span>
+                  <button
+                    type="button"
+                    title="Pindah ke atas"
+                    disabled={index === 0}
+                    onClick={() => moveItem(index, "up")}
+                    style={{
+                      background: index === 0 ? "var(--surface-soft)" : "#fff",
+                      border: "1px solid var(--border)", borderRadius: 6,
+                      width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: index === 0 ? "not-allowed" : "pointer",
+                      color: index === 0 ? "var(--muted-light)" : "var(--muted)"
+                    }}
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Pindah ke bawah"
+                    disabled={index === items.length - 1}
+                    onClick={() => moveItem(index, "down")}
+                    style={{
+                      background: index === items.length - 1 ? "var(--surface-soft)" : "#fff",
+                      border: "1px solid var(--border)", borderRadius: 6,
+                      width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: index === items.length - 1 ? "not-allowed" : "pointer",
+                      color: index === items.length - 1 ? "var(--muted-light)" : "var(--muted)"
+                    }}
+                  >
+                    <ChevronDown size={14} />
+                  </button>
                 </div>
 
                 {/* Fields */}
@@ -276,11 +374,12 @@ export default function AdminReportCfgPage() {
                   ) : null}
                 </div>
 
-                {/* Delete */}
+                {/* Delete item */}
                 <button
                   type="button"
                   style={{ background: "var(--danger-bg)", color: "var(--danger)", border: "none", borderRadius: 8, padding: "8px 10px", cursor: "pointer", marginTop: 22 }}
                   onClick={() => removeItem(index)}
+                  title="Hapus item ini"
                 >
                   <Trash2 size={15} />
                 </button>
@@ -289,7 +388,8 @@ export default function AdminReportCfgPage() {
           })}
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {/* Action buttons */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button type="button" className="btn btn-soft" style={{ fontSize: 13 }} onClick={addItem}>
             <Plus size={15} /> Tambah Item
           </button>
@@ -303,19 +403,47 @@ export default function AdminReportCfgPage() {
           >
             <Save size={15} /> Simpan Konfigurasi
           </button>
+
+          {/* Danger zone — styled as secondary outline-danger, not big red */}
           {items.length > 0 && (
             <button
               type="button"
-              className="btn btn-danger"
-              style={{ fontSize: 13, marginLeft: "auto" }}
-              onClick={clearAll}
+              style={{
+                marginLeft: "auto",
+                fontSize: 12, fontWeight: 700,
+                background: "transparent",
+                color: "var(--danger)",
+                border: "1.5px solid var(--danger-border)",
+                borderRadius: 10,
+                padding: "8px 14px",
+                cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 6,
+                opacity: clearing ? 0.5 : 1
+              }}
+              onClick={() => setConfirmClear(true)}
               disabled={clearing}
             >
-              <Trash2 size={15} /> Kosongkan Konfigurasi
+              <Trash2 size={13} /> Kosongkan Konfigurasi
             </button>
           )}
         </div>
       </AdminSection>
     </AdminPage>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Koneksi bermasalah. Periksa internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk mengubah konfigurasi ini.";
+  if (msg.includes("duplikat") || msg.includes("unique") || msg.includes("Duplikat"))
+    return "Terdapat label yang sama. Pastikan setiap item memiliki nama unik.";
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  return msg || "Terjadi kesalahan. Coba lagi.";
 }

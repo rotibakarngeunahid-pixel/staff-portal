@@ -14,37 +14,56 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "status-danger"
 };
 
+const STATUS_ID: Record<string, string> = {
+  pending: "Menunggu",
+  approved: "Disetujui",
+  cancelled: "Dibatalkan"
+};
+
 export default function AdminLeavePage() {
   const [leaves, setLeaves] = useState<Leave[]>([]);
+  const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
 
   async function load() {
-    const payload = await apiFetch<{ ok: true; leaves: Leave[] }>("/api/admin/leave", { role: "admin", body: { status } });
-    setLeaves(payload.leaves);
-  }
-
-  useEffect(() => {
-    load().catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function update(leaveId: string, nextStatus: string) {
-    setMessage("Memperbarui status cuti..."); setMsgType("info");
+    setLoading(true);
     try {
-      await apiFetch("/api/admin/leave", { method: "PUT", role: "admin", body: { leaveId, status: nextStatus } });
-      await load();
-      setMessage("Status cuti diperbarui ✓"); setMsgType("ok");
+      const payload = await apiFetch<{ ok: true; leaves: Leave[] }>("/api/admin/leave", { role: "admin", body: { status } });
+      setLeaves(payload.leaves);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal memperbarui status cuti"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setLoading(false);
     }
   }
 
-  const STATUS_LABELS: Record<string, string> = { "": "Semua", pending: "Pending", approved: "Approved", cancelled: "Cancelled" };
+  useEffect(() => {
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  async function update(leaveId: string, nextStatus: string) {
+    setMessage("Memperbarui status libur..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/leave", { method: "PUT", role: "admin", body: { leaveId, status: nextStatus } });
+      await load();
+      setMessage("Status libur diperbarui ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(humanError(err)); setMsgType("err");
+    }
+  }
+
+  const STATUS_LABELS: Record<string, string> = { "": "Semua", pending: "Menunggu", approved: "Disetujui", cancelled: "Dibatalkan" };
 
   return (
-    <AdminPage title="Manajemen Cuti" subtitle="Approve atau cancel request libur staff">
+    <AdminPage title="Manajemen Libur" subtitle="Approve atau batalkan permintaan libur staff">
       <MsgBar message={message} type={msgType} />
 
       {/* Filter */}
@@ -73,7 +92,7 @@ export default function AdminLeavePage() {
       {/* Table */}
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
         <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)" }}>
-          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Daftar Cuti ({leaves.length})</h2>
+          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Daftar Libur ({loading ? "..." : leaves.length})</h2>
         </div>
         <table className="data-table">
           <thead>
@@ -86,15 +105,20 @@ export default function AdminLeavePage() {
             </tr>
           </thead>
           <tbody>
-            {leaves.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+            {loading ? (
+              <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>
+                <RefreshCw size={16} style={{ display: "inline", animation: "spin 1s linear infinite", marginRight: 8 }} />
+                Memuat data...
+              </td></tr>
+            ) : leaves.length === 0 ? (
+              <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data libur</td></tr>
             ) : leaves.map((leave) => (
               <tr key={leave.id}>
                 <td>{ddmmyyyy(leave.date)}</td>
                 <td style={{ fontWeight: 700 }}>{leave.staff_name}</td>
                 <td>
                   <span className={`status-pill ${STATUS_COLORS[leave.status] || "status-warn"}`}>
-                    {leave.status}
+                    {STATUS_ID[leave.status] || leave.status}
                   </span>
                 </td>
                 <td style={{ color: "var(--muted)", fontSize: 13 }}>{leave.reason || "—"}</td>
@@ -106,7 +130,7 @@ export default function AdminLeavePage() {
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => update(leave.id, "approved")}
                       >
-                        <CheckCircle size={13} /> Approve
+                        <CheckCircle size={13} /> Setujui
                       </button>
                     ) : null}
                     {leave.status !== "cancelled" ? (
@@ -115,7 +139,7 @@ export default function AdminLeavePage() {
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => update(leave.id, "cancelled")}
                       >
-                        <XCircle size={13} /> Cancel
+                        <XCircle size={13} /> Batalkan
                       </button>
                     ) : null}
                   </div>
@@ -127,4 +151,18 @@ export default function AdminLeavePage() {
       </div>
     </AdminPage>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Koneksi bermasalah. Periksa internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk melakukan aksi ini.";
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  return msg || "Terjadi kesalahan. Coba lagi.";
 }

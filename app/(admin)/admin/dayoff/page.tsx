@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { ddmmyyyy } from "@/lib/format";
@@ -12,23 +12,31 @@ type Dayoff = { id: string; outlet_id: string; date: string; shift: number };
 export default function AdminDayoffPage() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [dayoff, setDayoff] = useState<Dayoff[]>([]);
+  const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ outletId: "", dateFrom: new Date().toISOString().slice(0, 10), dateTo: "", shift: "1" });
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
 
   async function load() {
-    const [outletPayload, offPayload] = await Promise.all([
-      apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" }),
-      apiFetch<{ ok: true; dayoff: Dayoff[] }>("/api/admin/dayoff", { role: "admin", body: { outletId: form.outletId } })
-    ]);
-    const shiftOutlets = outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2);
-    setOutlets(shiftOutlets);
-    setDayoff(offPayload.dayoff);
-    if (!form.outletId && shiftOutlets[0]) setForm((current) => ({ ...current, outletId: shiftOutlets[0].id }));
+    setLoading(true);
+    try {
+      const [outletPayload, offPayload] = await Promise.all([
+        apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" }),
+        apiFetch<{ ok: true; dayoff: Dayoff[] }>("/api/admin/dayoff", { role: "admin", body: { outletId: form.outletId } })
+      ]);
+      const shiftOutlets = outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2);
+      setOutlets(shiftOutlets);
+      setDayoff(offPayload.dayoff);
+      if (!form.outletId && shiftOutlets[0]) setForm((current) => ({ ...current, outletId: shiftOutlets[0].id }));
+    } catch (err) {
+      setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
+    load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -40,7 +48,7 @@ export default function AdminDayoffPage() {
       await load();
       setMessage("Hari libur disimpan ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menyimpan hari libur"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
     }
   }
 
@@ -52,7 +60,7 @@ export default function AdminDayoffPage() {
       await load();
       setMessage("Hari libur dihapus ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal menghapus hari libur"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
     }
   }
 
@@ -95,8 +103,11 @@ export default function AdminDayoffPage() {
 
       {/* List */}
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)" }}>
-          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Daftar Hari Libur ({dayoff.length})</h2>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 13, fontWeight: 800 }}>Daftar Hari Libur ({loading ? "..." : dayoff.length})</h2>
+          <button className="btn btn-soft" style={{ fontSize: 11, padding: "6px 10px" }} onClick={load} disabled={loading}>
+            <RefreshCw size={12} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
+          </button>
         </div>
         <table className="data-table">
           <thead>
@@ -108,7 +119,12 @@ export default function AdminDayoffPage() {
             </tr>
           </thead>
           <tbody>
-            {dayoff.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={4} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>
+                <RefreshCw size={16} style={{ display: "inline", animation: "spin 1s linear infinite", marginRight: 8 }} />
+                Memuat data...
+              </td></tr>
+            ) : dayoff.length === 0 ? (
               <tr><td colSpan={4} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada hari libur terdaftar</td></tr>
             ) : dayoff.map((row) => (
               <tr key={row.id}>
@@ -131,4 +147,20 @@ export default function AdminDayoffPage() {
       </div>
     </AdminPage>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Koneksi bermasalah. Periksa internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk melakukan aksi ini.";
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  if (msg.includes("kedua shift"))
+    return "Tidak bisa meliburkan kedua shift pada tanggal yang sama.";
+  return msg || "Terjadi kesalahan. Coba lagi.";
 }

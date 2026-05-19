@@ -25,7 +25,7 @@ const items = [
   { href: "/admin/outlets", label: "Outlet", icon: Store },
   { href: "/admin/attendance", label: "Absensi", icon: ClipboardList },
   { href: "/admin/schedule", label: "Jadwal", icon: CalendarDays },
-  { href: "/admin/leave", label: "Cuti", icon: CalendarMinus },
+  { href: "/admin/leave", label: "Libur", icon: CalendarMinus },
   { href: "/admin/payroll", label: "Payroll", icon: BadgeDollarSign },
   { href: "/admin/reports", label: "Laporan", icon: FileImage },
   { href: "/admin/report-cfg", label: "Konfig Laporan", icon: MapPinned },

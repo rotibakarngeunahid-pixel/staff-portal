@@ -34,7 +34,11 @@ export default function StaffPayrollPage() {
     try {
       setData(await apiFetch<PayrollPayload>("/api/staff/payroll", { role: "staff" }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat payroll");
+      setError(err instanceof Error
+        ? (err.message.includes("fetch") || err.message.includes("Failed to fetch")
+            ? "Data belum berhasil dimuat. Periksa koneksi internet lalu coba lagi."
+            : err.message)
+        : "Gagal memuat data gaji. Coba lagi.");
     } finally {
       setLoading(false);
     }

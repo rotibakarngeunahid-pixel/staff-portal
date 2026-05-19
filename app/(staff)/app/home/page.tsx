@@ -185,7 +185,7 @@ export default function StaffHomePage() {
       setClockNow(new Date(Date.now() + serverClockOffsetRef.current));
       setStatus(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat status");
+      setError(humanError(err));
     } finally {
       setLoading(false);
     }
@@ -327,7 +327,7 @@ export default function StaffHomePage() {
     setReportError("");
     apiFetch<{ ok: true; items: ReportCfgItem[] }>("/api/reports/config", { role: "staff", body: { type } })
       .then((p) => setReportItems(p.items))
-      .catch(() => setReportItems([]))
+      .catch(() => { setReportItems([]); })
       .finally(() => setReportItemsLoading(false));
   }, [nextState]);
 
@@ -364,7 +364,7 @@ export default function StaffHomePage() {
       await apiFetch(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Aksi gagal");
+      setError(humanError(err));
     } finally {
       setBusy("");
     }
@@ -404,7 +404,7 @@ export default function StaffHomePage() {
       setReportPhotos({});
       await load();
     } catch (err) {
-      setReportError(err instanceof Error ? err.message : "Gagal mengirim laporan");
+      setReportError(humanError(err));
     } finally {
       setReportBusy(false);
     }
@@ -594,29 +594,61 @@ export default function StaffHomePage() {
 
             {/* Time info panel (after checkin) */}
             {att?.checkin_time && (
-              <div className="panel animate-slide-up" style={{ padding: 16 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div style={{ textAlign: "center", padding: "10px 8px", background: "var(--surface-soft)", borderRadius: 12 }}>
+              <div className="panel animate-slide-up" style={{ padding: 14, overflow: "hidden" }}>
+                {/* Jam masuk & pulang */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                  <div style={{ textAlign: "center", padding: "10px 6px", background: "var(--surface-soft)", borderRadius: 12 }}>
                     <p style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: "var(--muted-light)", marginBottom: 4 }}>MASUK</p>
-                    <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 24, fontWeight: 900 }}>{hhmm(att.checkin_time)}</p>
+                    <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 22, fontWeight: 900, lineHeight: 1 }}>{hhmm(att.checkin_time)}</p>
                   </div>
-                  <div style={{ textAlign: "center", padding: "10px 8px", background: "var(--surface-soft)", borderRadius: 12 }}>
+                  <div style={{ textAlign: "center", padding: "10px 6px", background: "var(--surface-soft)", borderRadius: 12 }}>
                     <p style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: "var(--muted-light)", marginBottom: 4 }}>PULANG</p>
-                    <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 24, fontWeight: 900 }}>{hhmm(att.checkout_time) || "—"}</p>
+                    <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 22, fontWeight: 900, lineHeight: 1 }}>{hhmm(att.checkout_time) || "—"}</p>
                   </div>
                 </div>
-                {String(att.flags || "").includes("FULL_SHIFT_2X") && (
-                  <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, fontWeight: 700, color: "var(--primary)" }}>
-                    🌟 Full Shift — shift lain libur, gaji 2x!
+
+                {/* Divider */}
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {/* Full shift bonus */}
+                  {String(att.flags || "").includes("FULL_SHIFT_2X") && (
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      background: "rgba(79,70,229,0.07)", borderRadius: 10, padding: "7px 12px"
+                    }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#4338CA" }}>🌟 Full Shift · Gaji 2×</span>
+                      <span className="status-pill" style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontSize: 10 }}>Bonus aktif</span>
+                    </div>
+                  )}
+
+                  {/* Potongan telat */}
+                  {att.late_minutes > 0 && (
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      background: "var(--warning-bg)", borderRadius: 10, padding: "7px 12px"
+                    }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
+                        ⚠️ Telat {att.late_minutes} mnt
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: "var(--danger)" }}>
+                        -{rupiah(att.deduction)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Total gaji */}
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    background: "var(--success-bg)", borderRadius: 10, padding: "9px 12px",
+                    border: "1px solid var(--success-border)"
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--success)" }}>Gaji hari ini</span>
+                    <span style={{
+                      fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
+                      color: "var(--success)", letterSpacing: "-0.3px"
+                    }}>
+                      {rupiah(att.final_salary)}
+                    </span>
                   </div>
-                )}
-                {att.late_minutes > 0 && (
-                  <div style={{ marginTop: 6, textAlign: "center", fontSize: 12, fontWeight: 600, color: "var(--warning)" }}>
-                    ⚠️ Telat {att.late_minutes} mnt · Potongan {rupiah(att.deduction)}
-                  </div>
-                )}
-                <div style={{ marginTop: 8, textAlign: "center", fontSize: 14, fontWeight: 900, color: "var(--success)", fontFamily: "var(--font-nunito,sans-serif)" }}>
-                  Gaji hari ini: {rupiah(att.final_salary)}
                 </div>
               </div>
             )}
@@ -816,4 +848,22 @@ export default function StaffHomePage() {
       </StaffPage>
     </>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Data belum berhasil dimuat. Periksa koneksi internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk melakukan aksi ini.";
+  if (msg.includes("nonce") || msg.includes("duplicate"))
+    return "Permintaan duplikat terdeteksi. Coba lagi.";
+  if (msg.includes("GPS") || msg.includes("lokasi") || msg.includes("radius"))
+    return msg;
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  return msg || "Terjadi kesalahan. Coba lagi.";
 }

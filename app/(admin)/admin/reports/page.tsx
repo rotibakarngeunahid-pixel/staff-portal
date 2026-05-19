@@ -14,11 +14,13 @@ type Outlet = { id: string; name: string };
 export default function AdminReportsPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ dateFrom: "", dateTo: "", outletId: "", type: "" });
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
 
   async function load() {
+    setLoading(true);
     try {
       const [reportPayload, outletPayload] = await Promise.all([
         apiFetch<{ ok: true; reports: Report[] }>("/api/admin/reports", { role: "admin", body: filters }),
@@ -27,7 +29,9 @@ export default function AdminReportsPage() {
       setReports(reportPayload.reports);
       setOutlets(outletPayload.outlets);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal memuat laporan"); setMsgType("err");
+      setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -43,8 +47,8 @@ export default function AdminReportsPage() {
       title="Laporan Toko"
       subtitle="Viewer foto laporan buka dan tutup"
       action={
-        <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load}>
-          <RefreshCw size={14} /> Refresh
+        <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load} disabled={loading}>
+          <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
         </button>
       }
     >
@@ -76,14 +80,19 @@ export default function AdminReportsPage() {
               <option value="TUTUP">🌙 TUTUP</option>
             </select>
           </div>
-          <button className="btn btn-primary" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={load}>
+          <button className="btn btn-primary" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={load} disabled={loading}>
             <RefreshCw size={14} /> Filter
           </button>
         </div>
       </AdminSection>
 
-      {/* Report cards */}
-      {reports.length === 0 ? (
+      {/* Loading */}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "40px 16px", color: "var(--muted-light)", fontSize: 13 }}>
+          <RefreshCw size={20} style={{ display: "inline", animation: "spin 1s linear infinite", marginBottom: 8 }} />
+          <p style={{ marginTop: 8 }}>Memuat laporan...</p>
+        </div>
+      ) : reports.length === 0 ? (
         <div style={{ textAlign: "center", padding: "40px 16px", color: "var(--muted-light)", fontSize: 13, border: "2px dashed var(--border)", borderRadius: 16 }}>
           Tidak ada laporan ditemukan
         </div>
@@ -147,4 +156,18 @@ export default function AdminReportsPage() {
       )}
     </AdminPage>
   );
+}
+
+function humanError(err: unknown): string {
+  if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
+  const msg = err.message;
+  if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
+    return "Koneksi bermasalah. Periksa internet lalu coba lagi.";
+  if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))
+    return "Sesi berakhir. Silakan login ulang.";
+  if (msg.includes("403") || msg.includes("ditolak") || msg.includes("izin"))
+    return "Anda tidak memiliki izin untuk mengakses data ini.";
+  if (msg.includes("500") || msg.includes("server"))
+    return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  return msg || "Gagal memuat laporan. Coba lagi.";
 }
