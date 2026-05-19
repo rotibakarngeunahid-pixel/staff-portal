@@ -41,7 +41,7 @@ type SchedulePayload = { ok: true; weekStart: string; days: Day[] };
 type LeaveModalState = { date: string; reason: string } | null;
 
 function isoToday() {
-  return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 }
 
 function shiftLabel(type: ShiftType) {

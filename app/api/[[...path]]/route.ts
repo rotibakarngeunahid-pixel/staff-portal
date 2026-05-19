@@ -66,7 +66,11 @@ async function readBody(request: NextRequest): Promise<Body> {
 
   const text = await request.text();
   if (!text) return {};
-  return JSON.parse(text) as Body;
+  try {
+    return JSON.parse(text) as Body;
+  } catch {
+    throw new HttpError("Format request tidak valid", 400, "INVALID_JSON");
+  }
 }
 
 async function paramsFrom(context: RouteContext) {
@@ -610,6 +614,14 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       { onConflict: "outlet_id,date,shift" }
     );
   }
+
+  // Kunci assignment agar tidak bisa dibatalkan setelah absen masuk
+  await db
+    .from("staff_shift_assignments")
+    .update({ status: "locked", locked_at: now.toISOString(), updated_at: now.toISOString() })
+    .eq("staff_id", staff.id)
+    .eq("date", date)
+    .in("status", ["confirmed", "admin_override", "auto_cover"]);
 
   await logAudit(db, "checkin", staff.name, { date, shift, distance: Math.round(distance), gpsLowAccuracy });
   return ok({
@@ -1260,6 +1272,15 @@ async function adminOutlets(db: Db, method: string, body: Body) {
     return ok({ outlets: (data || []).map(toOutlet) });
   }
 
+  if (method === "DELETE") {
+    const outletId = stringBody(body, "outletId") || stringBody(body, "id");
+    if (!outletId) throw new HttpError("Outlet ID wajib diisi");
+    const { error } = await db.from("outlets").update({ active: false }).eq("id", outletId);
+    if (error) throw error;
+    await logAudit(db, "admin_delete_outlet", "Admin", { outletId });
+    return ok({ deleted: true });
+  }
+
   const shiftMode = Number(body.shift_mode || 1) === 2 ? 2 : 1;
   const payload = {
     name: stringBody(body, "name"),
@@ -1295,15 +1316,6 @@ async function adminOutlets(db: Db, method: string, body: Body) {
     if (error) throw error;
     await logAudit(db, "admin_update_outlet", "Admin", { outletId });
     return ok({ outlet: toOutlet(data) });
-  }
-
-  if (method === "DELETE") {
-    const outletId = stringBody(body, "outletId") || stringBody(body, "id");
-    if (!outletId) throw new HttpError("Outlet ID wajib diisi");
-    const { error } = await db.from("outlets").update({ active: false }).eq("id", outletId);
-    if (error) throw error;
-    await logAudit(db, "admin_delete_outlet", "Admin", { outletId });
-    return ok({ deleted: true });
   }
 
   throw new HttpError("Method outlet tidak valid", 405);
@@ -2232,7 +2244,7 @@ async function adminStaffDayoff(db: Db, method: string, body: Body) {
       .maybeSingle();
     if (checkedIn) {
       throw new HttpError(
-        "Staff sudah absen masuk pada tanggal ini. Jadwal tidak bisa diubah biasa.",
+        "Staff sudah absen masuk pada tanggal ini. Jadwal tidak bisa diubah.",
         400,
         "SCHEDULE_LOCKED"
       );

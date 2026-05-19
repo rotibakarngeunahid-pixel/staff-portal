@@ -18,7 +18,7 @@ export default function AdminSchedulePage() {
   const [days, setDays] = useState<Day[]>([]);
   const [loading, setLoading] = useState(true);
   const [outletId, setOutletId] = useState("");
-  const [weekStart, setWeekStart] = useState(new Date().toISOString().slice(0, 10));
+  const [weekStart, setWeekStart] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()));
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [assignTarget, setAssignTarget] = useState<AssignTarget>(null);

@@ -38,11 +38,13 @@ export default function AdminDayoffPage() {
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
 
+  const todayJkt = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+
   // Form libur staff (baru)
-  const [staffForm, setStaffForm] = useState({ outletId: "", staffId: "", date: new Date().toISOString().slice(0, 10), reason: "" });
+  const [staffForm, setStaffForm] = useState({ outletId: "", staffId: "", date: todayJkt, reason: "" });
 
   // Form libur shift (legacy)
-  const [shiftForm, setShiftForm] = useState({ outletId: "", dateFrom: new Date().toISOString().slice(0, 10), dateTo: "", shift: "1" });
+  const [shiftForm, setShiftForm] = useState({ outletId: "", dateFrom: todayJkt, dateTo: "", shift: "1" });
 
   async function load() {
     setLoading(true);
