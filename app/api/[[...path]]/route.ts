@@ -1074,6 +1074,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/staff" && method === "GET" && body.deletePreview === "1") return adminStaffDeletePreview(db, body);
   if (path === "/admin/staff") return adminStaff(db, method, body);
   if (path === "/admin/outlets") return adminOutlets(db, method, body);
+  if (path === "/admin/attendance/bulk" && method === "POST") return adminAttendanceBulk(db, body);
   if (path === "/admin/attendance") return adminAttendance(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
   if (path === "/admin/schedule") return adminSchedule(db, method, body);
@@ -1407,6 +1408,98 @@ async function adminAttendance(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method attendance tidak valid", 405);
+}
+
+async function adminAttendanceBulk(db: Db, body: Body) {
+  const rawEntries = Array.isArray(body.entries) ? body.entries : [];
+  if (rawEntries.length === 0) throw new HttpError("Tidak ada data absensi yang dikirim");
+  if (rawEntries.length > 100) throw new HttpError("Maksimal 100 absen per batch");
+
+  const staffIds = [...new Set(rawEntries.map((e: Body) => String(e.staffId)).filter(Boolean))];
+  const outletIds = [...new Set(rawEntries.map((e: Body) => String(e.outletId)).filter(Boolean))];
+
+  const [{ data: staffList, error: staffError }, { data: outletList, error: outletError }, cfg] = await Promise.all([
+    db.from("staff").select("*").in("id", staffIds),
+    db.from("outlets").select("*").in("id", outletIds),
+    configMap(db)
+  ]);
+  if (staffError) throw staffError;
+  if (outletError) throw outletError;
+
+  const staffMap = new Map((staffList || []).map((s: Body) => [s.id as string, s]));
+  const outletMap = new Map((outletList || []).map((o: Body) => [o.id as string, toOutlet(o)]));
+
+  const lateTolerance = configNumber(cfg, "late_tolerance_minutes", 10);
+  const deductionPerMinute = configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000));
+
+  const results: Body[] = [];
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const entry of rawEntries) {
+    const staffId = String(entry.staffId || "");
+    const outletId = String(entry.outletId || "");
+    const date = String(entry.date || todayJakarta());
+    const shift = Number(entry.shift ?? 0) as 0 | 1 | 2;
+
+    const staff = staffMap.get(staffId);
+    const outlet = outletMap.get(outletId);
+
+    if (!staff || !outlet) {
+      results.push({ staffId, staffName: String(staff?.name || staffId), status: "error", message: "Staff atau outlet tidak ditemukan" });
+      errorCount++;
+      continue;
+    }
+
+    try {
+      const checkin = entry.checkin_time
+        ? dateTimeUtc(date, String(entry.checkin_time).slice(0, 5))
+        : dateTimeUtc(date, shiftStartTime(outlet, shift));
+      const checkout = entry.checkout_time ? dateTimeUtc(date, String(entry.checkout_time).slice(0, 5)) : null;
+
+      const salary = calculateSalary(
+        checkin,
+        dateTimeUtc(date, shiftStartTime(outlet, shift)),
+        normalizeCurrency(staff.salary_per_shift),
+        lateTolerance,
+        deductionPerMinute
+      );
+
+      const { data, error } = await db
+        .from("attendance")
+        .upsert(
+          {
+            staff_id: staff.id,
+            staff_name: staff.name,
+            outlet_id: outlet.id,
+            outlet_name: outlet.name,
+            date,
+            shift,
+            checkin_time: checkin.toISOString(),
+            checkout_time: checkout?.toISOString() || null,
+            final_checkin_time: checkin.toISOString(),
+            status: salary.lateMinutes > 0 ? "late" : "present",
+            late_minutes: salary.lateMinutes,
+            deduction: salary.deduction,
+            final_salary: salary.finalSalary,
+            flags: "MANUAL_ADMIN"
+          },
+          { onConflict: "staff_id,date,shift" }
+        )
+        .select("*")
+        .single();
+
+      if (error) throw error;
+      results.push({ staffId, staffName: String(staff.name), status: "success", attendance: data });
+      successCount++;
+    } catch (err) {
+      results.push({ staffId, staffName: String(staff.name || staffId), status: "error", message: err instanceof Error ? err.message : "Gagal menyimpan" });
+      errorCount++;
+    }
+  }
+
+  await logAudit(db, "admin_bulk_attendance", "Admin", { count: rawEntries.length, successCount, errorCount });
+  return ok({ results, successCount, errorCount });
 }
 
 async function adminPayroll(db: Db, method: string, body: Body) {
