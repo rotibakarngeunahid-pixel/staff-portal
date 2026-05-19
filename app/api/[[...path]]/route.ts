@@ -10,7 +10,6 @@ import {
   haversineDistance,
   isTimeWithinWindow,
   normalizeCurrency,
-  parseTimeToMinutes,
   sanitizePathSegment,
   shiftStartTime,
   timeJakarta,
@@ -163,6 +162,24 @@ function reportType(body: Body) {
   const type = String(body.type || "").toUpperCase();
   if (type !== "BUKA" && type !== "TUTUP") throw new HttpError("Tipe laporan tidak valid");
   return type as "BUKA" | "TUTUP";
+}
+
+function reportWindow(outlet: Outlet, type: "BUKA" | "TUTUP") {
+  const start = type === "BUKA" ? outlet.report_buka_start : outlet.report_tutup_start;
+  const end = type === "BUKA" ? outlet.report_buka_end : outlet.report_tutup_end;
+  return { start, end };
+}
+
+function assertReportWindow(outlet: Outlet, type: "BUKA" | "TUTUP") {
+  const { start, end } = reportWindow(outlet, type);
+  if (!start || !end) return;
+  const nowTime = timeJakarta();
+  if (isTimeWithinWindow(nowTime, start, end)) return;
+  throw new HttpError(
+    `Laporan ${type} hanya bisa dikirim antara ${start.slice(0, 5)} - ${end.slice(0, 5)}`,
+    400,
+    "OUTSIDE_REPORT_WINDOW"
+  );
 }
 
 function parseItems(input: unknown): any[] {
@@ -609,7 +626,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
   const { data: checkinRows, error: attCheckError } = await db
     .from("attendance")
-    .select("id")
+    .select("id,selfie_in")
     .eq("staff_id", staff.id)
     .eq("date", date)
     .in("shift", allowedShifts)
@@ -620,44 +637,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
-  const nowTime = timeJakarta();
-  if (type === "BUKA" && outlet.report_buka_start && outlet.report_buka_end) {
-    const bukaStartMin = parseTimeToMinutes(outlet.report_buka_start) ?? 0;
-    const bukaEndMin = parseTimeToMinutes(outlet.report_buka_end) ?? 0;
-    const crossMidnight = bukaStartMin > bukaEndMin;
-    if (!crossMidnight && !isTimeWithinWindow(nowTime, outlet.report_buka_start, outlet.report_buka_end)) {
-      throw new HttpError(
-        `Laporan BUKA hanya bisa dikirim antara ${outlet.report_buka_start} - ${outlet.report_buka_end}`,
-        400,
-        "OUTSIDE_REPORT_WINDOW"
-      );
-    }
-  }
-  if (type === "TUTUP" && outlet.report_tutup_start && outlet.report_tutup_end) {
-    const tutupStartMin = parseTimeToMinutes(outlet.report_tutup_start) ?? 0;
-    const tutupEndMin = parseTimeToMinutes(outlet.report_tutup_end) ?? 0;
-    const crossMidnight = tutupStartMin > tutupEndMin;
-    if (crossMidnight) {
-      const gracedMin = (tutupEndMin + 30) % (24 * 60);
-      const gracedStr = `${String(Math.floor(gracedMin / 60)).padStart(2, "0")}:${String(gracedMin % 60).padStart(2, "0")}`;
-      if (!isTimeWithinWindow(nowTime, outlet.report_tutup_start, gracedStr)) {
-        throw new HttpError(
-          `Laporan TUTUP hanya bisa dikirim antara ${outlet.report_tutup_start} - ${outlet.report_tutup_end}`,
-          400,
-          "OUTSIDE_REPORT_WINDOW"
-        );
-      }
-    } else {
-      const currentMin = parseTimeToMinutes(nowTime) ?? 0;
-      if (currentMin < tutupStartMin) {
-        throw new HttpError(
-          `Laporan TUTUP hanya bisa dikirim setelah ${outlet.report_tutup_start}`,
-          400,
-          "OUTSIDE_REPORT_WINDOW"
-        );
-      }
-    }
-  }
+  assertReportWindow(outlet, type);
 
   const inputItems = parseItems(body.items);
 
@@ -691,6 +671,9 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   }
 
   if (!(cfgItems || []).length) {
+    if (!inputItems.some((item) => item?.photo)) {
+      throw new HttpError("Minimal satu foto laporan wajib diupload");
+    }
     for (const item of inputItems) {
       if (!item?.label || !item?.photo) continue;
       const photoUrl = await uploadImage(
@@ -702,8 +685,9 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     }
   }
 
-  const selfieUrl = await uploadImage(db, `reports/selfies/${outlet.id}/${date}_${type}.jpg`, body.selfie);
-  if (!selfieUrl) throw new HttpError("Selfie laporan wajib diupload");
+  const selfieUrl = body.selfie
+    ? await uploadImage(db, `reports/selfies/${outlet.id}/${date}_${type}.jpg`, body.selfie)
+    : String(checkinRows[0]?.selfie_in || "");
 
   const { data: report, error } = await db
     .from("reports")
@@ -725,16 +709,29 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     .single();
   if (error) throw error;
 
-  await sendReportNotification({
-    type,
-    outlet_name: outlet.name,
-    staff_name: staff.name,
-    date,
-    submitted_at: report.submitted_at,
-    itemCount: savedItems.length
-  });
+  const cfg = await configMap(db);
+  let emailSent = false;
+  try {
+    emailSent = await sendReportNotification({
+      type,
+      outlet_name: outlet.name,
+      staff_name: staff.name,
+      date,
+      submitted_at: report.submitted_at,
+      itemCount: savedItems.filter((item) => item.photo_url).length,
+      selfieUrl,
+      items: savedItems,
+      to: cfg.notification_email
+    });
+  } catch (emailError) {
+    await logAudit(db, "report_email_failed", staff.name, {
+      date,
+      type,
+      error: emailError instanceof Error ? emailError.message : "Unknown email error"
+    });
+  }
   await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
-  return ok({ report, reportId: report.id });
+  return ok({ report, reportId: report.id, emailSent });
 }
 
 async function staffPayroll(db: Db, request: NextRequest) {

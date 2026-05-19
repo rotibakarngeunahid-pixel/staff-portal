@@ -119,12 +119,12 @@ export default function AdminReportsPage() {
                     <a href={report.selfie} target="_blank" rel="noreferrer" style={{ display: "block" }}>
                       <Image
                         src={report.selfie}
-                        alt="Selfie laporan"
+                        alt="Selfie absen masuk"
                         width={240}
                         height={160}
-                        style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 10, border: "1px solid var(--border)" }}
+                        style={{ width: "100%", height: 150, objectFit: "contain", borderRadius: 10, border: "1px solid var(--border)", background: "#f8fafc" }}
                       />
-                      <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", marginTop: 4 }}>Selfie</p>
+                      <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", marginTop: 4 }}>Selfie absen masuk</p>
                     </a>
                   ) : null}
                   {items.map((item) => item.photo_url ? (
@@ -134,7 +134,7 @@ export default function AdminReportsPage() {
                         alt={item.label}
                         width={240}
                         height={160}
-                        style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 10, border: "1px solid var(--border)" }}
+                        style={{ width: "100%", height: 150, objectFit: "contain", borderRadius: 10, border: "1px solid var(--border)", background: "#f8fafc" }}
                       />
                       <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", marginTop: 4 }}>{item.label}</p>
                     </a>

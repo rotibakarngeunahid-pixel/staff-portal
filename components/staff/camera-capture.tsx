@@ -1,16 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, RefreshCw, X } from "lucide-react";
+import { Camera, Check, Flashlight, FlashlightOff, RefreshCw, X } from "lucide-react";
 
 interface CameraCaptureProps {
   facing?: "user" | "environment";
   title?: string;
+  allowTorch?: boolean;
+  watermark?: {
+    outletName?: string | null;
+  };
   onCapture: (dataUrl: string) => void;
   onCancel: () => void;
 }
 
 type Phase = "starting" | "live" | "preview" | "error";
+type TorchTrack = MediaStreamTrack & {
+  getCapabilities?: () => MediaTrackCapabilities & { torch?: boolean };
+};
 
 async function compress(dataUrl: string, maxDim = 1400, quality = 0.82): Promise<string> {
   return new Promise((resolve) => {
@@ -33,12 +40,98 @@ async function compress(dataUrl: string, maxDim = 1400, quality = 0.82): Promise
   });
 }
 
-export function CameraCapture({ facing = "user", title, onCapture, onCancel }: CameraCaptureProps) {
+function formatWatermarkTime(date: Date) {
+  const dayDate = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric"
+  }).format(date);
+  const time = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date).replace(/\./g, ":");
+  return `${dayDate}, ${time} WIB`;
+}
+
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let line = "";
+
+  words.forEach((word) => {
+    const testLine = line ? `${line} ${word}` : word;
+    if (ctx.measureText(testLine).width <= maxWidth || !line) {
+      line = testLine;
+      return;
+    }
+    lines.push(line);
+    line = word;
+  });
+
+  if (line) lines.push(line);
+  return lines.slice(0, 2);
+}
+
+function drawWatermark(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  outletName?: string | null
+) {
+  const padding = Math.max(18, Math.round(width * 0.024));
+  const maxTextWidth = width - padding * 2;
+  const brand = `Roti Bakar Ngeunah - Outlet ${outletName || "-"}`;
+  const brandFont = Math.min(34, Math.max(18, Math.round(width * 0.025)));
+  const timeFont = Math.min(28, Math.max(15, Math.round(width * 0.02)));
+
+  ctx.save();
+  ctx.font = `800 ${brandFont}px Arial, sans-serif`;
+  const brandLines = wrapCanvasText(ctx, brand, maxTextWidth);
+  const lineGap = Math.max(8, Math.round(width * 0.008));
+  const blockHeight = padding * 1.25 + brandLines.length * brandFont + lineGap + timeFont + padding * 0.85;
+  const top = height - blockHeight;
+
+  ctx.fillStyle = "rgba(0,0,0,0.62)";
+  ctx.fillRect(0, Math.max(0, top), width, blockHeight);
+
+  ctx.shadowColor = "rgba(0,0,0,0.65)";
+  ctx.shadowBlur = 4;
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#fff";
+  ctx.font = `800 ${brandFont}px Arial, sans-serif`;
+
+  let y = top + padding * 0.6;
+  brandLines.forEach((line) => {
+    ctx.fillText(line, padding, y, maxTextWidth);
+    y += brandFont;
+  });
+
+  y += lineGap;
+  ctx.font = `700 ${timeFont}px Arial, sans-serif`;
+  ctx.fillText(formatWatermarkTime(new Date()), padding, y, maxTextWidth);
+  ctx.restore();
+}
+
+export function CameraCapture({
+  facing = "user",
+  title,
+  allowTorch = false,
+  watermark,
+  onCapture,
+  onCancel
+}: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [phase, setPhase] = useState<Phase>("starting");
   const [preview, setPreview] = useState("");
   const [errMsg, setErrMsg] = useState("");
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   useEffect(() => {
     startCamera();
@@ -49,6 +142,8 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
   async function startCamera() {
     setPhase("starting");
     setErrMsg("");
+    setTorchOn(false);
+    setTorchSupported(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -59,6 +154,9 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
         audio: false
       });
       streamRef.current = stream;
+      const track = stream.getVideoTracks()[0] as TorchTrack | undefined;
+      const capabilities = track?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
+      setTorchSupported(Boolean(allowTorch && facing === "environment" && capabilities?.torch));
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -74,6 +172,20 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
   function stopCamera() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    setTorchOn(false);
+    setTorchSupported(false);
+  }
+
+  async function toggleTorch() {
+    const track = streamRef.current?.getVideoTracks()[0] as TorchTrack | undefined;
+    if (!track || !torchSupported) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] });
+      setTorchOn(next);
+    } catch {
+      setErrMsg("Senter tidak dapat diaktifkan di perangkat ini.");
+    }
   }
 
   function capture() {
@@ -85,10 +197,15 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     if (facing === "user") {
+      ctx.save();
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.drawImage(video, 0, 0);
     }
-    ctx.drawImage(video, 0, 0);
+    drawWatermark(ctx, canvas.width, canvas.height, watermark?.outletName);
     const raw = canvas.toDataURL("image/jpeg", 0.9);
     setPreview(raw);
     setPhase("preview");
@@ -120,16 +237,34 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
         <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>
           {title || (facing === "user" ? "📸 Selfie" : "📷 Foto")}
         </span>
-        <button
-          onClick={onCancel}
-          style={{
-            width: 34, height: 34, borderRadius: "50%", border: "none",
-            background: "rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center"
-          }}
-        >
-          <X size={18} />
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {torchSupported && phase === "live" && (
+            <button
+              onClick={toggleTorch}
+              aria-label={torchOn ? "Matikan senter" : "Nyalakan senter"}
+              title={torchOn ? "Matikan senter" : "Nyalakan senter"}
+              style={{
+                width: 34, height: 34, borderRadius: "50%", border: "none",
+                background: torchOn ? "rgba(250,204,21,0.95)" : "rgba(255,255,255,0.18)",
+                color: torchOn ? "#1f2937" : "#fff", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center"
+              }}
+            >
+              {torchOn ? <FlashlightOff size={18} /> : <Flashlight size={18} />}
+            </button>
+          )}
+          <button
+            onClick={onCancel}
+            aria-label="Tutup kamera"
+            style={{
+              width: 34, height: 34, borderRadius: "50%", border: "none",
+              background: "rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center"
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Camera / Preview area */}
@@ -156,7 +291,7 @@ export function CameraCapture({ facing = "user", title, onCapture, onCancel }: C
           <img
             src={preview}
             alt="preview"
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
           />
         )}
 

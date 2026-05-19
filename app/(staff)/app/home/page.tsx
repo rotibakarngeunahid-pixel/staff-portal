@@ -21,7 +21,17 @@ type Attendance = {
 type StatusPayload = {
   ok: true;
   staff: { name: string };
-  outlet: { name: string; radius_m: number; shift_mode: number; lat: number; lng: number };
+  outlet: {
+    name: string;
+    radius_m: number;
+    shift_mode: number;
+    lat: number;
+    lng: number;
+    report_buka_start: string | null;
+    report_buka_end: string | null;
+    report_tutup_start: string | null;
+    report_tutup_end: string | null;
+  };
   date: string;
   shift: number;
   isFullShift?: boolean;
@@ -59,6 +69,7 @@ type GpsState = {
 type CameraSlot = {
   facing: "user" | "environment";
   title: string;
+  allowTorch?: boolean;
   onCapture: (dataUrl: string) => void;
 };
 
@@ -75,13 +86,52 @@ const STATE_CONFIG: Record<NextState, { emoji: string; title: string; sub: strin
 
 const GPS_LABEL: Record<GpsStatus, string> = {
   unsupported:      "GPS tidak didukung browser ini",
-  permission_denied: "Izin lokasi ditolak — buka pengaturan browser",
+  permission_denied: "Izin lokasi ditolak - buka pengaturan browser",
   locating:         "Mendeteksi lokasi...",
   ready:            "Lokasi terdeteksi",
   outside_radius:   "Di luar area outlet",
   low_accuracy:     "Akurasi GPS terlalu rendah",
-  timeout:          "GPS timeout — ketuk Retry"
+  timeout:          "GPS timeout, mencoba ulang otomatis..."
 };
+
+function timeStringJakarta(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const hour = parts.find((part) => part.type === "hour")?.value || "00";
+  const minute = parts.find((part) => part.type === "minute")?.value || "00";
+  return `${hour}:${minute}`;
+}
+
+function parseTimeMinutes(value?: string | null) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function isWithinTimeWindow(current: string, start?: string | null, end?: string | null) {
+  const c = parseTimeMinutes(current);
+  const s = parseTimeMinutes(start);
+  const e = parseTimeMinutes(end);
+  if (c === null || s === null || e === null) return true;
+  if (s <= e) return c >= s && c <= e;
+  return c >= s || c <= e;
+}
+
+function reportWindowFor(outlet: StatusPayload["outlet"] | undefined, type: "BUKA" | "TUTUP", now: Date) {
+  const start = type === "BUKA" ? outlet?.report_buka_start : outlet?.report_tutup_start;
+  const end = type === "BUKA" ? outlet?.report_buka_end : outlet?.report_tutup_end;
+  if (!start || !end) return { allowed: true, label: "" };
+  const startLabel = start.slice(0, 5);
+  const endLabel = end.slice(0, 5);
+  return {
+    allowed: isWithinTimeWindow(timeStringJakarta(now), start, end),
+    label: `${startLabel} - ${endLabel}`
+  };
+}
 
 export default function StaffHomePage() {
   const router = useRouter();
@@ -96,6 +146,11 @@ export default function StaffHomePage() {
   /* ─── GPS ─── */
   const [gps, setGps] = useState<GpsState>({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
   const watchIdRef = useRef<number | null>(null);
+  const gpsRetryTimerRef = useRef<number | null>(null);
+  const pendingPositionRef = useRef<GeolocationPosition | null>(null);
+  const activeOutletRef = useRef<StatusPayload["outlet"] | null>(null);
+  const gpsPrimedRef = useRef(false);
+  const serverClockOffsetRef = useRef(0);
 
   /* ─── Camera overlay ─── */
   const [camera, setCamera] = useState<CameraSlot | null>(null);
@@ -104,9 +159,9 @@ export default function StaffHomePage() {
   const [reportItems, setReportItems] = useState<ReportCfgItem[]>([]);
   const [reportItemsLoading, setReportItemsLoading] = useState(false);
   const [reportPhotos, setReportPhotos] = useState<Record<string, string>>({});
-  const [reportSelfie, setReportSelfie] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
+  const [clockNow, setClockNow] = useState(() => new Date());
 
   /* ─── Derived ─── */
   const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
@@ -126,6 +181,8 @@ export default function StaffHomePage() {
     setError("");
     try {
       const payload = await apiFetch<StatusPayload>("/api/attendance/status", { role: "staff" });
+      serverClockOffsetRef.current = new Date(payload.serverTime).getTime() - Date.now();
+      setClockNow(new Date(Date.now() + serverClockOffsetRef.current));
       setStatus(payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat status");
@@ -136,57 +193,122 @@ export default function StaffHomePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setClockNow(new Date(Date.now() + serverClockOffsetRef.current));
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   /* ─── GPS watch ─── */
+  const applyGpsPosition = useCallback((pos: GeolocationPosition, outlet: StatusPayload["outlet"]) => {
+    const { latitude, longitude, accuracy } = pos.coords;
+    const dist = Math.round(haversineDistance(latitude, longitude, outlet.lat, outlet.lng));
+    const acc = Math.max(0, Math.round(accuracy));
+    const maxDist = outlet.radius_m + Math.min(acc, outlet.radius_m * 0.3);
+
+    let gpsStatus: GpsStatus;
+    if (acc > outlet.radius_m * 3) {
+      gpsStatus = "low_accuracy";
+    } else if (dist > maxDist) {
+      gpsStatus = "outside_radius";
+    } else {
+      gpsStatus = "ready";
+    }
+    setGps({ status: gpsStatus, dist, accuracy: acc, lat: latitude, lng: longitude });
+  }, []);
+
+  const scheduleGpsRetry = useCallback(() => {
+    if (gpsRetryTimerRef.current !== null) window.clearTimeout(gpsRetryTimerRef.current);
+    gpsRetryTimerRef.current = window.setTimeout(() => {
+      const outlet = activeOutletRef.current;
+      if (outlet) startGpsWatch(outlet);
+    }, 3000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleGpsError = useCallback((err: GeolocationPositionError, outlet?: StatusPayload["outlet"]) => {
+    if (err.code === 1 /* PERMISSION_DENIED */) {
+      setGps({ status: "permission_denied", dist: null, accuracy: 0, lat: null, lng: null });
+      return;
+    }
+    if (err.code === 3 /* TIMEOUT */) {
+      setGps((current) => ({
+        ...current,
+        status: current.lat !== null && current.lng !== null ? current.status : "timeout"
+      }));
+      if (outlet) scheduleGpsRetry();
+      return;
+    }
+    setGps((current) => ({
+      ...current,
+      status: current.lat !== null && current.lng !== null ? current.status : "locating"
+    }));
+    if (outlet) scheduleGpsRetry();
+  }, [scheduleGpsRetry]);
+
+  function requestGpsFix(outlet?: StatusPayload["outlet"]) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        pendingPositionRef.current = pos;
+        if (outlet) applyGpsPosition(pos, outlet);
+      },
+      (err) => handleGpsError(err, outlet),
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+    );
+  }
+
   function startGpsWatch(outlet: StatusPayload["outlet"]) {
     if (!navigator.geolocation) {
       setGps({ status: "unsupported", dist: null, accuracy: 0, lat: null, lng: null });
       return;
     }
 
-    setGps({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
-
-    function onPos(pos: GeolocationPosition) {
-      const { latitude, longitude, accuracy } = pos.coords;
-      const dist = Math.round(haversineDistance(latitude, longitude, outlet.lat, outlet.lng));
-      const acc = Math.max(0, Math.round(accuracy));
-      const maxDist = outlet.radius_m + Math.min(acc, outlet.radius_m * 0.3);
-
-      let gpsStatus: GpsStatus;
-      if (acc > outlet.radius_m * 3) {
-        gpsStatus = "low_accuracy";
-      } else if (dist > maxDist) {
-        gpsStatus = "outside_radius";
-      } else {
-        gpsStatus = "ready";
-      }
-      setGps({ status: gpsStatus, dist, accuracy: acc, lat: latitude, lng: longitude });
+    activeOutletRef.current = outlet;
+    if (gpsRetryTimerRef.current !== null) {
+      window.clearTimeout(gpsRetryTimerRef.current);
+      gpsRetryTimerRef.current = null;
     }
-
-    function onErr(err: GeolocationPositionError) {
-      if (err.code === 1 /* PERMISSION_DENIED */) {
-        setGps({ status: "permission_denied", dist: null, accuracy: 0, lat: null, lng: null });
-      } else if (err.code === 3 /* TIMEOUT */) {
-        setGps({ status: "timeout", dist: null, accuracy: 0, lat: null, lng: null });
-      } else {
-        setGps({ status: "locating", dist: null, accuracy: 0, lat: null, lng: null });
-      }
-    }
-
     if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-    watchIdRef.current = navigator.geolocation.watchPosition(onPos, onErr, {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 30000
-    });
+
+    setGps((current) => ({
+      status: current.lat !== null && current.lng !== null ? current.status : "locating",
+      dist: current.dist,
+      accuracy: current.accuracy,
+      lat: current.lat,
+      lng: current.lng
+    }));
+
+    if (pendingPositionRef.current) applyGpsPosition(pendingPositionRef.current, outlet);
+    requestGpsFix(outlet);
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        pendingPositionRef.current = pos;
+        applyGpsPosition(pos, outlet);
+      },
+      (err) => handleGpsError(err, outlet),
+      { enableHighAccuracy: true, timeout: 60000, maximumAge: 5000 }
+    );
   }
 
   useEffect(() => {
-    if (!status?.outlet?.lat) return;
+    if (gpsPrimedRef.current || !navigator.geolocation) return;
+    gpsPrimedRef.current = true;
+    requestGpsFix(activeOutletRef.current || undefined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!status?.outlet || !Number.isFinite(Number(status.outlet.lat)) || !Number.isFinite(Number(status.outlet.lng))) return;
     startGpsWatch(status.outlet);
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
+      }
+      if (gpsRetryTimerRef.current !== null) {
+        window.clearTimeout(gpsRetryTimerRef.current);
+        gpsRetryTimerRef.current = null;
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,7 +324,6 @@ export default function StaffHomePage() {
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
     setReportItemsLoading(true);
     setReportPhotos({});
-    setReportSelfie("");
     setReportError("");
     apiFetch<{ ok: true; items: ReportCfgItem[] }>("/api/reports/config", { role: "staff", body: { type } })
       .then((p) => setReportItems(p.items))
@@ -252,8 +373,12 @@ export default function StaffHomePage() {
   /* ─── Submit report ─── */
   async function submitReport() {
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
-    if (!reportSelfie) { setReportError("Selfie wajib diambil terlebih dahulu"); return; }
-    const missingRequired = reportItems.filter((item) => item.required && !reportPhotos[item.label]);
+    const windowState = reportWindowFor(status?.outlet, type, clockNow);
+    if (!windowState.allowed) {
+      setReportError(`Laporan ${type} hanya bisa dikirim pukul ${windowState.label}`);
+      return;
+    }
+    const missingRequired = effectiveReportItems.filter((item) => item.required && !reportPhotos[item.label]);
     if (missingRequired.length > 0) {
       setReportError(`Foto wajib belum lengkap: ${missingRequired.map((i) => i.label).join(", ")}`);
       return;
@@ -267,10 +392,9 @@ export default function StaffHomePage() {
         body: {
           nonce: crypto.randomUUID(),
           type,
-          selfie: reportSelfie,
           shiftDate: status?.date,
           shift: status?.shift,
-          items: reportItems.map((item) => ({
+          items: effectiveReportItems.map((item) => ({
             label: item.label,
             photo: reportPhotos[item.label] || "",
             required: item.required
@@ -278,7 +402,6 @@ export default function StaffHomePage() {
         }
       });
       setReportPhotos({});
-      setReportSelfie("");
       await load();
     } catch (err) {
       setReportError(err instanceof Error ? err.message : "Gagal mengirim laporan");
@@ -299,6 +422,17 @@ export default function StaffHomePage() {
   const isReportState = nextState === "report_buka" || nextState === "report_tutup";
   const reportType = nextState === "report_buka" ? "BUKA" : "TUTUP";
   const reportTypeColor = reportType === "BUKA" ? "#2563EB" : "#7C3AED";
+  const reportWindow = reportWindowFor(outlet, reportType, clockNow);
+  const effectiveReportItems = useMemo<ReportCfgItem[]>(() => {
+    if (!isReportState || reportItemsLoading || reportItems.length > 0) return reportItems;
+    return [{
+      id: `default-${reportType}`,
+      label: `Foto Laporan ${reportType}`,
+      required: true,
+      example_photo_url: null,
+      sort_order: 0
+    }];
+  }, [isReportState, reportItems, reportItemsLoading, reportType]);
   const isFullShift = Boolean(status?.isFullShift);
 
   /* ─── Checkin button state ─── */
@@ -321,6 +455,8 @@ export default function StaffHomePage() {
         <CameraCapture
           facing={camera.facing}
           title={camera.title}
+          allowTorch={camera.allowTorch}
+          watermark={{ outletName: outlet?.name }}
           onCapture={camera.onCapture}
           onCancel={closeCamera}
         />
@@ -448,10 +584,10 @@ export default function StaffHomePage() {
             {(gps.status === "timeout" || gps.status === "locating") && nextState === "checkin" && (
               <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ color: "var(--muted)", fontWeight: 600 }}>
-                  {gps.status === "timeout" ? "⏰ GPS timeout." : "⏳ Menunggu sinyal GPS..."}
+                  {gps.status === "timeout" ? "GPS timeout, mencoba ulang..." : "Menunggu sinyal GPS..."}
                 </span>
                 <button className="btn btn-soft" style={{ fontSize: 11, padding: "5px 10px" }} onClick={retryGps}>
-                  <MapPin size={12} /> Retry
+                  <MapPin size={12} /> Coba Sekarang
                 </button>
               </div>
             )}
@@ -570,38 +706,14 @@ export default function StaffHomePage() {
               </div>
             )}
 
-            {/* Selfie slot */}
-            <div className={`report-item-card${reportSelfie ? " done" : ""}`}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <div>
-                  <h3 style={{ fontSize: 14, fontWeight: 800 }}>
-                    Selfie Staff <span style={{ color: "var(--danger)" }}>*</span>
-                  </h3>
-                  <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Wajib · Kamera depan</p>
-                </div>
-                <button
-                  onClick={() => openCamera({
-                    facing: "user",
-                    title: "📸 Selfie Laporan",
-                    onCapture: (url) => { closeCamera(); setReportSelfie(url); }
-                  })}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    background: reportSelfie ? "var(--success)" : reportTypeColor,
-                    color: "#fff", border: "none", borderRadius: 10,
-                    padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer",
-                    fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0
-                  }}
-                >
-                  {reportSelfie ? <CheckCircle2 size={14} /> : <Camera size={14} />}
-                  {reportSelfie ? "Ubah" : "Ambil"}
-                </button>
+            {!reportWindow.allowed && (
+              <div style={{
+                background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
+                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)"
+              }}>
+                Laporan {reportType} hanya bisa dikirim pukul {reportWindow.label}.
               </div>
-              {reportSelfie && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img src={reportSelfie} alt="Selfie" className="report-photo-thumb" />
-              )}
-            </div>
+            )}
 
             {/* Report items */}
             {reportItemsLoading ? (
@@ -612,11 +724,11 @@ export default function StaffHomePage() {
 
             {!reportItemsLoading && reportItems.length === 0 && (
               <div className="panel" style={{ padding: 14, fontSize: 13, color: "var(--muted)", textAlign: "center" }}>
-                Tidak ada item foto tambahan. Selfie tetap wajib.
+                Admin belum mengatur item foto. Gunakan foto laporan umum di bawah.
               </div>
             )}
 
-            {reportItems.map((item) => {
+            {effectiveReportItems.map((item) => {
               const done = Boolean(reportPhotos[item.label]);
               return (
                 <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
@@ -631,16 +743,18 @@ export default function StaffHomePage() {
                       </p>
                     </div>
                     <button
+                      disabled={!reportWindow.allowed}
                       onClick={() => openCamera({
                         facing: "environment",
                         title: `📷 ${item.label}`,
+                        allowTorch: true,
                         onCapture: (url) => { closeCamera(); setReportPhotos((cur) => ({ ...cur, [item.label]: url })); }
                       })}
                       style={{
                         display: "flex", alignItems: "center", gap: 6,
                         background: done ? "var(--success)" : reportTypeColor,
                         color: "#fff", border: "none", borderRadius: 10,
-                        padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer",
+                        padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: reportWindow.allowed ? "pointer" : "not-allowed",
                         fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0
                       }}
                     >
@@ -690,7 +804,7 @@ export default function StaffHomePage() {
             {/* Submit */}
             <button
               className="btn btn-ok btn-action"
-              disabled={reportBusy}
+              disabled={reportBusy || !reportWindow.allowed}
               onClick={submitReport}
               style={{ marginTop: 4, fontSize: 15 }}
             >
