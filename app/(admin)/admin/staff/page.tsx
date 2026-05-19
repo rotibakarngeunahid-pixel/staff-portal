@@ -20,17 +20,26 @@ export default function AdminStaffPage() {
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive">("active");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const [sp, op] = await Promise.all([
-      apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" }),
-      apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" })
-    ]);
-    setStaff(sp.staff);
-    setOutlets(op.outlets);
+    setLoading(true);
+    try {
+      const [sp, op] = await Promise.all([
+        apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" }),
+        apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" })
+      ]);
+      setStaff(sp.staff);
+      setOutlets(op.outlets);
+    } catch (err) {
+      setMessage((err as Error).message);
+      setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => { load().catch((err: Error) => setMessage(err.message)); }, []);
+  useEffect(() => { load(); }, []);
 
   function startEdit(row: Staff) {
     setEditing(row.id);
@@ -181,7 +190,15 @@ export default function AdminStaffPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 ? (
+                {loading ? (
+                  [1, 2, 3].map((i) => (
+                    <tr key={i}>
+                      {[100, 80, 70, 80, 50, 60].map((w, j) => (
+                        <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
+                      ))}
+                    </tr>
+                  ))
+                ) : filtered.length === 0 ? (
                   <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
                 ) : filtered.map((row) => (
                   <tr key={row.id}>

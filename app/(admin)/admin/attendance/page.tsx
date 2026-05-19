@@ -34,20 +34,29 @@ export default function AdminAttendancePage() {
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showManual, setShowManual] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const [attPayload, staffPayload, outletPayload] = await Promise.all([
-      apiFetch<{ ok: true; attendance: Attendance[] }>("/api/admin/attendance", { role: "admin", body: filters }),
-      apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" }),
-      apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" })
-    ]);
-    setRows(attPayload.attendance);
-    setStaff(staffPayload.staff);
-    setOutlets(outletPayload.outlets);
+    setLoading(true);
+    try {
+      const [attPayload, staffPayload, outletPayload] = await Promise.all([
+        apiFetch<{ ok: true; attendance: Attendance[] }>("/api/admin/attendance", { role: "admin", body: filters }),
+        apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" }),
+        apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" })
+      ]);
+      setRows(attPayload.attendance);
+      setStaff(staffPayload.staff);
+      setOutlets(outletPayload.outlets);
+    } catch (err) {
+      setMessage((err as Error).message);
+      setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
+    load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -211,7 +220,15 @@ export default function AdminAttendancePage() {
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {loading ? (
+                [1, 2, 3, 4].map((i) => (
+                  <tr key={i}>
+                    {[60, 90, 80, 40, 40, 40, 40, 60, 55, 40].map((w, j) => (
+                      <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : rows.length === 0 ? (
                 <tr><td colSpan={10} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
               ) : rows.map((row) => (
                 <tr key={row.id}>

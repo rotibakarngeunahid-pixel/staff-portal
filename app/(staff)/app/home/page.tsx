@@ -738,111 +738,122 @@ export default function StaffHomePage() {
               </div>
             )}
 
-            {!reportWindow.allowed && (
+            {!reportWindow.allowed ? (
               <div style={{
-                background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
-                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)"
+                background: "var(--warning-bg)", border: "1.5px solid var(--warning-border)",
+                borderRadius: 14, padding: "18px 16px", textAlign: "center"
               }}>
-                Laporan {reportType} hanya bisa dikirim pukul {reportWindow.label}.
+                <p style={{ fontSize: 22, marginBottom: 8 }}>⏰</p>
+                <p style={{ fontSize: 14, fontWeight: 800, color: "var(--warning)", marginBottom: 4 }}>
+                  Belum Waktunya
+                </p>
+                <p style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim pada pukul{" "}
+                  <strong style={{ color: "var(--ink)" }}>{reportWindow.label}</strong>.
+                </p>
+                <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 8 }}>
+                  Kembali ke halaman ini saat sudah waktunya.
+                </p>
               </div>
-            )}
+            ) : (
+              <>
+                {/* Report items */}
+                {reportItemsLoading ? (
+                  <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
+                    Memuat konfigurasi...
+                  </p>
+                ) : null}
 
-            {/* Report items */}
-            {reportItemsLoading ? (
-              <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
-                Memuat konfigurasi...
-              </p>
-            ) : null}
-
-            {!reportItemsLoading && reportItems.length === 0 && (
-              <div className="panel" style={{ padding: 14, fontSize: 13, color: "var(--muted)", textAlign: "center" }}>
-                Admin belum mengatur item foto. Gunakan foto laporan umum di bawah.
-              </div>
-            )}
-
-            {effectiveReportItems.map((item) => {
-              const done = Boolean(reportPhotos[item.label]);
-              return (
-                <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <h3 style={{ fontSize: 14, fontWeight: 800 }}>
-                        {item.label}
-                        {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
-                      </h3>
-                      <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                        {item.required ? "Wajib" : "Opsional"}
-                      </p>
-                    </div>
-                    <button
-                      disabled={!reportWindow.allowed}
-                      onClick={() => openCamera({
-                        facing: "environment",
-                        title: `📷 ${item.label}`,
-                        allowTorch: true,
-                        onCapture: (url) => { closeCamera(); setReportPhotos((cur) => ({ ...cur, [item.label]: url })); }
-                      })}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 6,
-                        background: done ? "var(--success)" : reportTypeColor,
-                        color: "#fff", border: "none", borderRadius: 10,
-                        padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: reportWindow.allowed ? "pointer" : "not-allowed",
-                        fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0
-                      }}
-                    >
-                      {done ? <CheckCircle2 size={14} /> : <Camera size={14} />}
-                      {done ? "Ubah" : "Foto"}
-                    </button>
+                {!reportItemsLoading && reportItems.length === 0 && (
+                  <div className="panel" style={{ padding: 14, fontSize: 13, color: "var(--muted)", textAlign: "center" }}>
+                    Admin belum mengatur item foto. Gunakan foto laporan umum di bawah.
                   </div>
+                )}
 
-                  {/* Example photo */}
-                  {item.example_photo_url && !done && (
-                    <div style={{
-                      marginTop: 10, borderRadius: 10, overflow: "hidden",
-                      border: `1.5px solid ${reportTypeColor}22`,
-                      background: `${reportTypeColor}06`
-                    }}>
-                      <div style={{
-                        display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
-                        background: `${reportTypeColor}10`, borderBottom: `1px solid ${reportTypeColor}15`
-                      }}>
-                        <ImageIcon size={11} style={{ color: reportTypeColor }} />
-                        <span style={{ fontSize: 9, fontWeight: 800, color: reportTypeColor, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-                          Contoh Foto
-                        </span>
+                {effectiveReportItems.map((item) => {
+                  const done = Boolean(reportPhotos[item.label]);
+                  return (
+                    <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                        <div style={{ flex: 1 }}>
+                          <h3 style={{ fontSize: 14, fontWeight: 800 }}>
+                            {item.label}
+                            {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
+                          </h3>
+                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                            {item.required ? "Wajib" : "Opsional"}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => openCamera({
+                            facing: "environment",
+                            title: `📷 ${item.label}`,
+                            allowTorch: true,
+                            onCapture: (url) => { closeCamera(); setReportPhotos((cur) => ({ ...cur, [item.label]: url })); }
+                          })}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 6,
+                            background: done ? "var(--success)" : reportTypeColor,
+                            color: "#fff", border: "none", borderRadius: 10,
+                            padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer",
+                            fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0
+                          }}
+                        >
+                          {done ? <CheckCircle2 size={14} /> : <Camera size={14} />}
+                          {done ? "Ubah" : "Foto"}
+                        </button>
                       </div>
-                      <a href={item.example_photo_url} target="_blank" rel="noreferrer">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={item.example_photo_url}
-                          alt={`Contoh ${item.label}`}
-                          style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 160, background: "#f8fafc" }}
-                        />
-                      </a>
-                    </div>
-                  )}
 
-                  {/* Uploaded photo preview */}
-                  {done && (
-                    <div style={{ marginTop: 8 }}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={reportPhotos[item.label]} alt={item.label} className="report-photo-thumb" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      {/* Example photo */}
+                      {item.example_photo_url && !done && (
+                        <div style={{
+                          marginTop: 10, borderRadius: 10, overflow: "hidden",
+                          border: `1.5px solid ${reportTypeColor}22`,
+                          background: `${reportTypeColor}06`
+                        }}>
+                          <div style={{
+                            display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
+                            background: `${reportTypeColor}10`, borderBottom: `1px solid ${reportTypeColor}15`
+                          }}>
+                            <ImageIcon size={11} style={{ color: reportTypeColor }} />
+                            <span style={{ fontSize: 9, fontWeight: 800, color: reportTypeColor, letterSpacing: "0.5px", textTransform: "uppercase" }}>
+                              Contoh Foto
+                            </span>
+                          </div>
+                          <a href={item.example_photo_url} target="_blank" rel="noreferrer">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={item.example_photo_url}
+                              alt={`Contoh ${item.label}`}
+                              style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 160, background: "#f8fafc" }}
+                            />
+                          </a>
+                        </div>
+                      )}
 
-            {/* Submit */}
-            <button
-              className="btn btn-ok btn-action"
-              disabled={reportBusy || !reportWindow.allowed}
-              onClick={submitReport}
-              style={{ marginTop: 4, fontSize: 15 }}
-            >
-              <Send size={18} />
-              {reportBusy ? "Mengirim laporan..." : `Kirim Laporan ${reportType}`}
-            </button>
+                      {/* Uploaded photo preview */}
+                      {done && (
+                        <div style={{ marginTop: 8 }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={reportPhotos[item.label]} alt={item.label} className="report-photo-thumb" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Submit */}
+                <button
+                  className="btn btn-ok btn-action"
+                  disabled={reportBusy}
+                  onClick={submitReport}
+                  style={{ marginTop: 4, fontSize: 15 }}
+                >
+                  <Send size={18} />
+                  {reportBusy ? "Mengirim laporan..." : `Kirim Laporan ${reportType}`}
+                </button>
+              </>
+            )}
           </div>
         )}
       </StaffPage>

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, X } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy } from "@/lib/format";
 
 type SlotStatus = "single" | "open" | "off" | "claimed" | string;
 
@@ -28,6 +27,13 @@ type LeaveModalState = { date: string; reason: string } | null;
 
 function isoToday() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function formatDateId(isoDate: string): string {
+  const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+  const MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+  const d = new Date(`${isoDate}T00:00:00`);
+  return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function SlotBadge({ status, isMe }: { status: SlotStatus; isMe: boolean }) {
@@ -144,7 +150,7 @@ export default function StaffSchedulePage() {
               </button>
             </div>
             <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
-              Tanggal: <strong>{ddmmyyyy(leaveModal.date)}</strong>
+              Tanggal: <strong>{formatDateId(leaveModal.date)}</strong>
             </p>
             <label className="label">Alasan libur (opsional)</label>
             <textarea
@@ -255,7 +261,7 @@ export default function StaffSchedulePage() {
                         fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
                         color: isToday ? "var(--primary)" : "var(--ink)"
                       }}>
-                        {ddmmyyyy(day.date)}
+                        {formatDateId(day.date)}
                       </h2>
                       {isToday && (
                         <span style={{

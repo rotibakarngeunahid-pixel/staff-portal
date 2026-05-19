@@ -22,15 +22,24 @@ export default function AdminPayrollPage() {
   const [form, setForm] = useState({ dateFrom: "", dateTo: "", amount: "", note: "" });
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const payload = await apiFetch<{ ok: true; payroll: PayrollStaff[] }>("/api/admin/payroll", { role: "admin" });
-    setPayroll(payload.payroll);
-    if (!selected && payload.payroll[0]) setSelected(payload.payroll[0].id);
+    setLoading(true);
+    try {
+      const payload = await apiFetch<{ ok: true; payroll: PayrollStaff[] }>("/api/admin/payroll", { role: "admin" });
+      setPayroll(payload.payroll);
+      if (!selected && payload.payroll[0]) setSelected(payload.payroll[0].id);
+    } catch (err) {
+      setMessage((err as Error).message);
+      setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load().catch((err: Error) => { setMessage(err.message); setMsgType("err"); });
+    load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -82,7 +91,14 @@ export default function AdminPayrollPage() {
           </select>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-          {SUMMARY.map((s) => (
+          {loading ? (
+            [1, 2, 3].map((i) => (
+              <div key={i} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 14, padding: "14px 16px", textAlign: "center" }}>
+                <div style={{ height: 10, width: 70, borderRadius: 4, background: "var(--border)", margin: "0 auto 10px", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+                <div style={{ height: 22, width: 90, borderRadius: 6, background: "var(--border)", margin: "0 auto", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+              </div>
+            ))
+          ) : SUMMARY.map((s) => (
             <div key={s.label} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 14, padding: "14px 16px", textAlign: "center" }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: "var(--muted-light)", textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 6 }}>{s.label}</div>
               <div style={{ fontSize: 20, fontWeight: 900, color: s.color, fontFamily: "var(--font-nunito, sans-serif)" }}>{s.value}</div>
@@ -131,7 +147,15 @@ export default function AdminPayrollPage() {
               </tr>
             </thead>
             <tbody>
-              {unpaid.length === 0 ? (
+              {loading ? (
+                [1, 2, 3].map((i) => (
+                  <tr key={i}>
+                    {[70, 40, 80, 60].map((w, j) => (
+                      <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : unpaid.length === 0 ? (
                 <tr><td colSpan={4} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>
                   {current ? "Semua shift sudah dibayar 🎉" : "Pilih staff terlebih dahulu"}
                 </td></tr>
