@@ -68,6 +68,18 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 
   const response = await fetch(url, { method, headers, body, credentials: "include" });
   const data = (await readPayload(response)) as T & ApiPayload;
+
+  // Session expired or invalid — clear tokens and redirect to login
+  if (response.status === 401) {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("rbn_staff_token");
+      localStorage.removeItem("rbn_admin_token");
+      const isAdmin = window.location.pathname.startsWith("/admin");
+      window.location.replace(isAdmin ? "/admin/login" : "/app/login");
+    }
+    throw new Error(data.error || "Sesi sudah kedaluwarsa, silakan login ulang");
+  }
+
   if (!response.ok || data.ok === false) {
     throw new Error(data.error || `Request gagal (${response.status})`);
   }

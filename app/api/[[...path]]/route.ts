@@ -95,10 +95,16 @@ function tokenFromRequest(request: NextRequest, role?: "staff" | "admin") {
 
 async function requireSession(request: NextRequest, role?: "staff" | "admin") {
   const token = tokenFromRequest(request, role);
-  if (!token) throw new HttpError("Sesi tidak ditemukan", 401, "NO_SESSION");
-  const session = await verifySessionToken(token);
-  if (role && session.role !== role) throw new HttpError("Akses ditolak", 403, "FORBIDDEN");
-  return session;
+  if (!token) throw new HttpError("Sesi tidak ditemukan, silakan login ulang", 401, "NO_SESSION");
+  try {
+    const session = await verifySessionToken(token);
+    if (role && session.role !== role) throw new HttpError("Akses ditolak", 403, "FORBIDDEN");
+    return session;
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    // Catch all jose JWT errors (expired, invalid signature, bad claims, etc.)
+    throw new HttpError("Sesi sudah kedaluwarsa, silakan login ulang", 401, "SESSION_EXPIRED");
+  }
 }
 
 function setSessionCookie(response: NextResponse, role: "staff" | "admin", token: string, hours: number) {
