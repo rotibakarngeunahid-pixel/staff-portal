@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
-import { hhmm, rupiah } from "@/lib/format";
+import { formatDateID, formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
 
 type PayrollPayload = {
   ok: true;
@@ -20,15 +20,16 @@ type PayrollPayload = {
     final_salary: number;
     paid_status: boolean;
   }>;
-  payments: Array<{ id: string; paid_at: string; amount: number; note: string | null }>;
+  payments: Array<{
+    id: string;
+    paid_at: string;
+    amount: number;
+    note: string | null;
+    proof_url: string | null;
+    date_from: string | null;
+    date_to: string | null;
+  }>;
 };
-
-function formatDateId(isoDate: string): string {
-  const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-  const d = new Date(`${isoDate}T00:00:00`);
-  return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-}
 
 export default function StaffPayrollPage() {
   const [data, setData] = useState<PayrollPayload | null>(null);
@@ -143,7 +144,7 @@ export default function StaffPayrollPage() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)" }}>
-                      {formatDateId(row.date)}
+                      {formatDateWithDayID(row.date)}
                     </span>
                     <span style={{
                       fontSize: 10, fontWeight: 800, letterSpacing: "0.3px",
@@ -213,24 +214,47 @@ export default function StaffPayrollPage() {
                 key={payment.id}
                 style={{
                   background: "#fff", border: "1px solid var(--success-border)", borderRadius: 14,
-                  padding: "12px 14px", boxShadow: "var(--shadow-xs)",
-                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12
+                  padding: "12px 14px", boxShadow: "var(--shadow-xs)"
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)", marginBottom: 2 }}>
-                    {formatDateId(payment.paid_at.slice(0, 10))}
-                  </p>
-                  <p style={{ fontSize: 11, color: "var(--muted)" }}>
-                    {payment.note || "Tanpa catatan"}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: payment.date_from ? 6 : 0 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)", marginBottom: 2 }}>
+                      Dibayar {formatDateID(payment.paid_at.slice(0, 10))}
+                    </p>
+                    {payment.date_from && payment.date_to && (
+                      <p style={{ fontSize: 11, color: "var(--muted)" }}>
+                        Periode: {formatDateID(payment.date_from)} – {formatDateID(payment.date_to)}
+                      </p>
+                    )}
+                    {payment.note && (
+                      <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        {payment.note.replace(/\[LEBIH_BAYAR:\d+\]/g, "").trim() || null}
+                      </p>
+                    )}
+                  </div>
+                  <p style={{
+                    fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
+                    color: "var(--success)", flexShrink: 0
+                  }}>
+                    {rupiah(payment.amount)}
                   </p>
                 </div>
-                <p style={{
-                  fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
-                  color: "var(--success)", flexShrink: 0
-                }}>
-                  {rupiah(payment.amount)}
-                </p>
+                {payment.proof_url && (
+                  <a
+                    href={payment.proof_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11,
+                      fontWeight: 700, color: "var(--primary)", textDecoration: "none",
+                      background: "var(--primary-bg, #EEF2FF)", borderRadius: 8, padding: "4px 10px",
+                      border: "1px solid var(--primary-border, #C7D2FE)"
+                    }}
+                  >
+                    🧾 Lihat Bukti Pembayaran
+                  </a>
+                )}
               </div>
             ))}
           </div>

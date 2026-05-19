@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, X } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
-
+import { formatDateWithDayID } from "@/lib/format";
 type SlotStatus = "single" | "open" | "off" | "claimed" | string;
 
 type Slot = {
@@ -29,12 +29,6 @@ function isoToday() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function formatDateId(isoDate: string): string {
-  const DAYS = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-  const d = new Date(`${isoDate}T00:00:00`);
-  return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-}
 
 function SlotBadge({ status, isMe }: { status: SlotStatus; isMe: boolean }) {
   if (status === "off") return (
@@ -150,7 +144,7 @@ export default function StaffSchedulePage() {
               </button>
             </div>
             <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
-              Tanggal: <strong>{formatDateId(leaveModal.date)}</strong>
+              Tanggal: <strong>{formatDateWithDayID(leaveModal.date)}</strong>
             </p>
             <label className="label">Alasan libur (opsional)</label>
             <textarea
@@ -261,7 +255,7 @@ export default function StaffSchedulePage() {
                         fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
                         color: isToday ? "var(--primary)" : "var(--ink)"
                       }}>
-                        {formatDateId(day.date)}
+                        {formatDateWithDayID(day.date)}
                       </h2>
                       {isToday && (
                         <span style={{
@@ -278,8 +272,9 @@ export default function StaffSchedulePage() {
                       style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
                       onClick={() => setLeaveModal({ date: day.date, reason: "" })}
                       disabled={Boolean(busy)}
+                      title="Ajukan permintaan libur untuk tanggal ini"
                     >
-                      <CalendarMinus size={13} /> Libur
+                      <CalendarMinus size={13} /> Ajukan Libur
                     </button>
                   </div>
 

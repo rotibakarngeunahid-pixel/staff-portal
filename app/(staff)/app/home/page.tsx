@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { apiFetch, compressDataUrl } from "@/lib/client-api";
-import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
+import { formatDateID, hhmm, rupiah } from "@/lib/format";
 import { haversineDistance } from "@/lib/business";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
@@ -462,7 +462,7 @@ export default function StaffHomePage() {
         />
       )}
 
-      <StaffPage title="Sistem Absensi" subtitle={outlet ? `${outlet.name} · ${ddmmyyyy(status?.date)}` : undefined}>
+      <StaffPage title="Sistem Absensi" subtitle={outlet ? `${outlet.name} · ${formatDateID(status?.date)}` : undefined}>
         {/* Top action row */}
         <div style={{ display: "flex", gap: 8 }}>
           <button
@@ -565,23 +565,23 @@ export default function StaffHomePage() {
               </div>
             </div>
 
-            {/* GPS status messages */}
-            {gps.status === "permission_denied" && nextState === "checkin" && (
+            {/* GPS status messages — only after initial load */}
+            {!loading && gps.status === "permission_denied" && nextState === "checkin" && (
               <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
                 🔒 Izin lokasi ditolak. Buka pengaturan browser dan aktifkan izin lokasi untuk aplikasi ini, lalu refresh halaman.
               </div>
             )}
-            {gps.status === "outside_radius" && nextState === "checkin" && (
+            {!loading && gps.status === "outside_radius" && nextState === "checkin" && (
               <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
                 📍 Kamu terlalu jauh dari outlet ({gps.dist}m, batas {outlet?.radius_m}m). Pindah lebih dekat untuk absen masuk.
               </div>
             )}
-            {gps.status === "low_accuracy" && nextState === "checkin" && (
+            {!loading && gps.status === "low_accuracy" && nextState === "checkin" && (
               <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
                 📡 Akurasi GPS terlalu rendah (±{gps.accuracy}m). Pindah ke tempat terbuka atau tunggu GPS membaik.
               </div>
             )}
-            {(gps.status === "timeout" || gps.status === "locating") && nextState === "checkin" && (
+            {!loading && (gps.status === "timeout" || gps.status === "locating") && nextState === "checkin" && (
               <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ color: "var(--muted)", fontWeight: 600 }}>
                   {gps.status === "timeout" ? "GPS timeout, mencoba ulang..." : "Menunggu sinyal GPS..."}
@@ -653,8 +653,8 @@ export default function StaffHomePage() {
               </div>
             )}
 
-            {/* Action buttons */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* Action buttons — only after initial load */}
+            {!loading && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {nextState === "checkin" && (
                 <button
                   className={`btn btn-primary btn-action${gpsReady && !busy ? " btn-glow" : ""}`}
@@ -682,7 +682,7 @@ export default function StaffHomePage() {
                   <Camera size={20} /> Absen Pulang
                 </button>
               )}
-            </div>
+            </div>}
           </>
         )}
 
@@ -708,7 +708,7 @@ export default function StaffHomePage() {
                 </h2>
               </div>
               <div style={{ textAlign: "right" }}>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{ddmmyyyy(status?.date)}</p>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{formatDateID(status?.date)}</p>
                 <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
                   {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
                 </p>

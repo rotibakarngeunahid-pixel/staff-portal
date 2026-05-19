@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle, RefreshCw, XCircle } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy } from "@/lib/format";
+import { formatDateID } from "@/lib/format";
 
 type Leave = { id: string; staff_name: string; date: string; status: string; reason: string | null };
 
@@ -114,7 +114,7 @@ export default function AdminLeavePage() {
               <tr><td colSpan={5} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data libur</td></tr>
             ) : leaves.map((leave) => (
               <tr key={leave.id}>
-                <td>{ddmmyyyy(leave.date)}</td>
+                <td>{formatDateID(leave.date)}</td>
                 <td style={{ fontWeight: 700 }}>{leave.staff_name}</td>
                 <td>
                   <span className={`status-pill ${STATUS_COLORS[leave.status] || "status-warn"}`}>

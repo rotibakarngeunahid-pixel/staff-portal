@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MapPin, Plus, RefreshCw } from "lucide-react";
+import { MapPin, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 
@@ -41,13 +41,34 @@ export default function AdminOutletsPage() {
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
-    setOutlets(payload.outlets);
+    setLoading(true);
+    try {
+      const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
+      setOutlets(payload.outlets);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memuat outlet");
+      setMsgType("err");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => { load().catch((err: Error) => setMessage(err.message)); }, []);
+  useEffect(() => { load(); }, []);
+
+  async function deactivate(outletId: string, name: string) {
+    if (!window.confirm(`Nonaktifkan outlet "${name}"?\n\nOutlet tidak akan muncul dalam daftar, tapi data histori tetap tersimpan.`)) return;
+    setMessage("Menonaktifkan outlet..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/outlets", { method: "DELETE", role: "admin", body: { outletId } });
+      await load();
+      setMessage(`Outlet "${name}" dinonaktifkan ✓`); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menonaktifkan outlet"); setMsgType("err");
+    }
+  }
 
   function parseMapsUrl(url: string): { lat: string; lng: string } | null {
     // @lat,lng,zoom — URL address bar standard Google Maps
@@ -240,43 +261,75 @@ export default function AdminOutletsPage() {
       {!showForm ? (
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ fontSize: 14, fontWeight: 800 }}>Semua Outlet ({outlets.length})</h2>
-            <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load}>
-              <RefreshCw size={14} /> Refresh
+            <h2 style={{ fontSize: 14, fontWeight: 800 }}>
+              Outlet Aktif ({loading ? "..." : outlets.filter((o) => o.active).length})
+            </h2>
+            <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load} disabled={loading}>
+              <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-            {outlets.map((outlet) => (
-              <div key={outlet.id} style={{ background: "#fff", borderRadius: 16, padding: 18, border: "1px solid var(--border)", boxShadow: "0 2px 10px rgba(0,0,0,.05)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
-                  <div>
-                    <h3 style={{ fontSize: 16, fontWeight: 900 }}>{outlet.name}</h3>
-                    <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                      {outlet.shift_mode === 2 ? "2 Shift" : "1 Shift"} · Radius {outlet.radius_m}m
-                    </p>
+
+          {loading ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {[1, 2].map((i) => (
+                <div key={i} style={{ background: "#fff", borderRadius: 16, padding: 18, border: "1px solid var(--border)" }}>
+                  <div style={{ height: 18, width: 140, borderRadius: 6, background: "var(--border)", marginBottom: 8, animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+                  <div style={{ height: 12, width: 100, borderRadius: 4, background: "var(--border)", marginBottom: 14, animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+                  {[1, 2, 3].map((j) => (
+                    <div key={j} style={{ height: 11, width: 120, borderRadius: 4, background: "var(--border)", marginBottom: 6, animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {outlets.filter((o) => o.active).map((outlet) => (
+                <div key={outlet.id} style={{ background: "#fff", borderRadius: 16, padding: 18, border: "1px solid var(--border)", boxShadow: "0 2px 10px rgba(0,0,0,.05)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <h3 style={{ fontSize: 16, fontWeight: 900 }}>{outlet.name}</h3>
+                      <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        {outlet.shift_mode === 2 ? "2 Shift" : "1 Shift"} · Radius {outlet.radius_m}m
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button className="btn btn-soft" style={{ fontSize: 12, padding: "7px 14px" }} onClick={() => edit(outlet)}>Edit</button>
+                      <button
+                        className="btn btn-soft"
+                        style={{ fontSize: 12, padding: "7px 10px", color: "var(--danger)", borderColor: "var(--danger-border)" }}
+                        onClick={() => deactivate(outlet.id, outlet.name)}
+                        title="Nonaktifkan outlet ini"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
-                  <button className="btn btn-soft" style={{ fontSize: 12, padding: "7px 14px" }} onClick={() => edit(outlet)}>Edit</button>
+                  <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {outlet.shift_mode === 2 ? (
+                      <>
+                        <span>⏰ S1: {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
+                        <span>⏰ S2: {outlet.shift2_start?.slice(0, 5)}–{outlet.shift2_end?.slice(0, 5)}</span>
+                      </>
+                    ) : (
+                      <span>⏰ {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
+                    )}
+                    {outlet.report_buka_start ? <span>🌅 Buka: {outlet.report_buka_start?.slice(0, 5)}–{outlet.report_buka_end?.slice(0, 5)}</span> : null}
+                    {outlet.report_tutup_start ? <span>🌙 Tutup: {outlet.report_tutup_start?.slice(0, 5)}–{outlet.report_tutup_end?.slice(0, 5)}</span> : null}
+                    {outlet.location_url ? (
+                      <a href={outlet.location_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                        <MapPin size={12} /> Lihat di Maps
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
-                  {outlet.shift_mode === 2 ? (
-                    <>
-                      <span>⏰ S1: {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
-                      <span>⏰ S2: {outlet.shift2_start?.slice(0, 5)}–{outlet.shift2_end?.slice(0, 5)}</span>
-                    </>
-                  ) : (
-                    <span>⏰ {outlet.shift1_start?.slice(0, 5)}–{outlet.shift1_end?.slice(0, 5)}</span>
-                  )}
-                  {outlet.report_buka_start ? <span>🌅 Buka: {outlet.report_buka_start?.slice(0, 5)}–{outlet.report_buka_end?.slice(0, 5)}</span> : null}
-                  {outlet.report_tutup_start ? <span>🌙 Tutup: {outlet.report_tutup_start?.slice(0, 5)}–{outlet.report_tutup_end?.slice(0, 5)}</span> : null}
-                  {outlet.location_url ? (
-                    <a href={outlet.location_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                      <MapPin size={12} /> Lihat di Maps
-                    </a>
-                  ) : null}
+              ))}
+              {outlets.filter((o) => o.active).length === 0 && (
+                <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "32px 16px", color: "var(--muted-light)", fontSize: 13, border: "2px dashed var(--border)", borderRadius: 12 }}>
+                  Belum ada outlet aktif. Tambahkan outlet baru.
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       ) : null}
     </AdminPage>

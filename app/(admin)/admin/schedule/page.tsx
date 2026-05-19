@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy } from "@/lib/format";
+import { formatDateWithDayID } from "@/lib/format";
 
 type Outlet = { id: string; name: string; shift_mode: number };
 type Staff = { id: string; name: string; outlet_id: string | null };
@@ -125,7 +125,7 @@ export default function AdminSchedulePage() {
 
       {/* Assign panel */}
       {assignTarget ? (
-        <AdminSection title={`Assign Shift ${assignTarget.shift} · ${ddmmyyyy(assignTarget.date)}`}>
+        <AdminSection title={`Assign Shift ${assignTarget.shift} · ${formatDateWithDayID(assignTarget.date)}`}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "flex-end" }}>
             <div>
               <label className="label">Staff</label>
@@ -155,7 +155,7 @@ export default function AdminSchedulePage() {
 
             return (
               <div key={day.date} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, padding: 16, boxShadow: "0 2px 10px rgba(0,0,0,.05)" }}>
-                <h3 style={{ fontSize: 14, fontWeight: 900, marginBottom: 12 }}>{ddmmyyyy(day.date)}</h3>
+                <h3 style={{ fontSize: 14, fontWeight: 900, marginBottom: 12 }}>{formatDateWithDayID(day.date)}</h3>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {day.slots.map((slot) => {
                     const isOff = slot.status === "off";

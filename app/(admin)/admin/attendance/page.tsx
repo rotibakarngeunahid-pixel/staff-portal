@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
+import { formatDateID, hhmm, rupiah } from "@/lib/format";
 
 type Attendance = {
   id: string;
@@ -232,7 +232,7 @@ export default function AdminAttendancePage() {
                 <tr><td colSpan={10} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
               ) : rows.map((row) => (
                 <tr key={row.id}>
-                  <td>{ddmmyyyy(row.date)}</td>
+                  <td>{formatDateID(row.date)}</td>
                   <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
                   <td>{row.outlet_name}</td>
                   <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>

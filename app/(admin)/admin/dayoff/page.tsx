@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy } from "@/lib/format";
+import { formatDateID } from "@/lib/format";
 
 type Outlet = { id: string; name: string; shift_mode: number };
 type Dayoff = { id: string; outlet_id: string; date: string; shift: number };
@@ -128,7 +128,7 @@ export default function AdminDayoffPage() {
               <tr><td colSpan={4} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada hari libur terdaftar</td></tr>
             ) : dayoff.map((row) => (
               <tr key={row.id}>
-                <td>{ddmmyyyy(row.date)}</td>
+                <td>{formatDateID(row.date)}</td>
                 <td>{outlets.find((outlet) => outlet.id === row.outlet_id)?.name || row.outlet_id}</td>
                 <td>Shift {row.shift}</td>
                 <td>

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AdminPage } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy, hhmm, rupiah } from "@/lib/format";
+import { formatDateID, hhmm, rupiah } from "@/lib/format";
 
 type DashboardPayload = {
   ok: true;
@@ -61,7 +61,7 @@ export default function AdminDashboardPage() {
   return (
     <AdminPage
       title="Dashboard"
-      subtitle={data ? `Hari ini · ${ddmmyyyy(data.date)}` : "Overview operasional hari ini"}
+      subtitle={data ? `Hari ini · ${formatDateID(data.date)}` : "Overview operasional hari ini"}
       action={
         <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={load} disabled={loading}>
           <RefreshCw size={15} /> Refresh

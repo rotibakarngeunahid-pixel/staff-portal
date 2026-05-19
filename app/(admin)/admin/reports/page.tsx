@@ -5,7 +5,7 @@ import Image from "next/image";
 import { RefreshCw } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
-import { ddmmyyyy, hhmm } from "@/lib/format";
+import { formatDateID, hhmm } from "@/lib/format";
 
 type ReportItem = { label: string; photo_url: string | null; required: boolean };
 type Report = { id: string; staff_name: string; outlet_name: string; date: string; type: string; selfie: string | null; items_json: ReportItem[]; submitted_at: string };
@@ -115,7 +115,7 @@ export default function AdminReportsPage() {
                         <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>· {report.outlet_name}</span>
                       </div>
                       <p style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
-                        {ddmmyyyy(report.date)} · {report.staff_name} · {hhmm(report.submitted_at)}
+                        {formatDateID(report.date)} · {report.staff_name} · {hhmm(report.submitted_at)}
                       </p>
                     </div>
                     <span className="status-pill status-ok" style={{ fontSize: 11 }}>{items.length} foto</span>
