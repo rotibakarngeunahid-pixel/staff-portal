@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarDays, CreditCard, Home, UserRound } from "lucide-react";
+import { BookOpen, CalendarDays, CreditCard, Home, UserRound } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 const items = [
-  { href: "/app/home",    label: "Home",   icon: Home },
-  { href: "/app/payroll", label: "Gaji",   icon: CreditCard },
-  { href: "/app/schedule",label: "Jadwal", icon: CalendarDays },
-  { href: "/app/profile", label: "Profil", icon: UserRound }
+  { href: "/app/home",    label: "Home",    icon: Home },
+  { href: "/app/payroll", label: "Gaji",    icon: CreditCard },
+  { href: "/app/schedule",label: "Jadwal",  icon: CalendarDays },
+  { href: "/app/panduan", label: "Panduan", icon: BookOpen },
+  { href: "/app/profile", label: "Profil",  icon: UserRound }
 ];
 
 export function StaffNav() {

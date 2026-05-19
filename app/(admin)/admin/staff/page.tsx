@@ -86,7 +86,9 @@ export default function AdminStaffPage() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.name.trim()) { setMessage("Nama staff wajib diisi"); setMsgType("err"); return; }
-    if (!editing && form.pin.length < 4) { setMessage("PIN minimal 4 digit"); setMsgType("err"); return; }
+    if (form.pin && !/^\d+$/.test(form.pin)) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
+    if (form.pin && form.pin.length > 4) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
+    if (!editing && form.pin.length < 4) { setMessage("PIN wajib diisi 4 digit angka untuk staff baru"); setMsgType("err"); return; }
     setMessage("Menyimpan..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/staff", {
@@ -311,7 +313,31 @@ export default function AdminStaffPage() {
               </div>
               <div>
                 <label className="label">PIN {editing ? "(kosongkan jika tidak ubah)" : <span style={{ color: "var(--danger)" }}>*</span>}</label>
-                <input className="field" type="password" inputMode="numeric" value={form.pin} onChange={(e) => setForm({ ...form, pin: e.target.value })} minLength={editing ? 0 : 4} maxLength={6} />
+                <input
+                  className="field"
+                  type="password"
+                  inputMode="numeric"
+                  placeholder={editing ? "Kosongkan jika tidak ubah" : "4 digit angka"}
+                  value={form.pin}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, "").slice(0, 4);
+                    setForm({ ...form, pin: val });
+                  }}
+                  minLength={editing ? 0 : 4}
+                  maxLength={4}
+                  style={{ borderColor: form.pin && (form.pin.length < 4 || !/^\d+$/.test(form.pin)) ? "var(--danger)" : undefined }}
+                />
+                <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 4 }}>
+                  Hanya angka · tepat 4 digit
+                  {form.pin.length > 0 && form.pin.length < 4 && (
+                    <span style={{ color: "var(--danger)", marginLeft: 6, fontWeight: 700 }}>
+                      ({form.pin.length}/4)
+                    </span>
+                  )}
+                  {form.pin.length === 4 && (
+                    <span style={{ color: "var(--success)", marginLeft: 6, fontWeight: 700 }}>✓</span>
+                  )}
+                </p>
               </div>
               <div>
                 <label className="label">Outlet</label>

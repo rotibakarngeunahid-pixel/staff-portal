@@ -853,30 +853,52 @@ export default function StaffHomePage() {
                         </button>
                       </div>
 
-                      {/* Example photo */}
+                      {/* Example photo — clearly labeled, visually distinct from uploaded photo */}
                       {item.example_photo_url && !done && (
                         <div style={{
-                          marginTop: 10, borderRadius: 10, overflow: "hidden",
-                          border: `1.5px solid ${reportTypeColor}22`,
-                          background: `${reportTypeColor}06`
+                          marginTop: 12,
+                          border: "2.5px dashed #F59E0B",
+                          borderRadius: 12,
+                          overflow: "hidden",
+                          background: "#FFFBEB"
                         }}>
+                          {/* Header banner — very prominent */}
                           <div style={{
-                            display: "flex", alignItems: "center", gap: 6, padding: "5px 10px",
-                            background: `${reportTypeColor}10`, borderBottom: `1px solid ${reportTypeColor}15`
+                            background: "#F59E0B", padding: "7px 12px",
+                            display: "flex", alignItems: "center", gap: 7
                           }}>
-                            <ImageIcon size={11} style={{ color: reportTypeColor }} />
-                            <span style={{ fontSize: 9, fontWeight: 800, color: reportTypeColor, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-                              Contoh Foto
+                            <ImageIcon size={13} color="#fff" />
+                            <span style={{ fontSize: 11, fontWeight: 900, color: "#fff", letterSpacing: "0.6px", textTransform: "uppercase" }}>
+                              Foto Contoh
+                            </span>
+                            <span style={{
+                              marginLeft: "auto", background: "rgba(255,255,255,0.3)",
+                              color: "#fff", fontSize: 9, fontWeight: 800,
+                              borderRadius: 6, padding: "2px 7px", letterSpacing: "0.4px"
+                            }}>
+                              BUKAN FOTO ASLI
                             </span>
                           </div>
-                          <a href={item.example_photo_url} target="_blank" rel="noreferrer">
+                          {/* Keterangan */}
+                          <div style={{ padding: "7px 12px 4px", background: "#FEF3C7" }}>
+                            <p style={{ fontSize: 11, color: "#92400E", fontWeight: 700, lineHeight: 1.4 }}>
+                              Ini hanya contoh foto yang benar. Foto kamu harus sesuai kondisi toko yang sesungguhnya.
+                            </p>
+                          </div>
+                          {/* Foto contoh */}
+                          <a href={item.example_photo_url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={item.example_photo_url}
-                              alt={`Contoh ${item.label}`}
-                              style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 160, background: "#f8fafc" }}
+                              alt={`Contoh foto: ${item.label}`}
+                              style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 180, background: "#f8fafc", opacity: 0.88 }}
                             />
                           </a>
+                          <div style={{ padding: "5px 12px 8px", background: "#FEF3C7" }}>
+                            <p style={{ fontSize: 10, color: "#B45309", textAlign: "center", fontWeight: 600 }}>
+                              👆 Tap foto untuk memperbesar contoh
+                            </p>
+                          </div>
                         </div>
                       )}
 

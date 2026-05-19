@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
 
-const PIN_LEN = 6;
+const PIN_LEN = 4;
 
 type StaffOption = { id: string; name: string; outlet_id: string | null };
 
@@ -21,7 +21,7 @@ export default function StaffLoginPage() {
   const pinRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const pin = pins.join("");
-  const ready = useMemo(() => Boolean(name) && pin.length >= 4, [name, pin]);
+  const ready = useMemo(() => Boolean(name) && pin.length === PIN_LEN, [name, pin]);
 
   useEffect(() => {
     apiFetch<{ ok: true; staff: StaffOption[] }>("/api/staff/list")
@@ -160,6 +160,9 @@ export default function StaffLoginPage() {
                   />
                 ))}
               </div>
+              <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 6, textAlign: "center" }}>
+                PIN hanya angka · maksimal {PIN_LEN} digit
+              </p>
             </div>
 
             {error ? (
