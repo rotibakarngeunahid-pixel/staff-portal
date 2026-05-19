@@ -409,6 +409,33 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     .eq("status", "active")
     .maybeSingle();
 
+  // Cek shift 2 menunggu shift 1 absen keluar (hanya jika ada assignment SHIFT_2 dan belum checkin)
+  let shift1WaitingInfo: { staff_name: string; outlet_name: string; date: string } | null = null;
+  if (
+    outlet.shift_mode === 2 &&
+    !isFullShift &&
+    !staffDayoffRow &&
+    !attendance?.checkin_time &&
+    assignment != null &&
+    (assignment as any).shift_type === "SHIFT_2"
+  ) {
+    const { data: s1Row } = await db
+      .from("attendance")
+      .select("staff_name,checkout_time")
+      .eq("outlet_id", outlet.id)
+      .eq("date", effective)
+      .eq("shift", 1)
+      .not("checkin_time", "is", null)
+      .maybeSingle();
+    if (s1Row && !(s1Row as any).checkout_time) {
+      shift1WaitingInfo = {
+        staff_name: (s1Row as any).staff_name || "Staff Shift 1",
+        outlet_name: outlet.name,
+        date: effective
+      };
+    }
+  }
+
   // Compute scheduleState dan nextStep
   const hasBuka = (reports || []).some((r: any) => r.type === "BUKA");
   const hasTutup = (reports || []).some((r: any) => r.type === "TUTUP");
@@ -426,8 +453,13 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     const isLocked = assignment.status === "locked" || assignment.status === "completed";
 
     if (!attendance?.checkin_time) {
-      scheduleState = isLocked ? "locked" : "ready";
-      nextStep = "checkin";
+      if (shift1WaitingInfo) {
+        scheduleState = "waiting_shift1";
+        nextStep = "blocked_shift1";
+      } else {
+        scheduleState = isLocked ? "locked" : "ready";
+        nextStep = "checkin";
+      }
     } else if (!attendance.checkout_time) {
       scheduleState = "ready";
       if (requiredReports.includes("BUKA") && !hasBuka) {
@@ -482,6 +514,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     scheduleState,
     nextStep,
     requiredReports,
+    shift1WaitingInfo,
     serverTime: new Date().toISOString()
   });
 }
@@ -511,6 +544,27 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       .eq("shift", shift)
       .maybeSingle();
     if (thisOff) throw new HttpError("Shift ini sedang libur, tidak bisa absen masuk", 400, "SHIFT_OFF");
+  }
+
+  // Validasi: shift 2 baru bisa absen masuk setelah shift 1 absen keluar
+  if (outlet.shift_mode === 2 && shift === 2) {
+    const { data: shift1Active, error: shift1ActiveError } = await db
+      .from("attendance")
+      .select("id,staff_name,checkout_time")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .eq("shift", 1)
+      .not("checkin_time", "is", null)
+      .maybeSingle();
+    if (shift1ActiveError) throw shift1ActiveError;
+    if (shift1Active && !(shift1Active as any).checkout_time) {
+      const s1Name = (shift1Active as any).staff_name || "Staff Shift 1";
+      throw new HttpError(
+        `Shift 2 belum bisa absen masuk karena ${s1Name} (Shift 1) di ${outlet.name} belum melakukan absen keluar. Silakan tunggu Shift 1 menyelesaikan absen keluar terlebih dahulu.`,
+        409,
+        "SHIFT1_NOT_CHECKED_OUT"
+      );
+    }
   }
 
   const { data: existing, error: existingError } = await db

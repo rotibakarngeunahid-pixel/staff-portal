@@ -39,7 +39,8 @@ const SECTIONS: Section[] = [
     tips: [
       "Harus berada dalam radius outlet (tertera di layar)",
       "Jika GPS 'Di Luar Area', pindah lebih dekat ke toko",
-      "Absen pulang tidak perlu GPS — cukup selfie"
+      "Absen pulang tidak perlu GPS — cukup selfie",
+      "Outlet 2 shift: Shift 2 baru bisa absen masuk setelah Shift 1 absen keluar — jika tombol belum aktif, tunggu Shift 1 selesai"
     ]
   },
   {
@@ -125,7 +126,8 @@ const SECTIONS: Section[] = [
       { icon: "✅", title: "Siap Absen Pulang", desc: "Semua laporan selesai. Tap tombol Absen Pulang untuk menyelesaikan shift." },
       { icon: "🎉", title: "Shift Selesai", desc: "Absen pulang berhasil. Gaji hari ini sudah dihitung. Kerja bagus!" },
       { icon: "🏖️", title: "Hari Ini Libur", desc: "Kamu dijadwalkan libur hari ini. Absen tidak diperlukan." },
-      { icon: "📋", title: "Belum Ada Jadwal", desc: "Kamu belum memilih jadwal untuk hari ini. Buka menu Jadwal dan pilih shift." }
+      { icon: "📋", title: "Belum Ada Jadwal", desc: "Kamu belum memilih jadwal untuk hari ini. Buka menu Jadwal dan pilih shift." },
+      { icon: "⏳", title: "Menunggu Shift 1 Selesai", desc: "Kamu terdaftar Shift 2 dan Shift 1 belum absen keluar. Tombol absen masuk aktif otomatis setelah staff Shift 1 menyelesaikan absen keluar. Tap 'Cek Status Terbaru' untuk memperbarui." }
     ],
     tips: [
       "Jika status tidak berubah setelah aksi, tap Refresh",

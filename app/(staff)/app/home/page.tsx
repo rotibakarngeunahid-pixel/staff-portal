@@ -46,6 +46,7 @@ type StatusPayload = {
   requiredReports?: string[];
   assignment?: { id: string; shift_type: string; status: string } | null;
   staffDayoff?: { id: string; reason: string | null } | null;
+  shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
 };
 
 type ReportCfgItem = {
@@ -552,8 +553,42 @@ export default function StaffHomePage() {
           </div>
         )}
 
-        {/* ═══ MAIN FLOW (not report state, not dayoff, not unassigned) ═══ */}
-        {!isReportState && status?.scheduleState !== "dayoff" && status?.scheduleState !== "unassigned" && (
+        {/* ═══ PRD: State Menunggu Shift 1 Absen Keluar ═══ */}
+        {!loading && status?.scheduleState === "waiting_shift1" && (
+          <div className="status-card" style={{ background: "linear-gradient(135deg,#FFFBEB,#FEF3C720)", border: "2px solid #FDE68A" }}>
+            <div className="status-icon">⏳</div>
+            <h2 className="status-title" style={{ color: "#D97706" }}>Menunggu Shift 1 Selesai</h2>
+            <p className="status-sub">
+              Belum bisa absen masuk. Shift 1 di <strong>{status?.shift1WaitingInfo?.outlet_name || outlet?.name}</strong> masih aktif dan belum absen keluar.
+            </p>
+            {status?.shift1WaitingInfo?.staff_name && (
+              <p style={{ fontSize: 13, color: "#92400E", marginTop: 8, fontWeight: 700 }}>
+                Staff Shift 1: {status.shift1WaitingInfo.staff_name}
+              </p>
+            )}
+            <div style={{
+              marginTop: 12, padding: "10px 14px",
+              background: "#FEF3C7", borderRadius: 10,
+              border: "1px solid #FDE68A"
+            }}>
+              <p style={{ fontSize: 12, color: "#78350F", fontWeight: 600, lineHeight: 1.6 }}>
+                Silakan tunggu staff Shift 1 menyelesaikan absen keluar terlebih dahulu.
+              </p>
+            </div>
+            <button
+              className="btn btn-soft"
+              style={{ marginTop: 12, fontSize: 12, padding: "9px 16px", width: "100%" }}
+              onClick={load}
+              disabled={loading || Boolean(busy)}
+            >
+              <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
+              {loading ? "Memuat..." : "Cek Status Terbaru"}
+            </button>
+          </div>
+        )}
+
+        {/* ═══ MAIN FLOW (not report state, not dayoff, not unassigned, not waiting_shift1) ═══ */}
+        {!isReportState && status?.scheduleState !== "dayoff" && status?.scheduleState !== "unassigned" && status?.scheduleState !== "waiting_shift1" && (
           <>
             {/* Status card */}
             {loading ? (
