@@ -44,6 +44,11 @@ export type Staff = {
   phone: string | null;
   created_at?: string;
   outlets?: Outlet | null;
+  // PRD §11.5 — safe delete fields
+  deleted_at?: string | null;
+  deleted_by?: string | null;
+  delete_reason?: string | null;
+  archived_at?: string | null;
 };
 
 export type Attendance = {
@@ -77,6 +82,11 @@ export type Attendance = {
   original_deduction: number | null;
   original_final_salary: number | null;
   created_at?: string;
+  // PRD §11.3 — schedule linkage
+  schedule_id?: string | null;
+  shift_type?: ShiftType | null;
+  client_request_id?: string | null;
+  missing_checkout_flag?: boolean;
 };
 
 export type ReportCfg = {
@@ -100,6 +110,10 @@ export type Report = {
   items_json: JsonValue;
   selfie: string | null;
   submitted_at: string;
+  // PRD §11.4
+  attendance_id?: string | null;
+  schedule_id?: string | null;
+  client_request_id?: string | null;
 };
 
 export type Payment = {
@@ -141,6 +155,141 @@ export type LeaveRequest = {
   created_at: string;
   cancelled_at: string | null;
 };
+
+// ─── PRD §8.1 — Jadwal berbasis assignment staff ───────────────────────────
+
+export type ShiftType = "SHIFT_1" | "SHIFT_2" | "FULL_SHIFT";
+
+export type ScheduleStatus =
+  | "confirmed"
+  | "cancelled"
+  | "admin_override"
+  | "auto_cover"
+  | "locked"
+  | "completed"
+  | "conflict";
+
+export type ScheduleSource = "staff" | "admin" | "auto_dayoff" | "migration" | "checkin";
+
+export type StaffShiftAssignment = {
+  id: string;
+  outlet_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string;
+  shift_type: ShiftType;
+  status: ScheduleStatus;
+  source: ScheduleSource;
+  requested_at: string | null;
+  confirmed_at: string;
+  cancelled_at: string | null;
+  locked_at: string | null;
+  completed_at: string | null;
+  overridden_from_id: string | null;
+  note: string | null;
+  cancel_reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// ─── PRD §8.4 — Libur berbasis staff ──────────────────────────────────────
+
+export type StaffDayoffStatus = "active" | "cancelled";
+export type StaffDayoffSource = "admin" | "staff_request" | "migration";
+
+export type StaffDayoff = {
+  id: string;
+  outlet_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string;
+  status: StaffDayoffStatus;
+  source: StaffDayoffSource;
+  leave_request_id: string | null;
+  replacement_schedule_id: string | null;
+  reason: string | null;
+  created_by: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+};
+
+// ─── PRD §13 — State management staff home ────────────────────────────────
+
+export type ScheduleState =
+  | "loading"
+  | "unassigned"
+  | "dayoff"
+  | "ready"
+  | "locked"
+  | "completed"
+  | "error";
+
+export type NextStep =
+  | "checkin"
+  | "report_buka"
+  | "report_tutup"
+  | "checkout"
+  | "done"
+  | "blocked";
+
+export type DraftState =
+  | "none"
+  | "found"
+  | "saving"
+  | "saved"
+  | "submit_pending"
+  | "submitted"
+  | "error";
+
+// ─── PRD §8.2 — Draft foto ────────────────────────────────────────────────
+
+export type DraftFlow =
+  | "attendance_checkin"
+  | "attendance_checkout"
+  | "report_buka"
+  | "report_tutup"
+  | "report_cfg"
+  | "payroll_payment"
+  | "staff_profile";
+
+export type UploadDraft = {
+  id: string;
+  schemaVersion: 1;
+  role: "staff" | "admin";
+  flow: DraftFlow;
+  ownerId: string;
+  outletId?: string;
+  staffId?: string;
+  date?: string;
+  shiftType?: ShiftType;
+  reportType?: "BUKA" | "TUTUP";
+  formData: Record<string, unknown>;
+  photos: Array<{ key: string; label: string; blob: Blob; mime: string; size: number }>;
+  clientRequestId: string;
+  submitHash?: string;
+  status: "draft" | "saving" | "submitting" | "submitted" | "deleted";
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+};
+
+// ─── PRD §8.3 — Delete staff dependency preview ───────────────────────────
+
+export type StaffDeletePreview = {
+  staffId: string;
+  staffName: string;
+  attendanceCount: number;
+  reportCount: number;
+  paymentCount: number;
+  scheduleCount: number;
+  leaveCount: number;
+  totalDependencies: number;
+  canHardDelete: boolean;
+};
+
+// ─── Auth & API helpers ───────────────────────────────────────────────────
 
 export type SessionPayload = {
   sub: string;

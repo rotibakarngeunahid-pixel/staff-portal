@@ -1,13 +1,40 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, Save } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { rupiah } from "@/lib/format";
 
-type Staff = { id: string; name: string; outlet_id: string | null; salary_per_shift: number; active: boolean; phone: string | null };
+type Staff = {
+  id: string;
+  name: string;
+  outlet_id: string | null;
+  salary_per_shift: number;
+  active: boolean;
+  phone: string | null;
+  deleted_at?: string | null;
+};
 type Outlet = { id: string; name: string };
+
+type DeletePreview = {
+  staffId: string;
+  staffName: string;
+  attendanceCount: number;
+  reportCount: number;
+  paymentCount: number;
+  scheduleCount: number;
+  leaveCount: number;
+  totalDependencies: number;
+  canHardDelete: boolean;
+};
+
+type DeleteModal = {
+  preview: DeletePreview;
+  confirmName: string;
+  mode: "deactivate" | "archive" | "hard";
+  deleteReason: string;
+};
 
 const emptyForm = { name: "", pin: "", outlet_id: "", salary_per_shift: "0", phone: "", ktp_no: "", address: "" };
 
@@ -21,6 +48,8 @@ export default function AdminStaffPage() {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive">("active");
   const [loading, setLoading] = useState(true);
+  const [deleteModal, setDeleteModal] = useState<DeleteModal | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -73,13 +102,59 @@ export default function AdminStaffPage() {
     }
   }
 
+  async function openDeleteModal(id: string) {
+    setMessage("Mengecek data staff..."); setMsgType("info");
+    try {
+      const result = await apiFetch<{ ok: true } & DeletePreview>(
+        "/api/admin/staff",
+        { role: "admin", body: { staffId: id, deletePreview: "1" } }
+      );
+      setDeleteModal({
+        preview: result,
+        confirmName: "",
+        mode: result.totalDependencies > 0 ? "archive" : "hard",
+        deleteReason: ""
+      });
+      setMessage(""); setMsgType("info");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memuat info staff"); setMsgType("err");
+    }
+  }
+
+  async function executeDelete() {
+    if (!deleteModal) return;
+    const { preview, mode, confirmName, deleteReason } = deleteModal;
+
+    if (mode === "hard" && confirmName !== preview.staffName) {
+      setMessage("Nama konfirmasi tidak cocok"); setMsgType("err"); return;
+    }
+
+    setDeleteLoading(true);
+    setMessage("Memproses..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/staff", {
+        method: "DELETE",
+        role: "admin",
+        body: { staffId: preview.staffId, mode, confirmName, deleteReason }
+      });
+      setDeleteModal(null);
+      await load();
+      const modeLabel = mode === "hard" ? "dihapus permanen" : mode === "archive" ? "diarsipkan" : "dinonaktifkan";
+      setMessage(`${preview.staffName} berhasil ${modeLabel} ✓`); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memproses"); setMsgType("err");
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   async function deactivate(id: string, name: string) {
     if (!window.confirm(`Nonaktifkan ${name}?`)) return;
     setMessage("Menonaktifkan..."); setMsgType("info");
     try {
-      await apiFetch("/api/admin/staff", { method: "DELETE", role: "admin", body: { staffId: id } });
+      await apiFetch("/api/admin/staff", { method: "DELETE", role: "admin", body: { staffId: id, mode: "deactivate" } });
       await load();
-      setMessage(`${name} dinonaktifkan`); setMsgType("ok");
+      setMessage(`${name} dinonaktifkan ✓`); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menonaktifkan"); setMsgType("err");
     }
@@ -101,7 +176,131 @@ export default function AdminStaffPage() {
     >
       <MsgBar message={message} type={msgType} />
 
-      {/* Form */}
+      {/* ─── Modal Delete ─── */}
+      {deleteModal && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 300,
+          background: "rgba(15,23,42,0.65)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "0 16px"
+        }}>
+          <div style={{
+            background: "#fff", borderRadius: 20, width: "min(100%, 500px)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden"
+          }}>
+            {/* Header */}
+            <div style={{ padding: "20px 24px", background: "#FEF2F2", borderBottom: "1px solid #FECACA", display: "flex", alignItems: "center", gap: 12 }}>
+              <AlertTriangle size={22} color="#DC2626" />
+              <div>
+                <h2 style={{ fontSize: 16, fontWeight: 900, color: "#DC2626" }}>Hapus / Arsipkan Staff</h2>
+                <p style={{ fontSize: 12, color: "#991B1B" }}>{deleteModal.preview.staffName}</p>
+              </div>
+            </div>
+
+            <div style={{ padding: "20px 24px" }}>
+              {/* Dependency summary */}
+              <div style={{ background: "var(--surface-soft)", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+                <p style={{ fontSize: 12, fontWeight: 800, color: "var(--ink)", marginBottom: 8 }}>Data historis staff ini:</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {[
+                    ["Absensi", deleteModal.preview.attendanceCount],
+                    ["Laporan", deleteModal.preview.reportCount],
+                    ["Pembayaran", deleteModal.preview.paymentCount],
+                    ["Jadwal", deleteModal.preview.scheduleCount],
+                    ["Request Libur", deleteModal.preview.leaveCount]
+                  ].map(([label, count]) => (
+                    <div key={label as string} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>{label}</span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: Number(count) > 0 ? "var(--danger)" : "var(--success)" }}>
+                        {count}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {deleteModal.preview.totalDependencies > 0 && (
+                  <p style={{ marginTop: 10, fontSize: 11, color: "var(--danger)", fontWeight: 700 }}>
+                    ⚠️ Total {deleteModal.preview.totalDependencies} data historis. Hapus permanen tidak tersedia.
+                  </p>
+                )}
+              </div>
+
+              {/* Pilih aksi */}
+              <label className="label">Pilih aksi</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${deleteModal.mode === "deactivate" ? "var(--primary)" : "var(--border)"}`, cursor: "pointer", background: deleteModal.mode === "deactivate" ? "rgba(192,57,43,.04)" : "#fff" }}>
+                  <input type="radio" name="deleteMode" checked={deleteModal.mode === "deactivate"} onChange={() => setDeleteModal((m) => m ? { ...m, mode: "deactivate" } : null)} style={{ marginTop: 2 }} />
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 800 }}>Nonaktifkan</p>
+                    <p style={{ fontSize: 11, color: "var(--muted)" }}>Staff tidak bisa login. Data historis tetap ada. Bisa diaktifkan kembali.</p>
+                  </div>
+                </label>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${deleteModal.mode === "archive" ? "var(--primary)" : "var(--border)"}`, cursor: "pointer", background: deleteModal.mode === "archive" ? "rgba(192,57,43,.04)" : "#fff" }}>
+                  <input type="radio" name="deleteMode" checked={deleteModal.mode === "archive"} onChange={() => setDeleteModal((m) => m ? { ...m, mode: "archive" } : null)} style={{ marginTop: 2 }} />
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 800 }}>Arsipkan Staff</p>
+                    <p style={{ fontSize: 11, color: "var(--muted)" }}>Hapus akses operasional, tandai sebagai arsip. Data historis tetap ada. Direkomendasikan jika ada data historis.</p>
+                  </div>
+                </label>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${deleteModal.mode === "hard" ? "#DC2626" : "var(--border)"}`, cursor: deleteModal.preview.canHardDelete ? "pointer" : "not-allowed", background: deleteModal.mode === "hard" ? "#FEF2F2" : "#fff", opacity: deleteModal.preview.canHardDelete ? 1 : 0.45 }}>
+                  <input type="radio" name="deleteMode" checked={deleteModal.mode === "hard"} disabled={!deleteModal.preview.canHardDelete} onChange={() => deleteModal.preview.canHardDelete && setDeleteModal((m) => m ? { ...m, mode: "hard" } : null)} style={{ marginTop: 2 }} />
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 800, color: "#DC2626" }}>Hapus Permanen</p>
+                    <p style={{ fontSize: 11, color: "var(--muted)" }}>
+                      {deleteModal.preview.canHardDelete
+                        ? "Staff tidak memiliki data historis. Hapus permanen tersedia."
+                        : "Tidak tersedia — staff memiliki data historis."}
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Alasan (archive mode) */}
+              {deleteModal.mode === "archive" && (
+                <div style={{ marginBottom: 14 }}>
+                  <label className="label">Alasan arsip (opsional)</label>
+                  <input
+                    className="field"
+                    placeholder="Contoh: mengundurkan diri, kontrak selesai"
+                    value={deleteModal.deleteReason}
+                    onChange={(e) => setDeleteModal((m) => m ? { ...m, deleteReason: e.target.value } : null)}
+                  />
+                </div>
+              )}
+
+              {/* Konfirmasi nama (hard delete) */}
+              {deleteModal.mode === "hard" && deleteModal.preview.canHardDelete && (
+                <div style={{ marginBottom: 14 }}>
+                  <label className="label">Ketik nama staff untuk konfirmasi</label>
+                  <input
+                    className="field"
+                    placeholder={deleteModal.preview.staffName}
+                    value={deleteModal.confirmName}
+                    onChange={(e) => setDeleteModal((m) => m ? { ...m, confirmName: e.target.value } : null)}
+                    style={{ borderColor: deleteModal.confirmName && deleteModal.confirmName !== deleteModal.preview.staffName ? "var(--danger)" : undefined }}
+                  />
+                </div>
+              )}
+
+              {/* Tombol aksi */}
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  className={deleteModal.mode === "hard" ? "btn btn-danger" : "btn btn-primary"}
+                  style={{ flex: 1 }}
+                  disabled={deleteLoading || (deleteModal.mode === "hard" && deleteModal.confirmName !== deleteModal.preview.staffName)}
+                  onClick={executeDelete}
+                >
+                  <Trash2 size={15} />
+                  {deleteLoading ? "Memproses..." : deleteModal.mode === "hard" ? "Hapus Permanen" : deleteModal.mode === "archive" ? "Arsipkan Staff" : "Nonaktifkan"}
+                </button>
+                <button className="btn btn-soft" style={{ flex: 1 }} onClick={() => setDeleteModal(null)} disabled={deleteLoading}>
+                  Batal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Form tambah/edit staff ─── */}
       {showForm ? (
         <form onSubmit={submit}>
           <AdminSection title={editing ? "Edit Data Staff" : "Tambah Staff Baru"}>
@@ -149,7 +348,7 @@ export default function AdminStaffPage() {
         </form>
       ) : null}
 
-      {/* Staff list */}
+      {/* ─── Daftar staff ─── */}
       {!showForm ? (
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
@@ -201,8 +400,11 @@ export default function AdminStaffPage() {
                 ) : filtered.length === 0 ? (
                   <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
                 ) : filtered.map((row) => (
-                  <tr key={row.id}>
-                    <td style={{ fontWeight: 700 }}>{row.name}</td>
+                  <tr key={row.id} style={{ opacity: row.deleted_at ? 0.6 : 1 }}>
+                    <td style={{ fontWeight: 700 }}>
+                      {row.name}
+                      {row.deleted_at && <span className="status-pill status-danger" style={{ fontSize: 9, marginLeft: 6 }}>Arsip</span>}
+                    </td>
                     <td>{outlets.find((o) => o.id === row.outlet_id)?.name || "—"}</td>
                     <td>{rupiah(row.salary_per_shift)}</td>
                     <td>{row.phone || "—"}</td>
@@ -211,11 +413,23 @@ export default function AdminStaffPage() {
                         {row.active ? "Aktif" : "Nonaktif"}
                       </span>
                     </td>
-                    <td style={{ display: "flex", gap: 6 }}>
-                      <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => startEdit(row)}>Edit</button>
-                      {row.active ? (
-                        <button className="btn btn-danger" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => deactivate(row.id, row.name)}>Nonaktif</button>
-                      ) : null}
+                    <td>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => startEdit(row)}>Edit</button>
+                        {row.active && (
+                          <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => deactivate(row.id, row.name)}>
+                            Nonaktif
+                          </button>
+                        )}
+                        <button
+                          className="btn btn-danger"
+                          style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 4 }}
+                          onClick={() => openDeleteModal(row.id)}
+                          title="Hapus atau arsipkan staff"
+                        >
+                          <Trash2 size={12} /> Hapus
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

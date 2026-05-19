@@ -40,6 +40,12 @@ type StatusPayload = {
   attendance: Attendance | null;
   reports: { type: "BUKA" | "TUTUP" }[];
   serverTime: string;
+  // PRD §8.5 — schedule-based fields
+  scheduleState?: string;
+  nextStep?: string;
+  requiredReports?: string[];
+  assignment?: { id: string; shift_type: string; status: string } | null;
+  staffDayoff?: { id: string; reason: string | null } | null;
 };
 
 type ReportCfgItem = {
@@ -167,6 +173,15 @@ export default function StaffHomePage() {
   const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
 
   const nextState = useMemo<NextState>(() => {
+    // PRD §8.5: Gunakan nextStep dari server jika tersedia (schedule-based)
+    const serverNext = status?.nextStep;
+    if (serverNext === "checkin") return "checkin";
+    if (serverNext === "report_buka") return "report_buka";
+    if (serverNext === "report_tutup") return "report_tutup";
+    if (serverNext === "checkout") return "checkout";
+    if (serverNext === "done") return "done";
+
+    // Fallback ke logic lama (backward compat untuk outlet tanpa assignments)
     const att = status?.attendance;
     if (!att?.checkin_time) return "checkin";
     if (!reportTypes.has("BUKA") && (status?.shift === 0 || status?.shift === 1)) return "report_buka";
@@ -503,8 +518,42 @@ export default function StaffHomePage() {
           </div>
         )}
 
-        {/* ═══ MAIN FLOW (not report state) ═══ */}
-        {!isReportState && (
+        {/* ═══ PRD §8.5 — State Dayoff ═══ */}
+        {!loading && status?.scheduleState === "dayoff" && (
+          <div className="status-card" style={{ background: "linear-gradient(135deg,#FEF2F2,#FECACA20)", border: "2px solid #FECACA" }}>
+            <div className="status-icon">🏖️</div>
+            <h2 className="status-title" style={{ color: "#DC2626" }}>Hari Ini Kamu Libur</h2>
+            <p className="status-sub">
+              {status?.staffDayoff?.reason ? `Alasan: ${status.staffDayoff.reason}` : "Kamu telah dijadwalkan libur hari ini."}
+            </p>
+            <p style={{ fontSize: 11, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>
+              Tombol absen tidak tersedia saat status libur.
+            </p>
+          </div>
+        )}
+
+        {/* ═══ PRD §8.5 — State Unassigned (outlet 2-shift, belum pilih jadwal) ═══ */}
+        {!loading && status?.scheduleState === "unassigned" && (
+          <div className="status-card sc-neutral">
+            <div className="status-icon">📋</div>
+            <h2 className="status-title">Belum Ada Jadwal</h2>
+            <p className="status-sub">Kamu belum memilih jadwal kerja untuk hari ini. Pilih jadwal di menu Jadwal sebelum bisa absen.</p>
+            <a
+              href="/app/schedule"
+              style={{
+                display: "inline-block", marginTop: 12,
+                background: "var(--primary)", color: "#fff",
+                borderRadius: 12, padding: "10px 24px",
+                fontSize: 13, fontWeight: 800, textDecoration: "none"
+              }}
+            >
+              Pilih Jadwal →
+            </a>
+          </div>
+        )}
+
+        {/* ═══ MAIN FLOW (not report state, not dayoff, not unassigned) ═══ */}
+        {!isReportState && status?.scheduleState !== "dayoff" && status?.scheduleState !== "unassigned" && (
           <>
             {/* Status card */}
             {loading ? (
