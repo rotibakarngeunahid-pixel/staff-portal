@@ -18,7 +18,9 @@ export default function StaffLoginPage() {
   const [pins, setPins] = useState<string[]>(Array(PIN_LEN).fill(""));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const pinRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pin = pins.join("");
   const ready = useMemo(() => Boolean(name) && pin.length === PIN_LEN, [name, pin]);
@@ -27,6 +29,12 @@ export default function StaffLoginPage() {
     apiFetch<{ ok: true; staff: StaffOption[] }>("/api/staff/list")
       .then((payload) => setStaff(payload.staff))
       .catch((err: Error) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
   }, []);
 
   function handlePinChange(index: number, value: string) {
@@ -70,18 +78,22 @@ export default function StaffLoginPage() {
     if (!ready || loading) return;
     setLoading(true);
     setError("");
+    setSuccess("");
     try {
       const payload = await apiFetch<{ ok: true; token: string }>("/api/auth/login", {
         method: "POST",
         body: { name, pin }
       });
       setStaffToken(payload.token);
-      router.replace("/app/home");
+      setSuccess("Login berhasil. Membuka halaman Beranda...");
+      redirectTimerRef.current = setTimeout(() => {
+        router.replace("/app/home");
+      }, 700);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login gagal");
+      setSuccess("");
       setPins(Array(PIN_LEN).fill(""));
       pinRefs.current[0]?.focus();
-    } finally {
       setLoading(false);
     }
   }
@@ -172,6 +184,11 @@ export default function StaffLoginPage() {
                 {error}
               </div>
             ) : null}
+            {success ? (
+              <div role="status" aria-live="polite" style={{ background: "var(--success-bg)", border: "1px solid var(--success-border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 800, color: "var(--success)", marginBottom: 16 }}>
+                {success}
+              </div>
+            ) : null}
 
             <button
               type="submit"
@@ -179,7 +196,7 @@ export default function StaffLoginPage() {
               disabled={!ready || loading}
               style={{ width: "100%", padding: "16px", fontSize: 15, borderRadius: 14 }}
             >
-              {loading ? "Memproses..." : "Masuk →"}
+              {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk →"}
             </button>
           </form>
         </div>

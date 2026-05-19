@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
@@ -14,10 +14,18 @@ export default function AdminLoginPage() {
   const [pins, setPins] = useState<string[]>(Array(PIN_LEN).fill(""));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const pinRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pin = pins.join("");
   const ready = pin.length >= 4;
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, []);
 
   function handlePinChange(index: number, value: string) {
     const digit = value.replace(/\D/g, "").slice(-1);
@@ -49,15 +57,19 @@ export default function AdminLoginPage() {
     if (!ready || loading) return;
     setLoading(true);
     setError("");
+    setSuccess("");
     try {
       const payload = await apiFetch<{ ok: true; token: string }>("/api/auth/admin-login", { method: "POST", body: { pin } });
       setAdminToken(payload.token);
-      router.replace("/admin/dashboard");
+      setSuccess("Login berhasil. Membuka dashboard...");
+      redirectTimerRef.current = setTimeout(() => {
+        router.replace("/admin/dashboard");
+      }, 700);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login gagal");
+      setSuccess("");
       setPins(Array(PIN_LEN).fill(""));
       pinRefs.current[0]?.focus();
-    } finally {
       setLoading(false);
     }
   }
@@ -104,6 +116,11 @@ export default function AdminLoginPage() {
             {error}
           </div>
         ) : null}
+        {success ? (
+          <div role="status" aria-live="polite" style={{ background: "var(--success-bg)", border: "1px solid var(--success-border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 800, color: "var(--success)", marginBottom: 16 }}>
+            {success}
+          </div>
+        ) : null}
 
         <button
           type="submit"
@@ -111,7 +128,7 @@ export default function AdminLoginPage() {
           disabled={!ready || loading}
           style={{ width: "100%", padding: 16, fontSize: 15, borderRadius: 14 }}
         >
-          {loading ? "Memproses..." : "Masuk Dashboard →"}
+          {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk Dashboard →"}
         </button>
       </form>
     </main>
