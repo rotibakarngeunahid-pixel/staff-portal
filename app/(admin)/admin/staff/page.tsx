@@ -48,6 +48,7 @@ export default function AdminStaffPage() {
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "inactive">("active");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [deleteModal, setDeleteModal] = useState<DeleteModal | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
@@ -89,6 +90,7 @@ export default function AdminStaffPage() {
     if (form.pin && !/^\d+$/.test(form.pin)) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
     if (form.pin && form.pin.length > 4) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
     if (!editing && form.pin.length < 4) { setMessage("PIN wajib diisi 4 digit angka untuk staff baru"); setMsgType("err"); return; }
+    setSaving(true);
     setMessage("Menyimpan..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/staff", {
@@ -101,6 +103,8 @@ export default function AdminStaffPage() {
       setMessage("Staff tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -364,11 +368,11 @@ export default function AdminStaffPage() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              <button type="submit" className="btn btn-primary">
-                {editing ? <Save size={15} /> : <Plus size={15} />}
-                {editing ? "Update Staff" : "Tambah Staff"}
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? null : (editing ? <Save size={15} /> : <Plus size={15} />)}
+                {saving ? "Menyimpan..." : (editing ? "Update Staff" : "Tambah Staff")}
               </button>
-              <button type="button" className="btn btn-soft" onClick={cancelEdit}>Batal</button>
+              <button type="button" className="btn btn-soft" onClick={cancelEdit} disabled={saving}>Batal</button>
             </div>
           </AdminSection>
         </form>

@@ -6,7 +6,7 @@ import {
   calculateSalary,
   dateTimeUtc,
   detectShift,
-  getEffectiveDate,
+  getWorkingDate,
   haversineDistance,
   isTimeWithinWindow,
   normalizeCurrency,
@@ -337,7 +337,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan untuk staff ini", 400, "NO_OUTLET");
 
-  const effective = stringBody(body, "date") || getEffectiveDate().date;
+  const effective = stringBody(body, "date") || getWorkingDate().date;
   const rawShift = detectShift(outlet);
   const cfg = await configMap(db);
 
@@ -493,7 +493,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
 
-  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
+  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
   // Use nullish coalescing to allow shift=0 (full shift) to pass through correctly
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
@@ -641,7 +641,7 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
 
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
-  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
+  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
   // Allow shift=0 (full shift) to pass — same fix as checkin
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
@@ -714,7 +714,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
 
   const type = reportType(body);
-  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getEffectiveDate().date;
+  const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
 
   const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
   const { data: checkinRows, error: attCheckError } = await db
@@ -1220,6 +1220,7 @@ async function adminStaff(db: Db, method: string, body: Body) {
       if (error) throw error;
       await db.from("shift_schedule").update({ staff_id: null, staff_name: null, status: "open" }).eq("staff_id", staffId).gte("date", today);
       await db.from("staff_shift_assignments").update({ status: "cancelled", cancelled_at: new Date().toISOString(), cancel_reason: "Staff dinonaktifkan", updated_at: new Date().toISOString() }).eq("staff_id", staffId).gte("date", today).in("status", ["confirmed", "admin_override", "auto_cover"]);
+      await db.from("staff_dayoff").update({ status: "cancelled", cancelled_at: new Date().toISOString(), cancel_reason: "Staff dinonaktifkan" }).eq("staff_id", staffId).eq("status", "active").gte("date", today);
       await logAudit(db, "admin_deactivate_staff", "Admin", { staffId, mode: "deactivate" });
       return ok({ deleted: true, mode: "deactivate" });
     }
@@ -1236,6 +1237,7 @@ async function adminStaff(db: Db, method: string, body: Body) {
       if (error) throw error;
       await db.from("shift_schedule").update({ staff_id: null, staff_name: null, status: "open" }).eq("staff_id", staffId).gte("date", today);
       await db.from("staff_shift_assignments").update({ status: "cancelled", cancelled_at: new Date().toISOString(), cancel_reason: "Staff diarsipkan", updated_at: new Date().toISOString() }).eq("staff_id", staffId).gte("date", today).in("status", ["confirmed", "admin_override", "auto_cover"]);
+      await db.from("staff_dayoff").update({ status: "cancelled", cancelled_at: new Date().toISOString(), cancel_reason: "Staff diarsipkan" }).eq("staff_id", staffId).eq("status", "active").gte("date", today);
       await logAudit(db, "admin_archive_staff", "Admin", { staffId, mode: "archive", deleteReason });
       return ok({ deleted: true, mode: "archive" });
     }
@@ -1409,7 +1411,7 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       original_final_salary: existing.original_final_salary ?? existing.final_salary
     };
     ["late_minutes", "deduction", "final_salary", "status", "paid_status"].forEach((key) => {
-      if (body[key] !== undefined && body[key] !== "") updates[key] = body[key];
+      if (body[key] !== undefined && body[key] !== null && body[key] !== "") updates[key] = body[key];
     });
     if (body.checkin_time) updates.checkin_time = dateTimeUtc(existing.date, String(body.checkin_time).slice(0, 5)).toISOString();
     if (body.checkout_time) updates.checkout_time = dateTimeUtc(existing.date, String(body.checkout_time).slice(0, 5)).toISOString();
@@ -2168,26 +2170,36 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     { count: repCount },
     { count: payCount },
     { count: schedCount },
-    { count: leaveCount }
+    { count: leaveCount },
+    { count: schedV1Count },
+    { count: sdCount }
   ] = await Promise.all([
     db.from("attendance").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("reports").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("payments").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("staff_shift_assignments").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
-    db.from("leave_requests").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
+    db.from("leave_requests").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
+    // shift_schedule dan staff_dayoff juga punya FK ke staff(id) tanpa CASCADE —
+    // harus dihitung agar hard delete tidak gagal dengan FK constraint error.
+    db.from("shift_schedule").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
+    db.from("staff_dayoff").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
   ]);
   const attendanceCount = attCount ?? 0;
   const reportCount = repCount ?? 0;
   const paymentCount = payCount ?? 0;
   const scheduleCount = schedCount ?? 0;
   const leaveCount2 = leaveCount ?? 0;
-  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2;
+  const shiftScheduleCount = schedV1Count ?? 0;
+  const staffDayoffCount = sdCount ?? 0;
+  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2 + shiftScheduleCount + staffDayoffCount;
   return {
     attendanceCount,
     reportCount,
     paymentCount,
     scheduleCount,
     leaveCount: leaveCount2,
+    shiftScheduleCount,
+    staffDayoffCount,
     totalDependencies,
     canHardDelete: totalDependencies === 0
   };

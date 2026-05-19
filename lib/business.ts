@@ -2,6 +2,10 @@ import type { Outlet } from "@/types/domain";
 
 export const APP_TIME_ZONE = "Asia/Jakarta";
 
+// Jam kerja baru dimulai setelah jam ini. Sebelumnya dianggap masih hari kerja sebelumnya.
+// Contoh: 00:01–02:59 WIB masih dianggap hari kerja tanggal sebelumnya.
+export const WORKING_DAY_CUTOFF_HOUR = 3;
+
 type DateParts = {
   year: string;
   month: string;
@@ -46,13 +50,20 @@ export function addDays(dateString: string, days: number) {
   return todayJakarta(date);
 }
 
-export function getEffectiveDate(now = new Date()) {
+/**
+ * Mengembalikan tanggal kerja efektif berdasarkan cutoff jam 03:00 WIB.
+ * Waktu 00:00–02:59 WIB masih dianggap bagian dari hari kerja sebelumnya.
+ */
+export function getWorkingDate(now = new Date()) {
   const hour = hourJakarta(now);
-  if (hour < 6) {
+  if (hour < WORKING_DAY_CUTOFF_HOUR) {
     return { date: addDays(todayJakarta(now), -1), usePrevDay: true };
   }
   return { date: todayJakarta(now), usePrevDay: false };
 }
+
+/** @deprecated Gunakan getWorkingDate() */
+export const getEffectiveDate = getWorkingDate;
 
 export function parseTimeToMinutes(time?: string | null) {
   if (!time) return null;
@@ -80,7 +91,8 @@ export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {
   const current = parseTimeToMinutes(timeJakarta(now)) ?? 0;
   const shift2Start = parseTimeToMinutes(outlet.shift2_start);
   if (shift2Start !== null && current >= shift2Start) return 2;
-  if (hourJakarta(now) < 6) return 2;
+  // Sebelum cutoff dianggap masih bagian dari shift 2 hari sebelumnya
+  if (hourJakarta(now) < WORKING_DAY_CUTOFF_HOUR) return 2;
   return 1;
 }
 
