@@ -17,6 +17,7 @@ export function StaffNav() {
   return (
     <nav
       className="bottom-nav"
+      aria-label="Navigasi staff"
       style={{ gridTemplateColumns: `repeat(${items.length}, 1fr)` }}
     >
       {items.map((item) => {
@@ -27,6 +28,7 @@ export function StaffNav() {
             key={item.href}
             href={item.href}
             className={`bottom-nav-item${active ? " active" : ""}`}
+            aria-current={active ? "page" : undefined}
           >
             <Icon size={20} aria-hidden="true" />
             <span>{item.label}</span>

@@ -503,7 +503,11 @@ export default function StaffHomePage() {
             color: "var(--danger)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
           }}>
             <span>{error}</span>
-            <button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}>
+            <button
+              onClick={() => setError("")}
+              aria-label="Tutup pesan error"
+              style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}
+            >
               <X size={16} />
             </button>
           </div>

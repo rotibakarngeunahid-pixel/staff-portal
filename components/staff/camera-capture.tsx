@@ -132,6 +132,7 @@ export function CameraCapture({
   const [errMsg, setErrMsg] = useState("");
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     startCamera();
@@ -142,6 +143,7 @@ export function CameraCapture({
   async function startCamera() {
     setPhase("starting");
     setErrMsg("");
+    setConfirming(false);
     setTorchOn(false);
     setTorchSupported(false);
     try {
@@ -214,10 +216,13 @@ export function CameraCapture({
 
   function retake() {
     setPreview("");
+    setConfirming(false);
     startCamera();
   }
 
   async function confirm() {
+    if (!preview || confirming) return;
+    setConfirming(true);
     const compressed = await compress(preview);
     onCapture(compressed);
     onCancel();
@@ -324,7 +329,7 @@ export function CameraCapture({
         {phase === "live" && (
           <>
             <button className="camera-ghost-btn" onClick={onCancel}>Batal</button>
-            <button className="camera-shutter" onClick={capture}>
+            <button className="camera-shutter" onClick={capture} aria-label="Ambil foto">
               <Camera size={28} color="#C0392B" />
             </button>
             <div style={{ width: 80 }} />
@@ -333,13 +338,13 @@ export function CameraCapture({
 
         {phase === "preview" && (
           <>
-            <button className="camera-ghost-btn" onClick={retake}>
+            <button className="camera-ghost-btn" onClick={retake} disabled={confirming}>
               <RefreshCw size={14} style={{ display: "inline", marginRight: 6 }} />
               Ulangi
             </button>
-            <button className="camera-confirm-btn" onClick={confirm}>
+            <button className="camera-confirm-btn" onClick={confirm} disabled={confirming}>
               <Check size={14} style={{ display: "inline", marginRight: 6 }} />
-              Gunakan Foto
+              {confirming ? "Memproses..." : "Gunakan Foto"}
             </button>
           </>
         )}

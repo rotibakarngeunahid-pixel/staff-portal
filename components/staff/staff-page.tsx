@@ -6,6 +6,8 @@ export function StaffPage({
   subtitle,
   children
 }: Readonly<{ title: string; subtitle?: string; children: React.ReactNode }>) {
+  const headerSubtitle = subtitle || title;
+
   return (
     <div className="mobile-frame">
       <header className="staff-hdr">
@@ -19,10 +21,11 @@ export function StaffPage({
         />
         <div className="staff-hdr-info">
           <h1>Roti Bakar Ngeunah</h1>
-          <p>{subtitle || title}</p>
+          <p title={headerSubtitle}>{headerSubtitle}</p>
         </div>
       </header>
-      <main style={{ flex: 1, padding: "14px 16px 90px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <main className="staff-main" aria-labelledby="staff-page-title">
+        <h2 id="staff-page-title" className="sr-only">{title}</h2>
         {children}
       </main>
       <StaffNav />

@@ -142,13 +142,15 @@ export default function StaffLoginPage() {
             </div>
 
             <div style={{ marginBottom: 20 }}>
-              <label className="label">PIN</label>
-              <div className="pin-row" onPaste={handlePinPaste}>
+              <label id="pin-label" className="label">PIN</label>
+              <div className="pin-row" role="group" aria-labelledby="pin-label" onPaste={handlePinPaste}>
                 {pins.map((digit, index) => (
                   <input
                     key={index}
                     ref={(el) => { pinRefs.current[index] = el; }}
                     className={`pin-input${digit ? " pin-filled" : ""}`}
+                    aria-label={`Digit PIN ${index + 1}`}
+                    name={`pin-${index + 1}`}
                     type="password"
                     inputMode="numeric"
                     maxLength={1}

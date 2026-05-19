@@ -204,15 +204,20 @@ export default function StaffSchedulePage() {
               <h2 style={{ fontSize: 17, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)" }}>
                 Ajukan Libur
               </h2>
-              <button onClick={() => setLeaveModal(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}>
+              <button
+                onClick={() => setLeaveModal(null)}
+                aria-label="Tutup form libur"
+                style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}
+              >
                 <X size={20} />
               </button>
             </div>
             <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
               Tanggal: <strong>{formatDateWithDayID(leaveModal.date)}</strong>
             </p>
-            <label className="label">Alasan libur (opsional)</label>
+            <label className="label" htmlFor="leaveReason">Alasan libur (opsional)</label>
             <textarea
+              id="leaveReason"
               className="field"
               rows={3}
               placeholder="Contoh: keperluan keluarga, sakit, dll."
@@ -221,8 +226,8 @@ export default function StaffSchedulePage() {
               style={{ resize: "none", marginBottom: 14 }}
             />
             <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={submitLeave}>
-                <CalendarMinus size={16} /> Ajukan Libur
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={submitLeave} disabled={Boolean(busy)}>
+                <CalendarMinus size={16} /> {busy ? "Memproses..." : "Ajukan Libur"}
               </button>
               <button className="btn btn-soft" style={{ flex: 1 }} onClick={() => setLeaveModal(null)}>Batal</button>
             </div>
@@ -245,6 +250,7 @@ export default function StaffSchedulePage() {
           <input
             className="field"
             type="date"
+            aria-label="Pilih awal minggu"
             value={weekStart}
             onChange={(e) => setWeekStart(e.target.value)}
           />
@@ -253,6 +259,7 @@ export default function StaffSchedulePage() {
             style={{ padding: "0 14px" }}
             onClick={load}
             disabled={loading || Boolean(busy)}
+            aria-label="Refresh jadwal"
           >
             <RefreshCw size={16} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
           </button>
@@ -275,7 +282,11 @@ export default function StaffSchedulePage() {
             display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
           }}>
             <span>⚠️ {error}</span>
-            <button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}>
+            <button
+              onClick={() => setError("")}
+              aria-label="Tutup pesan error"
+              style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}
+            >
               <X size={16} />
             </button>
           </div>
