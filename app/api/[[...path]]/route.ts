@@ -16,6 +16,12 @@ import {
   todayJakarta
 } from "@/lib/business";
 import { sendReportNotification } from "@/lib/email";
+import {
+  importAttendanceCsv,
+  isCsvUpload,
+  parseMapping,
+  previewAttendanceImport
+} from "@/lib/attendance-import";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { uploadImage } from "@/lib/storage";
 import type { ConfigMap, Outlet, SessionPayload, Staff } from "@/types/domain";
@@ -43,6 +49,13 @@ function ok<T extends Body>(data: T, init?: ResponseInit) {
 }
 
 function fail(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return NextResponse.json(
+      { ok: false, error: "Data request tidak valid", errorCode: "VALIDATION_ERROR" },
+      { status: 400 }
+    );
+  }
+
   const message = error instanceof Error ? error.message : "Terjadi kesalahan";
   const status = error instanceof HttpError ? error.status : 500;
   const errorCode = error instanceof HttpError ? error.code : "SERVER_ERROR";
@@ -207,29 +220,29 @@ async function dispatch(request: NextRequest, context: RouteContext) {
     const body = await readBody(request);
     const db = supabaseAdmin();
 
-    if (request.method === "GET" && path === "/staff/list") return getStaffList(db);
-    if (request.method === "POST" && path === "/auth/login") return staffLogin(db, body);
-    if (request.method === "POST" && path === "/auth/admin-login") return adminLogin(db, request, body);
+    if (request.method === "GET" && path === "/staff/list") return await getStaffList(db);
+    if (request.method === "POST" && path === "/auth/login") return await staffLogin(db, body);
+    if (request.method === "POST" && path === "/auth/admin-login") return await adminLogin(db, request, body);
     if (request.method === "POST" && path === "/auth/logout") return logout();
 
-    if (request.method === "GET" && path === "/attendance/status") return staffAttendanceStatus(db, request, body);
-    if (request.method === "POST" && path === "/attendance/checkin") return checkin(db, request, body);
-    if (request.method === "POST" && path === "/attendance/checkout") return checkout(db, request, body);
-    if (request.method === "GET" && path === "/reports/config") return reportsConfig(db, request, body);
-    if (request.method === "POST" && path === "/reports/submit") return submitReport(db, request, body);
-    if (request.method === "GET" && path === "/staff/payroll") return staffPayroll(db, request);
-    if (request.method === "GET" && path === "/staff/profile") return staffProfile(db, request);
-    if (request.method === "GET" && path === "/schedule/weekly") return staffWeeklySchedule(db, request, body);
-    if (request.method === "POST" && path === "/schedule/claim") return claimShift(db, request, body);
-    if (request.method === "POST" && path === "/schedule/cancel") return cancelShift(db, request, body);
-    if (request.method === "POST" && path === "/schedule/select") return selectShift(db, request, body);
-    if (request.method === "POST" && path === "/schedule/cancel-assignment") return cancelAssignment(db, request, body);
-    if (request.method === "POST" && path === "/schedule/leave") return requestLeave(db, request, body);
-    if (request.method === "DELETE" && path === "/schedule/leave") return cancelLeave(db, request, body);
+    if (request.method === "GET" && path === "/attendance/status") return await staffAttendanceStatus(db, request, body);
+    if (request.method === "POST" && path === "/attendance/checkin") return await checkin(db, request, body);
+    if (request.method === "POST" && path === "/attendance/checkout") return await checkout(db, request, body);
+    if (request.method === "GET" && path === "/reports/config") return await reportsConfig(db, request, body);
+    if (request.method === "POST" && path === "/reports/submit") return await submitReport(db, request, body);
+    if (request.method === "GET" && path === "/staff/payroll") return await staffPayroll(db, request);
+    if (request.method === "GET" && path === "/staff/profile") return await staffProfile(db, request);
+    if (request.method === "GET" && path === "/schedule/weekly") return await staffWeeklySchedule(db, request, body);
+    if (request.method === "POST" && path === "/schedule/claim") return await claimShift(db, request, body);
+    if (request.method === "POST" && path === "/schedule/cancel") return await cancelShift(db, request, body);
+    if (request.method === "POST" && path === "/schedule/select") return await selectShift(db, request, body);
+    if (request.method === "POST" && path === "/schedule/cancel-assignment") return await cancelAssignment(db, request, body);
+    if (request.method === "POST" && path === "/schedule/leave") return await requestLeave(db, request, body);
+    if (request.method === "DELETE" && path === "/schedule/leave") return await cancelLeave(db, request, body);
 
     if (path.startsWith("/admin/")) {
       await requireSession(request, "admin");
-      return adminDispatch(db, request.method, path, body);
+      return await adminDispatch(db, request.method, path, body);
     }
 
     throw new HttpError("Endpoint tidak ditemukan", 404, "NOT_FOUND");
@@ -265,54 +278,86 @@ async function getStaffList(db: Db) {
 }
 
 async function staffLogin(db: Db, body: Body) {
-  const schema = z.object({ name: z.string().min(1), pin: z.string().min(4).max(12) });
+  const schema = z
+    .object({
+      staffId: z.string().uuid().optional(),
+      name: z.string().min(1).optional(),
+      pin: z.string().min(4).max(12)
+    })
+    .refine((value) => Boolean(value.staffId || value.name), {
+      message: "Pilih nama staff"
+    });
   const parsed = schema.parse(body);
-  const { data, error } = await db
+
+  let query = db
     .from("staff")
     .select("*, outlets(*)")
-    .ilike("name", parsed.name)
-    .eq("active", true)
-    .maybeSingle();
+    .eq("active", true);
+
+  query = parsed.staffId ? query.eq("id", parsed.staffId) : query.ilike("name", parsed.name || "");
+
+  const { data, error } = await query.limit(2);
   if (error) throw error;
-  if (!data || data.pin_hash !== hashPin(parsed.pin)) {
-    throw new HttpError("Nama atau PIN salah", 401, "INVALID_LOGIN");
+  const staff = data && data.length === 1 ? data[0] : null;
+  if (!staff || staff.pin_hash !== hashPin(parsed.pin)) {
+    throw new HttpError("Nama atau PIN tidak sesuai", 401, "INVALID_STAFF_LOGIN");
   }
+
   const cfg = await configMap(db);
   const hours = configNumber(cfg, "token_hours", 8);
   const token = await createSessionToken(
-    { sub: data.id, role: "staff", name: data.name, outlet_id: data.outlet_id },
+    { sub: staff.id, role: "staff", name: staff.name, outlet_id: staff.outlet_id },
     hours
   );
-  await logAudit(db, "staff_login", data.name, { staffId: data.id });
-  const response = ok({ token, staff: publicStaff(data), outlet: data.outlets ? toOutlet(data.outlets) : null });
+  await logAudit(db, "staff_login", staff.name, { staffId: staff.id });
+  const response = ok({ token, staff: publicStaff(staff), outlet: staff.outlets ? toOutlet(staff.outlets) : null });
   setSessionCookie(response, "staff", token, hours);
   return response;
 }
 
-async function adminLogin(db: Db, request: NextRequest, body: Body) {
-  const pin = stringBody(body, "pin");
-  if (pin.length < 4) throw new HttpError("PIN admin minimal 4 digit");
-  const cfg = await configMap(db);
-  const maxAttempts = configNumber(cfg, "max_login_attempts", 5);
-  const lockoutMinutes = configNumber(cfg, "lockout_minutes", 15);
-  const since = new Date(Date.now() - lockoutMinutes * 60000).toISOString();
-  const { data: attempts, error: attemptsError } = await db
+async function countAdminFailedAttempts(db: Db, since: string) {
+  const { data: successRows, error: successError } = await db
+    .from("admin_login_attempts")
+    .select("attempt_at")
+    .eq("success", true)
+    .gte("attempt_at", since)
+    .order("attempt_at", { ascending: false })
+    .limit(1);
+
+  const effectiveSince = !successError && successRows?.[0]?.attempt_at ? successRows[0].attempt_at : since;
+  const { data, error } = await db
     .from("admin_login_attempts")
     .select("id")
     .eq("success", false)
-    .gte("attempt_at", since);
-  if (attemptsError) throw attemptsError;
-  if ((attempts || []).length >= maxAttempts) {
-    throw new HttpError(`Terlalu banyak percobaan. Coba lagi ${lockoutMinutes} menit lagi.`, 429, "LOCKED");
-  }
+    .gte("attempt_at", effectiveSince);
 
-  const expected = cfg.admin_pin_hash || hashPin("admin1234");
-  const success = expected === hashPin(pin);
+  if (error) return 0;
+  return (data || []).length;
+}
+
+async function recordAdminLoginAttempt(db: Db, request: NextRequest, success: boolean) {
   await db.from("admin_login_attempts").insert({
     success,
     ip_address: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "local"
   });
-  if (!success) throw new HttpError("PIN admin salah", 401, "INVALID_ADMIN_PIN");
+}
+
+async function adminLogin(db: Db, request: NextRequest, body: Body) {
+  const pin = stringBody(body, "pin");
+  if (pin.length < 4) throw new HttpError("Password admin minimal 4 karakter");
+  const cfg = await configMap(db);
+  const maxAttempts = configNumber(cfg, "max_login_attempts", 5);
+  const lockoutMinutes = configNumber(cfg, "lockout_minutes", 15);
+  const since = new Date(Date.now() - lockoutMinutes * 60000).toISOString();
+  const failedAttempts = await countAdminFailedAttempts(db, since);
+  if (failedAttempts >= maxAttempts) {
+    throw new HttpError(`Terlalu banyak percobaan. Coba lagi ${lockoutMinutes} menit lagi.`, 429, "LOCKED");
+  }
+
+  const expected = cfg.admin_pin_hash?.trim() ? cfg.admin_pin_hash : hashPin("admin1234");
+  const success = expected === hashPin(pin);
+  await recordAdminLoginAttempt(db, request, success).catch(() => undefined);
+  if (!success) throw new HttpError("Password salah, silakan coba lagi.", 401, "INVALID_ADMIN_PASSWORD");
 
   if (!cfg.admin_pin_hash) {
     await db.from("config").upsert({ key: "admin_pin_hash", value: expected });
@@ -476,8 +521,14 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   } else {
     // Fallback ke logic lama (backward compat untuk outlet yang belum pakai assignments)
     if (!attendance?.checkin_time) {
-      scheduleState = "unassigned";
-      nextStep = outlet.shift_mode === 2 ? "blocked" : "checkin";
+      if (outlet.shift_mode === 2) {
+        scheduleState = "unassigned";
+        nextStep = "blocked";
+      } else {
+        // Outlet 1 shift tidak perlu pilih jadwal manual.
+        scheduleState = "ready";
+        nextStep = "checkin";
+      }
     } else if (!attendance.checkout_time) {
       scheduleState = "ready";
       if ((effectiveShift === 0 || effectiveShift === 1) && !hasBuka) {
@@ -1176,6 +1227,8 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/staff") return adminStaff(db, method, body);
   if (path === "/admin/outlets") return adminOutlets(db, method, body);
   if (path === "/admin/attendance/bulk" && method === "POST") return adminAttendanceBulk(db, body);
+  if (path === "/admin/attendance-import/preview" && method === "POST") return adminAttendanceImportPreview(db, body);
+  if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
   if (path === "/admin/attendance") return adminAttendance(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
   if (path === "/admin/schedule") return adminSchedule(db, method, body);
@@ -1603,6 +1656,34 @@ async function adminAttendanceBulk(db: Db, body: Body) {
 
   await logAudit(db, "admin_bulk_attendance", "Admin", { count: rawEntries.length, successCount, errorCount });
   return ok({ results, successCount, errorCount });
+}
+
+async function adminAttendanceImportPreview(db: Db, body: Body) {
+  const file = body.file || body.csv;
+  if (!isCsvUpload(file)) throw new HttpError("Upload file CSV absensi terlebih dahulu", 400, "CSV_REQUIRED");
+  try {
+    const preview = await previewAttendanceImport(db, file, parseMapping(body.mapping));
+    return ok(preview);
+  } catch (err) {
+    throw new HttpError(err instanceof Error ? err.message : "Gagal membaca file CSV", 400, "CSV_PREVIEW_FAILED");
+  }
+}
+
+async function adminAttendanceImportCommit(db: Db, body: Body) {
+  const file = body.file || body.csv;
+  if (!isCsvUpload(file)) throw new HttpError("Upload file CSV absensi terlebih dahulu", 400, "CSV_REQUIRED");
+  try {
+    const result = await importAttendanceCsv(db, file, parseMapping(body.mapping));
+    await logAudit(db, "admin_import_attendance_csv", "Admin", {
+      totalRows: result.summary.totalRows,
+      imported: result.summary.imported,
+      failed: result.summary.failed,
+      duplicate: result.summary.duplicate
+    });
+    return ok(result);
+  } catch (err) {
+    throw new HttpError(err instanceof Error ? err.message : "Gagal import file CSV", 400, "CSV_IMPORT_FAILED");
+  }
 }
 
 async function adminPayroll(db: Db, method: string, body: Body) {

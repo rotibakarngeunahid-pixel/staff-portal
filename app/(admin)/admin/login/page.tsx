@@ -1,9 +1,11 @@
 "use client";
 
 import Image from "next/image";
+import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
+import { loginErrorMessage } from "@/lib/login-errors";
 import { useSessionStore } from "@/stores/session";
 
 export default function AdminLoginPage() {
@@ -40,7 +42,7 @@ export default function AdminLoginPage() {
         router.replace("/admin/dashboard");
       }, 700);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login gagal");
+      setError(loginErrorMessage(err, "admin"));
       setSuccess("");
       setPin("");
       inputRef.current?.focus();
@@ -72,7 +74,10 @@ export default function AdminLoginPage() {
             ref={inputRef}
             type={showPin ? "text" : "password"}
             value={pin}
-            onChange={(e) => setPin(e.target.value)}
+            onChange={(e) => {
+              setPin(e.target.value);
+              if (error) setError("");
+            }}
             autoComplete="current-password"
             disabled={loading}
             placeholder="Masukkan password"
@@ -86,34 +91,39 @@ export default function AdminLoginPage() {
               outline: "none",
               background: pin ? "#FFF5F5" : "var(--surface-soft)",
               boxSizing: "border-box",
-              letterSpacing: showPin ? "normal" : "0.2em",
+              letterSpacing: showPin ? "0" : "0.2em",
             }}
           />
           <button
             type="button"
             onClick={() => setShowPin((v) => !v)}
-            tabIndex={-1}
+            disabled={loading}
+            title={showPin ? "Sembunyikan password" : "Tampilkan password"}
             style={{
               position: "absolute",
-              right: 12,
+              right: 10,
               top: "50%",
               transform: "translateY(-50%)",
-              background: "none",
-              border: "none",
+              width: 36,
+              height: 36,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              border: "1px solid transparent",
+              borderRadius: 10,
               cursor: "pointer",
-              padding: 4,
               color: "var(--muted)",
-              fontSize: 18,
               lineHeight: 1,
             }}
             aria-label={showPin ? "Sembunyikan password" : "Tampilkan password"}
           >
-            {showPin ? "🙈" : "👁"}
+            {showPin ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
           </button>
         </div>
 
         {error ? (
-          <div style={{ background: "var(--danger-bg)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)", marginBottom: 16 }}>
+          <div role="alert" style={{ background: "var(--danger-bg)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)", marginBottom: 16 }}>
             {error}
           </div>
         ) : null}
@@ -129,7 +139,7 @@ export default function AdminLoginPage() {
           disabled={!ready || loading}
           style={{ width: "100%", padding: 16, fontSize: 15, borderRadius: 14 }}
         >
-          {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk Dashboard →"}
+          {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk Dashboard"}
         </button>
       </form>
     </main>

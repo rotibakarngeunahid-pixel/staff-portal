@@ -450,6 +450,7 @@ export default function StaffHomePage() {
     }];
   }, [isReportState, reportItems, reportItemsLoading, reportType]);
   const isFullShift = Boolean(status?.isFullShift);
+  const requiresScheduleSelection = status?.scheduleState === "unassigned" && status?.nextStep !== "checkin";
 
   /* ─── Checkin button state ─── */
   const gpsReady = gps.status === "ready";
@@ -538,7 +539,7 @@ export default function StaffHomePage() {
         )}
 
         {/* ═══ PRD §8.5 — State Unassigned (outlet 2-shift, belum pilih jadwal) ═══ */}
-        {!loading && status?.scheduleState === "unassigned" && (
+        {!loading && requiresScheduleSelection && (
           <div className="status-card sc-neutral">
             <div className="status-icon">📋</div>
             <h2 className="status-title">Belum Ada Jadwal</h2>
@@ -592,7 +593,7 @@ export default function StaffHomePage() {
         )}
 
         {/* ═══ MAIN FLOW (not report state, not dayoff, not unassigned, not waiting_shift1) ═══ */}
-        {!isReportState && status?.scheduleState !== "dayoff" && status?.scheduleState !== "unassigned" && status?.scheduleState !== "waiting_shift1" && (
+        {!isReportState && status?.scheduleState !== "dayoff" && !requiresScheduleSelection && status?.scheduleState !== "waiting_shift1" && (
           <>
             {/* Status card */}
             {loading ? (

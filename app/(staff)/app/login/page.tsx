@@ -1,9 +1,11 @@
 "use client";
 
 import Image from "next/image";
+import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
+import { loginErrorMessage } from "@/lib/login-errors";
 import { useSessionStore } from "@/stores/session";
 
 const PIN_LEN = 4;
@@ -14,8 +16,9 @@ export default function StaffLoginPage() {
   const router = useRouter();
   const setStaffToken = useSessionStore((state) => state.setStaffToken);
   const [staff, setStaff] = useState<StaffOption[]>([]);
-  const [name, setName] = useState("");
+  const [staffId, setStaffId] = useState("");
   const [pins, setPins] = useState<string[]>(Array(PIN_LEN).fill(""));
+  const [showPin, setShowPin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -23,12 +26,12 @@ export default function StaffLoginPage() {
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pin = pins.join("");
-  const ready = useMemo(() => Boolean(name) && pin.length === PIN_LEN, [name, pin]);
+  const ready = useMemo(() => Boolean(staffId) && pin.length === PIN_LEN, [staffId, pin]);
 
   useEffect(() => {
     apiFetch<{ ok: true; staff: StaffOption[] }>("/api/staff/list")
       .then((payload) => setStaff(payload.staff))
-      .catch((err: Error) => setError(err.message));
+      .catch((err: unknown) => setError(loginErrorMessage(err, "staff")));
   }, []);
 
   useEffect(() => {
@@ -42,6 +45,7 @@ export default function StaffLoginPage() {
     const next = [...pins];
     next[index] = digit;
     setPins(next);
+    if (error) setError("");
     if (digit && index < PIN_LEN - 1) {
       pinRefs.current[index + 1]?.focus();
     }
@@ -49,6 +53,7 @@ export default function StaffLoginPage() {
 
   function handlePinKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Backspace") {
+      if (error) setError("");
       if (pins[index]) {
         const next = [...pins];
         next[index] = "";
@@ -69,6 +74,7 @@ export default function StaffLoginPage() {
     const next = [...pins];
     for (let i = 0; i < text.length; i++) next[i] = text[i];
     setPins(next);
+    if (error) setError("");
     const focusIdx = Math.min(text.length, PIN_LEN - 1);
     pinRefs.current[focusIdx]?.focus();
   }
@@ -82,7 +88,7 @@ export default function StaffLoginPage() {
     try {
       const payload = await apiFetch<{ ok: true; token: string }>("/api/auth/login", {
         method: "POST",
-        body: { name, pin }
+        body: { staffId, pin }
       });
       setStaffToken(payload.token);
       setSuccess("Login berhasil. Membuka halaman Beranda...");
@@ -90,7 +96,7 @@ export default function StaffLoginPage() {
         router.replace("/app/home");
       }, 700);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login gagal");
+      setError(loginErrorMessage(err, "staff"));
       setSuccess("");
       setPins(Array(PIN_LEN).fill(""));
       pinRefs.current[0]?.focus();
@@ -137,8 +143,11 @@ export default function StaffLoginPage() {
               <select
                 id="staffName"
                 className="field"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={staffId}
+                onChange={(e) => {
+                  setStaffId(e.target.value);
+                  if (error) setError("");
+                }}
                 style={{
                   backgroundImage: `url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L6 6L11 1' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")`,
                   backgroundRepeat: "no-repeat",
@@ -148,13 +157,35 @@ export default function StaffLoginPage() {
               >
                 <option value="">Pilih nama kamu</option>
                 {staff.map((item) => (
-                  <option key={item.id} value={item.name}>{item.name}</option>
+                  <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </select>
             </div>
 
             <div style={{ marginBottom: 20 }}>
-              <label id="pin-label" className="label">PIN</label>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                <label id="pin-label" className="label" style={{ marginBottom: 0 }}>PIN</label>
+                <button
+                  type="button"
+                  onClick={() => setShowPin((value) => !value)}
+                  disabled={loading}
+                  title={showPin ? "Sembunyikan PIN" : "Tampilkan PIN"}
+                  aria-label={showPin ? "Sembunyikan PIN" : "Tampilkan PIN"}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    background: "#fff",
+                    color: "var(--muted)"
+                  }}
+                >
+                  {showPin ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                </button>
+              </div>
               <div className="pin-row" role="group" aria-labelledby="pin-label" onPaste={handlePinPaste}>
                 {pins.map((digit, index) => (
                   <input
@@ -163,7 +194,7 @@ export default function StaffLoginPage() {
                     className={`pin-input${digit ? " pin-filled" : ""}`}
                     aria-label={`Digit PIN ${index + 1}`}
                     name={`pin-${index + 1}`}
-                    type="password"
+                    type={showPin ? "text" : "password"}
                     inputMode="numeric"
                     maxLength={1}
                     value={digit}
@@ -180,7 +211,7 @@ export default function StaffLoginPage() {
             </div>
 
             {error ? (
-              <div style={{ background: "var(--danger-bg)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)", marginBottom: 16 }}>
+              <div role="alert" style={{ background: "var(--danger-bg)", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 700, color: "var(--danger)", marginBottom: 16 }}>
                 {error}
               </div>
             ) : null}
@@ -196,7 +227,7 @@ export default function StaffLoginPage() {
               disabled={!ready || loading}
               style={{ width: "100%", padding: "16px", fontSize: 15, borderRadius: 14 }}
             >
-              {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk →"}
+              {success ? "Login berhasil..." : loading ? "Memproses..." : "Masuk"}
             </button>
           </form>
         </div>

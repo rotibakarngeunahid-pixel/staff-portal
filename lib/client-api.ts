@@ -4,13 +4,27 @@ type ApiOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: Record<string, unknown> | FormData;
   role?: "staff" | "admin";
+  redirectOnUnauthorized?: boolean;
 };
 
 type ApiPayload = {
   ok?: boolean;
   error?: string;
+  errorCode?: string;
   [key: string]: unknown;
 };
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
 
 function tokenFor(role?: "staff" | "admin") {
   if (typeof window === "undefined" || !role) return null;
@@ -44,6 +58,15 @@ async function readPayload(response: Response): Promise<ApiPayload> {
   };
 }
 
+function isLoginEndpoint(path: string) {
+  const pathname = path.split("?")[0];
+  return pathname === "/api/auth/login" || pathname === "/api/auth/admin-login";
+}
+
+function errorCode(data: ApiPayload, fallback: string) {
+  return typeof data.errorCode === "string" && data.errorCode ? data.errorCode : fallback;
+}
+
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const method = options.method || "GET";
   const headers = new Headers();
@@ -66,22 +89,36 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(url, { method, headers, body, credentials: "include" });
+  let response: Response;
+  try {
+    response = await fetch(url, { method, headers, body, credentials: "include" });
+  } catch {
+    throw new ApiError("Tidak bisa terhubung ke server. Periksa koneksi lalu coba lagi.", 0, "NETWORK_ERROR");
+  }
   const data = (await readPayload(response)) as T & ApiPayload;
 
-  // Session expired or invalid — clear tokens and redirect to login
+  // Session expired or invalid: clear tokens and redirect, except for login validation itself.
   if (response.status === 401) {
-    if (typeof window !== "undefined") {
+    const shouldRedirect = options.redirectOnUnauthorized ?? !isLoginEndpoint(path);
+    if (shouldRedirect && typeof window !== "undefined") {
       localStorage.removeItem("rbn_staff_token");
       localStorage.removeItem("rbn_admin_token");
       const isAdmin = window.location.pathname.startsWith("/admin");
       window.location.replace(isAdmin ? "/admin/login" : "/app/login");
     }
-    throw new Error(data.error || "Sesi sudah kedaluwarsa, silakan login ulang");
+    throw new ApiError(
+      data.error || "Sesi sudah kedaluwarsa, silakan login ulang",
+      response.status,
+      errorCode(data, "UNAUTHORIZED")
+    );
   }
 
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || `Request gagal (${response.status})`);
+    throw new ApiError(
+      data.error || `Request gagal (${response.status})`,
+      response.status,
+      errorCode(data, response.ok ? "REQUEST_FAILED" : `HTTP_${response.status}`)
+    );
   }
   return data as T;
 }
