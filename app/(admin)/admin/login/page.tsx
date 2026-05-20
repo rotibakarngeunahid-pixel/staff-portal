@@ -6,51 +6,25 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
 
-const PIN_LEN = 6;
-
 export default function AdminLoginPage() {
   const router = useRouter();
   const setAdminToken = useSessionStore((state) => state.setAdminToken);
-  const [pins, setPins] = useState<string[]>(Array(PIN_LEN).fill(""));
+  const [pin, setPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const pinRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const pin = pins.join("");
   const ready = pin.length >= 4;
 
   useEffect(() => {
+    inputRef.current?.focus();
     return () => {
       if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
     };
   }, []);
-
-  function handlePinChange(index: number, value: string) {
-    const digit = value.replace(/\D/g, "").slice(-1);
-    const next = [...pins];
-    next[index] = digit;
-    setPins(next);
-    if (digit && index < PIN_LEN - 1) pinRefs.current[index + 1]?.focus();
-  }
-
-  function handlePinKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Backspace") {
-      if (pins[index]) { const next = [...pins]; next[index] = ""; setPins(next); }
-      else if (index > 0) { pinRefs.current[index - 1]?.focus(); const next = [...pins]; next[index - 1] = ""; setPins(next); }
-    }
-  }
-
-  function handlePinPaste(e: React.ClipboardEvent) {
-    e.preventDefault();
-    const text = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, PIN_LEN);
-    if (!text) return;
-    const next = [...pins];
-    for (let i = 0; i < text.length; i++) next[i] = text[i];
-    setPins(next);
-    pinRefs.current[Math.min(text.length, PIN_LEN - 1)]?.focus();
-  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -68,8 +42,8 @@ export default function AdminLoginPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login gagal");
       setSuccess("");
-      setPins(Array(PIN_LEN).fill(""));
-      pinRefs.current[0]?.focus();
+      setPin("");
+      inputRef.current?.focus();
       setLoading(false);
     }
   }
@@ -89,26 +63,53 @@ export default function AdminLoginPage() {
             style={{ borderRadius: 14, display: "block", margin: "0 auto 12px" }}
           />
           <h1 style={{ fontSize: 20, fontWeight: 900, marginBottom: 4 }}>Admin Portal</h1>
-          <p style={{ fontSize: 12, color: "var(--muted)" }}>Roti Bakar Ngeunah · Masukkan PIN Admin</p>
+          <p style={{ fontSize: 12, color: "var(--muted)" }}>Roti Bakar Ngeunah · Masukkan Password Admin</p>
         </div>
 
-        <label className="label" style={{ display: "block", marginBottom: 10 }}>PIN Admin</label>
-        <div className="pin-row" onPaste={handlePinPaste} style={{ marginBottom: 20 }}>
-          {pins.map((digit, index) => (
-            <input
-              key={index}
-              ref={(el) => { pinRefs.current[index] = el; }}
-              className={`pin-input${digit ? " pin-filled" : ""}`}
-              type="password"
-              inputMode="numeric"
-              maxLength={1}
-              value={digit}
-              onChange={(e) => handlePinChange(index, e.target.value)}
-              onKeyDown={(e) => handlePinKeyDown(index, e)}
-              autoComplete={index === 0 ? "current-password" : "off"}
-              disabled={loading}
-            />
-          ))}
+        <label className="label" style={{ display: "block", marginBottom: 8 }}>Password Admin</label>
+        <div style={{ position: "relative", marginBottom: 20 }}>
+          <input
+            ref={inputRef}
+            type={showPin ? "text" : "password"}
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            autoComplete="current-password"
+            disabled={loading}
+            placeholder="Masukkan password"
+            style={{
+              width: "100%",
+              padding: "14px 48px 14px 16px",
+              fontSize: 16,
+              fontWeight: 700,
+              borderRadius: 14,
+              border: "2px solid var(--border)",
+              outline: "none",
+              background: pin ? "#FFF5F5" : "var(--surface-soft)",
+              boxSizing: "border-box",
+              letterSpacing: showPin ? "normal" : "0.2em",
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPin((v) => !v)}
+            tabIndex={-1}
+            style={{
+              position: "absolute",
+              right: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              color: "var(--muted)",
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+            aria-label={showPin ? "Sembunyikan password" : "Tampilkan password"}
+          >
+            {showPin ? "🙈" : "👁"}
+          </button>
         </div>
 
         {error ? (

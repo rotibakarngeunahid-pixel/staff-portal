@@ -40,21 +40,21 @@ export default function AdminConfigPage() {
   }
 
   async function changePin() {
-    if (pin.length < 4) { setMessage("PIN minimal 4 digit"); setMsgType("err"); return; }
-    if (pin !== pinConfirm) { setMessage("Konfirmasi PIN tidak cocok"); setMsgType("err"); return; }
-    setMessage("Mengubah PIN..."); setMsgType("info");
+    if (pin.length < 4) { setMessage("Password minimal 4 karakter"); setMsgType("err"); return; }
+    if (pin !== pinConfirm) { setMessage("Konfirmasi password tidak cocok"); setMsgType("err"); return; }
+    setMessage("Mengubah password..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/config", { method: "PUT", role: "admin", body: { key: "admin_pin", value: pin } });
       setPin("");
       setPinConfirm("");
-      setMessage("PIN admin berhasil diubah ✓"); setMsgType("ok");
+      setMessage("Password admin berhasil diubah ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal mengubah PIN"); setMsgType("err");
+      setMessage(err instanceof Error ? err.message : "Gagal mengubah password"); setMsgType("err");
     }
   }
 
   return (
-    <AdminPage title="Pengaturan Sistem" subtitle="Keterlambatan, email, dan PIN admin">
+    <AdminPage title="Pengaturan Sistem" subtitle="Keterlambatan, email, dan password admin">
       <MsgBar message={message} type={msgType} />
 
       {/* General settings */}
@@ -77,36 +77,32 @@ export default function AdminConfigPage() {
         </button>
       </AdminSection>
 
-      {/* PIN change */}
-      <AdminSection title="Ganti PIN Admin" subtitle="PIN digunakan untuk login ke halaman admin">
+      {/* Password change */}
+      <AdminSection title="Ganti Password Admin" subtitle="Password digunakan untuk login ke halaman admin (huruf dan angka diperbolehkan)">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14, maxWidth: 480 }}>
           <div>
-            <label className="label">PIN Baru</label>
+            <label className="label">Password Baru</label>
             <input
               className="field"
               type="password"
-              inputMode="numeric"
-              placeholder="Min. 4 digit"
-              maxLength={6}
+              placeholder="Min. 4 karakter"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
             />
           </div>
           <div>
-            <label className="label">Konfirmasi PIN</label>
+            <label className="label">Konfirmasi Password</label>
             <input
               className="field"
               type="password"
-              inputMode="numeric"
-              placeholder="Ulangi PIN"
-              maxLength={6}
+              placeholder="Ulangi password"
               value={pinConfirm}
               onChange={(e) => setPinConfirm(e.target.value)}
             />
           </div>
         </div>
         <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={changePin}>
-          <KeyRound size={15} /> Ganti PIN
+          <KeyRound size={15} /> Ganti Password
         </button>
       </AdminSection>
     </AdminPage>
