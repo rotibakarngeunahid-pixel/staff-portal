@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { apiFetch, compressDataUrl } from "@/lib/client-api";
+import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
-import { haversineDistance } from "@/lib/business";
+import { haversineDistance, reportWindowStatus } from "@/lib/business";
+import { CapturedPhoto, revokePhoto } from "@/lib/client-image";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
 import { useSessionStore } from "@/stores/session";
@@ -77,7 +78,11 @@ type CameraSlot = {
   facing: "user" | "environment";
   title: string;
   allowTorch?: boolean;
-  onCapture: (dataUrl: string) => void;
+  onCapture: (photo: CapturedPhoto) => void;
+};
+
+type ReportPhoto = CapturedPhoto & {
+  label: string;
 };
 
 /* ─── Flow states ─── */
@@ -100,45 +105,6 @@ const GPS_LABEL: Record<GpsStatus, string> = {
   low_accuracy:     "Akurasi GPS terlalu rendah",
   timeout:          "GPS timeout, mencoba ulang otomatis..."
 };
-
-function timeStringJakarta(date: Date) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Jakarta",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).formatToParts(date);
-  const hour = parts.find((part) => part.type === "hour")?.value || "00";
-  const minute = parts.find((part) => part.type === "minute")?.value || "00";
-  return `${hour}:${minute}`;
-}
-
-function parseTimeMinutes(value?: string | null) {
-  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
-
-function isWithinTimeWindow(current: string, start?: string | null, end?: string | null) {
-  const c = parseTimeMinutes(current);
-  const s = parseTimeMinutes(start);
-  const e = parseTimeMinutes(end);
-  if (c === null || s === null || e === null) return true;
-  if (s <= e) return c >= s && c <= e;
-  return c >= s || c <= e;
-}
-
-function reportWindowFor(outlet: StatusPayload["outlet"] | undefined, type: "BUKA" | "TUTUP", now: Date) {
-  const start = type === "BUKA" ? outlet?.report_buka_start : outlet?.report_tutup_start;
-  const end = type === "BUKA" ? outlet?.report_buka_end : outlet?.report_tutup_end;
-  if (!start || !end) return { allowed: true, label: "" };
-  const startLabel = start.slice(0, 5);
-  const endLabel = end.slice(0, 5);
-  return {
-    allowed: isWithinTimeWindow(timeStringJakarta(now), start, end),
-    label: `${startLabel} - ${endLabel}`
-  };
-}
 
 export default function StaffHomePage() {
   const router = useRouter();
@@ -165,10 +131,24 @@ export default function StaffHomePage() {
   /* ─── Report section state ─── */
   const [reportItems, setReportItems] = useState<ReportCfgItem[]>([]);
   const [reportItemsLoading, setReportItemsLoading] = useState(false);
-  const [reportPhotos, setReportPhotos] = useState<Record<string, string>>({});
+  const [reportPhotos, setReportPhotos] = useState<Record<string, ReportPhoto>>({});
   const [reportBusy, setReportBusy] = useState(false);
+  const reportBusyRef = useRef(false);
+  const [reportBusyLabel, setReportBusyLabel] = useState("");
   const [reportError, setReportError] = useState("");
   const [clockNow, setClockNow] = useState(() => new Date());
+  const reportPhotosRef = useRef<Record<string, ReportPhoto>>({});
+
+  useEffect(() => {
+    reportPhotosRef.current = reportPhotos;
+  }, [reportPhotos]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(reportPhotosRef.current).forEach(revokePhoto);
+      reportPhotosRef.current = {};
+    };
+  }, []);
 
   /* ─── Derived ─── */
   const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
@@ -334,12 +314,29 @@ export default function StaffHomePage() {
     if (status?.outlet) startGpsWatch(status.outlet);
   }
 
+  function clearReportPhotos() {
+    setReportPhotos((current) => {
+      Object.values(current).forEach(revokePhoto);
+      reportPhotosRef.current = {};
+      return {};
+    });
+  }
+
+  function saveReportPhoto(label: string, photo: CapturedPhoto) {
+    setReportPhotos((current) => {
+      if (current[label]) revokePhoto(current[label]);
+      const next = { ...current, [label]: { ...photo, label } };
+      reportPhotosRef.current = next;
+      return next;
+    });
+  }
+
   /* ─── Load report config when entering report state ─── */
   useEffect(() => {
     if (nextState !== "report_buka" && nextState !== "report_tutup") return;
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
     setReportItemsLoading(true);
-    setReportPhotos({});
+    clearReportPhotos();
     setReportError("");
     apiFetch<{ ok: true; items: ReportCfgItem[] }>("/api/reports/config", { role: "staff", body: { type } })
       .then((p) => setReportItems(p.items))
@@ -352,31 +349,29 @@ export default function StaffHomePage() {
   function closeCamera() { setCamera(null); }
 
   /* ─── Checkin / Checkout ─── */
-  async function runAttendance(action: "checkin" | "checkout", selfieDataUrl: string) {
-    setBusy(action === "checkin" ? "Mengirim absen masuk..." : "Mengirim absen pulang...");
+  async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto) {
     setError("");
+    if (action === "checkin" && (gps.lat === null || gps.lng === null)) {
+      setError("Lokasi GPS belum siap. Tunggu hingga GPS ready lalu coba lagi.");
+      return;
+    }
+    setBusy(action === "checkin" ? "Mengunggah selfie absen masuk..." : "Mengunggah selfie absen pulang...");
     try {
-      const selfie = await compressDataUrl(selfieDataUrl);
+      const body = new FormData();
+      body.append("nonce", crypto.randomUUID());
+      body.append("selfie", selfie.blob, selfie.fileName);
+      if (status?.shift !== undefined) body.append("shift", String(status.shift));
+      if (status?.date) body.append("shiftDate", status.date);
 
       // Checkin uses the cached GPS fix — no re-fetch needed
       // Checkout does not require GPS (only server validates reports)
-      const body: Record<string, unknown> = {
-        nonce: crypto.randomUUID(),
-        selfie,
-        shift: status?.shift,
-        shiftDate: status?.date
-      };
       if (action === "checkin") {
-        if (gps.lat === null || gps.lng === null) {
-          setError("Lokasi GPS belum siap. Tunggu hingga GPS ready lalu coba lagi.");
-          setBusy("");
-          return;
-        }
-        body.lat = gps.lat;
-        body.lng = gps.lng;
-        body.accuracy = gps.accuracy;
+        body.append("lat", String(gps.lat));
+        body.append("lng", String(gps.lng));
+        body.append("accuracy", String(gps.accuracy));
       }
 
+      setBusy(action === "checkin" ? "Menyimpan absen masuk..." : "Menyimpan absen pulang...");
       await apiFetch(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       await load();
     } catch (err) {
@@ -388,10 +383,11 @@ export default function StaffHomePage() {
 
   /* ─── Submit report ─── */
   async function submitReport() {
+    if (reportBusyRef.current || loading || reportItemsLoading) return;
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
-    const windowState = reportWindowFor(status?.outlet, type, clockNow);
+    const windowState = reportWindowStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
     if (!windowState.allowed) {
-      setReportError(`Laporan ${type} hanya bisa dikirim pukul ${windowState.label}`);
+      setReportError(`Laporan ${type} hanya bisa dikirim antara ${windowState.label} WITA`);
       return;
     }
     const missingRequired = effectiveReportItems.filter((item) => item.required && !reportPhotos[item.label]);
@@ -399,30 +395,48 @@ export default function StaffHomePage() {
       setReportError(`Foto wajib belum lengkap: ${missingRequired.map((i) => i.label).join(", ")}`);
       return;
     }
+    if (effectiveReportItems.length === 0) {
+      setReportError("Konfigurasi laporan belum siap. Tunggu sebentar lalu coba lagi.");
+      return;
+    }
+    reportBusyRef.current = true;
     setReportBusy(true);
+    setReportBusyLabel("Menyiapkan foto...");
     setReportError("");
     try {
+      const body = new FormData();
+      body.append("nonce", crypto.randomUUID());
+      body.append("type", type);
+      if (status?.date) body.append("shiftDate", status.date);
+      if (status?.shift !== undefined) body.append("shift", String(status.shift));
+
+      const items = effectiveReportItems.map((item, index) => {
+        const photo = reportPhotos[item.label];
+        const field = `photo_${index}`;
+        if (photo) body.append(field, photo.blob, photo.fileName);
+        return {
+          label: item.label,
+          required: item.required,
+          photoField: photo ? field : ""
+        };
+      });
+      body.append("items", JSON.stringify(items));
+
+      setReportBusyLabel("Mengunggah foto laporan...");
       await apiFetch("/api/reports/submit", {
         method: "POST",
         role: "staff",
-        body: {
-          nonce: crypto.randomUUID(),
-          type,
-          shiftDate: status?.date,
-          shift: status?.shift,
-          items: effectiveReportItems.map((item) => ({
-            label: item.label,
-            photo: reportPhotos[item.label] || "",
-            required: item.required
-          }))
-        }
+        body
       });
-      setReportPhotos({});
+      clearReportPhotos();
+      setReportBusyLabel("Memuat ulang status...");
       await load();
     } catch (err) {
       setReportError(humanError(err));
     } finally {
+      reportBusyRef.current = false;
       setReportBusy(false);
+      setReportBusyLabel("");
     }
   }
 
@@ -438,7 +452,7 @@ export default function StaffHomePage() {
   const isReportState = nextState === "report_buka" || nextState === "report_tutup";
   const reportType = nextState === "report_buka" ? "BUKA" : "TUTUP";
   const reportTypeColor = reportType === "BUKA" ? "#2563EB" : "#7C3AED";
-  const reportWindow = reportWindowFor(outlet, reportType, clockNow);
+  const reportWindow = reportWindowStatus(outlet, reportType, clockNow);
   const effectiveReportItems = useMemo<ReportCfgItem[]>(() => {
     if (!isReportState || reportItemsLoading || reportItems.length > 0) return reportItems;
     return [{
@@ -464,6 +478,33 @@ export default function StaffHomePage() {
     low_accuracy:      "Akurasi GPS Rendah",
     timeout:           "GPS Timeout"
   }[gps.status];
+  const requiredReportPhotosComplete = effectiveReportItems.every((item) => !item.required || Boolean(reportPhotos[item.label]));
+  const reportPhotoDisabled = loading || reportItemsLoading || reportBusy || !reportWindow.allowed;
+  const reportSubmitDisabled =
+    loading || reportItemsLoading || reportBusy || !reportWindow.allowed ||
+    !requiredReportPhotosComplete || effectiveReportItems.length === 0;
+
+  function openReportCamera(item: ReportCfgItem) {
+    if (!reportWindow.allowed) {
+      setReportError(`Laporan ${reportType} hanya bisa dikirim antara ${reportWindow.label} WITA`);
+      return;
+    }
+    if (reportPhotoDisabled) return;
+    openCamera({
+      facing: "environment",
+      title: `Foto ${item.label}`,
+      allowTorch: true,
+      onCapture: (photo) => {
+        const latestWindow = reportWindowStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
+        if (!latestWindow.allowed) {
+          revokePhoto(photo);
+          setReportError(`Laporan ${reportType} hanya bisa dikirim antara ${latestWindow.label} WITA`);
+          return;
+        }
+        saveReportPhoto(item.label, photo);
+      }
+    });
+  }
 
   return (
     <>
@@ -486,12 +527,12 @@ export default function StaffHomePage() {
             className="btn btn-soft"
             style={{ flex: 1, fontSize: 12, padding: "9px 12px" }}
             onClick={load}
-            disabled={loading || Boolean(busy)}
+            disabled={loading || Boolean(busy) || reportBusy}
           >
             <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
             {loading ? "Memuat..." : "Refresh"}
           </button>
-          <button className="btn btn-soft" style={{ flex: 1, fontSize: 12, padding: "9px 12px" }} onClick={logout}>
+          <button className="btn btn-soft" style={{ flex: 1, fontSize: 12, padding: "9px 12px" }} onClick={logout} disabled={reportBusy}>
             <LogOut size={14} /> Keluar
           </button>
         </div>
@@ -750,7 +791,7 @@ export default function StaffHomePage() {
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Masuk",
-                    onCapture: (url) => { closeCamera(); runAttendance("checkin", url); }
+                    onCapture: (photo) => runAttendance("checkin", photo)
                   })}
                   disabled={checkinDisabled}
                 >
@@ -764,7 +805,7 @@ export default function StaffHomePage() {
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Pulang",
-                    onCapture: (url) => { closeCamera(); runAttendance("checkout", url); }
+                    onCapture: (photo) => runAttendance("checkout", photo)
                   })}
                   disabled={Boolean(busy)}
                 >
@@ -827,7 +868,16 @@ export default function StaffHomePage() {
               </div>
             )}
 
-            {!reportWindow.allowed ? (
+            {reportBusy && (
+              <div style={{
+                background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
+                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)"
+              }}>
+                {reportBusyLabel || "Memproses laporan..."}
+              </div>
+            )}
+
+            {!reportWindow.allowed && (
               <div style={{
                 background: "var(--warning-bg)", border: "1.5px solid var(--warning-border)",
                 borderRadius: 14, padding: "18px 16px", textAlign: "center"
@@ -837,15 +887,15 @@ export default function StaffHomePage() {
                   Belum Waktunya
                 </p>
                 <p style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
-                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim pada pukul{" "}
-                  <strong style={{ color: "var(--ink)" }}>{reportWindow.label}</strong>.
+                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara{" "}
+                  <strong style={{ color: "var(--ink)" }}>{reportWindow.label} WITA</strong>.
                 </p>
                 <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 8 }}>
                   Kembali ke halaman ini saat sudah waktunya.
                 </p>
               </div>
-            ) : (
-              <>
+            )}
+            <>
                 {/* Report items */}
                 {reportItemsLoading ? (
                   <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
@@ -874,18 +924,15 @@ export default function StaffHomePage() {
                           </p>
                         </div>
                         <button
-                          onClick={() => openCamera({
-                            facing: "environment",
-                            title: `📷 ${item.label}`,
-                            allowTorch: true,
-                            onCapture: (url) => { closeCamera(); setReportPhotos((cur) => ({ ...cur, [item.label]: url })); }
-                          })}
+                          onClick={() => openReportCamera(item)}
+                          disabled={reportPhotoDisabled}
                           style={{
                             display: "flex", alignItems: "center", gap: 6,
                             background: done ? "var(--success)" : reportTypeColor,
                             color: "#fff", border: "none", borderRadius: 10,
-                            padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer",
-                            fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0
+                            padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: reportPhotoDisabled ? "not-allowed" : "pointer",
+                            fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0,
+                            opacity: reportPhotoDisabled ? 0.48 : 1
                           }}
                         >
                           {done ? <CheckCircle2 size={14} /> : <Camera size={14} />}
@@ -946,7 +993,7 @@ export default function StaffHomePage() {
                       {done && (
                         <div style={{ marginTop: 8 }}>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={reportPhotos[item.label]} alt={item.label} className="report-photo-thumb" />
+                          <img src={reportPhotos[item.label]?.previewUrl} alt={item.label} className="report-photo-thumb" />
                         </div>
                       )}
                     </div>
@@ -956,15 +1003,14 @@ export default function StaffHomePage() {
                 {/* Submit */}
                 <button
                   className="btn btn-ok btn-action"
-                  disabled={reportBusy}
+                  disabled={reportSubmitDisabled}
                   onClick={submitReport}
                   style={{ marginTop: 4, fontSize: 15 }}
                 >
                   <Send size={18} />
-                  {reportBusy ? "Mengirim laporan..." : `Kirim Laporan ${reportType}`}
+                  {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType}`}
                 </button>
               </>
-            )}
           </div>
         )}
       </StaffPage>

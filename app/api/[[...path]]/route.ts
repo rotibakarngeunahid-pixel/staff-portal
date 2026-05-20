@@ -8,11 +8,10 @@ import {
   detectShift,
   getWorkingDate,
   haversineDistance,
-  isTimeWithinWindow,
   normalizeCurrency,
+  reportWindowStatus,
   sanitizePathSegment,
   shiftStartTime,
-  timeJakarta,
   todayJakarta
 } from "@/lib/business";
 import { sendReportNotification } from "@/lib/email";
@@ -32,6 +31,7 @@ export const dynamic = "force-dynamic";
 type Db = ReturnType<typeof supabaseAdmin>;
 type Body = Record<string, any>;
 type RouteContext = { params: Promise<{ path?: string[] }> };
+type SavedReportItem = { label: string; required: boolean; photo_url: string; submitted: boolean };
 
 class HttpError extends Error {
   status: number;
@@ -181,22 +181,18 @@ function reportType(body: Body) {
   return type as "BUKA" | "TUTUP";
 }
 
-function reportWindow(outlet: Outlet, type: "BUKA" | "TUTUP") {
-  const start = type === "BUKA" ? outlet.report_buka_start : outlet.report_tutup_start;
-  const end = type === "BUKA" ? outlet.report_buka_end : outlet.report_tutup_end;
-  return { start, end };
-}
-
 function assertReportWindow(outlet: Outlet, type: "BUKA" | "TUTUP") {
-  const { start, end } = reportWindow(outlet, type);
-  if (!start || !end) return;
-  const nowTime = timeJakarta();
-  if (isTimeWithinWindow(nowTime, start, end)) return;
+  const window = reportWindowStatus(outlet, type);
+  if (window.allowed) return;
   throw new HttpError(
-    `Laporan ${type} hanya bisa dikirim antara ${start.slice(0, 5)} - ${end.slice(0, 5)}`,
+    `Laporan ${type} hanya bisa dikirim antara ${window.label} WITA`,
     400,
     "OUTSIDE_REPORT_WINDOW"
   );
+}
+
+function isLegacySelfieReportItem(label: unknown) {
+  return /\bselfie\b/i.test(String(label || ""));
 }
 
 function parseItems(input: unknown): any[] {
@@ -211,6 +207,12 @@ function parseItems(input: unknown): any[] {
     }
   }
   return [];
+}
+
+function photoInputForItem(body: Body, item: any) {
+  const field = String(item?.photoField || item?.photo_field || "");
+  if (field && body[field]) return body[field];
+  return item?.photo;
 }
 
 async function dispatch(request: NextRequest, context: RouteContext) {
@@ -419,10 +421,9 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
 
   const { data: reports, error: reportsError } = await db
     .from("reports")
-    .select("*")
+    .select("type")
     .eq("outlet_id", outlet.id)
-    .eq("date", effective)
-    .order("submitted_at", { ascending: false });
+    .eq("date", effective);
   if (reportsError) throw reportsError;
 
   const scheduleShift = isFullShift ? (activeShift ?? 1) : (effectiveShift || 1);
@@ -809,7 +810,10 @@ async function reportsConfig(db: Db, request: NextRequest, body: Body) {
   if (type) query = query.eq("type", type);
   const { data, error } = await query;
   if (error) throw error;
-  return ok({ items: data || [] });
+  const items = session.role === "staff"
+    ? (data || []).filter((item: any) => !isLegacySelfieReportItem(item.label))
+    : data || [];
+  return ok({ items });
 }
 
 async function submitReport(db: Db, request: NextRequest, body: Body) {
@@ -824,7 +828,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
   const { data: checkinRows, error: attCheckError } = await db
     .from("attendance")
-    .select("id,selfie_in")
+    .select("id")
     .eq("staff_id", staff.id)
     .eq("date", date)
     .in("shift", allowedShifts)
@@ -837,7 +841,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
   assertReportWindow(outlet, type);
 
-  const inputItems = parseItems(body.items);
+  const inputItems = parseItems(body.items).filter((item) => !isLegacySelfieReportItem(item?.label));
 
   const { data: cfgItems, error: cfgError } = await db
     .from("report_cfg")
@@ -847,45 +851,44 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     .order("sort_order");
   if (cfgError) throw cfgError;
 
-  const savedItems = [];
-  for (const cfgItem of cfgItems || []) {
+  const effectiveCfgItems = (cfgItems || []).filter((item: any) => !isLegacySelfieReportItem(item.label));
+  const savedItems: SavedReportItem[] = await Promise.all(effectiveCfgItems.map(async (cfgItem: any) => {
     const submitted = inputItems.find((item) => String(item.label || "") === String(cfgItem.label));
-    if (cfgItem.required && !submitted?.photo) {
+    const photoInput = photoInputForItem(body, submitted);
+    if (cfgItem.required && !photoInput) {
       throw new HttpError(`Foto "${cfgItem.label}" wajib diupload`);
     }
-    const photoUrl = submitted?.photo
+    const photoUrl = photoInput
       ? await uploadImage(
           db,
           `reports/${outlet.id}/${date}/${type}/${sanitizePathSegment(cfgItem.label || "item")}.jpg`,
-          submitted.photo
+          photoInput
         )
       : "";
-    savedItems.push({
+    return {
       label: cfgItem.label,
       required: cfgItem.required,
       photo_url: photoUrl,
       submitted: Boolean(photoUrl)
-    });
-  }
+    };
+  }));
 
-  if (!(cfgItems || []).length) {
-    if (!inputItems.some((item) => item?.photo)) {
+  if (!effectiveCfgItems.length) {
+    if (!inputItems.some((item) => photoInputForItem(body, item))) {
       throw new HttpError("Minimal satu foto laporan wajib diupload");
     }
-    for (const item of inputItems) {
-      if (!item?.label || !item?.photo) continue;
+    const fallbackItems = await Promise.all(inputItems.map(async (item) => {
+      const photoInput = photoInputForItem(body, item);
+      if (!item?.label || !photoInput) return null;
       const photoUrl = await uploadImage(
         db,
         `reports/${outlet.id}/${date}/${type}/${sanitizePathSegment(String(item.label))}.jpg`,
-        item.photo
+        photoInput
       );
-      savedItems.push({ label: item.label, required: false, photo_url: photoUrl, submitted: true });
-    }
+      return { label: item.label, required: false, photo_url: photoUrl, submitted: true };
+    }));
+    savedItems.push(...fallbackItems.filter((item): item is SavedReportItem => Boolean(item)));
   }
-
-  const selfieUrl = body.selfie
-    ? await uploadImage(db, `reports/selfies/${outlet.id}/${date}_${type}.jpg`, body.selfie)
-    : String(checkinRows[0]?.selfie_in || "");
 
   const { data: report, error } = await db
     .from("reports")
@@ -898,7 +901,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
         date,
         type,
         items_json: savedItems,
-        selfie: selfieUrl,
+        selfie: null,
         submitted_at: new Date().toISOString()
       },
       { onConflict: "outlet_id,date,type" }
@@ -917,7 +920,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
       date,
       submitted_at: report.submitted_at,
       itemCount: savedItems.filter((item) => item.photo_url).length,
-      selfieUrl,
+      selfieUrl: null,
       items: savedItems,
       to: cfg.notification_email
     });

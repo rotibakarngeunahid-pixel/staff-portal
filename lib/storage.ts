@@ -41,13 +41,13 @@ export async function uploadImage(
     }
     file = new Blob([parsed.buffer], { type: parsed.contentType });
     contentType = parsed.contentType;
-  } else if (input instanceof File) {
+  } else if (input instanceof Blob) {
     if (input.size > 10 * 1024 * 1024) {
       throw new Error("Ukuran foto maksimal 10MB");
     }
     file = input;
     contentType = input.type || fallbackContentType;
-    fileName = input.name || fileName;
+    fileName = "name" in input && typeof input.name === "string" && input.name ? input.name : fileName;
   } else {
     return "";
   }

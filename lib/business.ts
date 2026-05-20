@@ -1,10 +1,17 @@
 import type { Outlet } from "@/types/domain";
 
 export const APP_TIME_ZONE = "Asia/Jakarta";
+export const REPORT_TIME_ZONE = "Asia/Makassar";
 
 // Jam kerja baru dimulai setelah jam ini. Sebelumnya dianggap masih hari kerja sebelumnya.
 // Contoh: 00:01–02:59 WIB masih dianggap hari kerja tanggal sebelumnya.
 export const WORKING_DAY_CUTOFF_HOUR = 3;
+export const DEFAULT_REPORT_WINDOWS = {
+  BUKA: { start: "09:00", end: "11:00" },
+  TUTUP: { start: "20:00", end: "01:00" }
+} as const;
+
+export type ReportType = "BUKA" | "TUTUP";
 
 type DateParts = {
   year: string;
@@ -15,9 +22,9 @@ type DateParts = {
   second: string;
 };
 
-function localParts(date = new Date()): DateParts {
+function localParts(date = new Date(), timeZone = APP_TIME_ZONE): DateParts {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIME_ZONE,
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -37,6 +44,11 @@ export function todayJakarta(date = new Date()) {
 
 export function timeJakarta(date = new Date()) {
   const p = localParts(date);
+  return `${p.hour}:${p.minute}`;
+}
+
+export function timeMakassar(date = new Date()) {
+  const p = localParts(date, REPORT_TIME_ZONE);
   return `${p.hour}:${p.minute}`;
 }
 
@@ -84,6 +96,40 @@ export function isTimeWithinWindow(current: string, start?: string | null, end?:
   if (c === null || s === null || e === null) return false;
   if (s <= e) return c >= s && c <= e;
   return c >= s || c <= e;
+}
+
+export function reportWindow(
+  outlet: Pick<
+    Outlet,
+    "report_buka_start" | "report_buka_end" | "report_tutup_start" | "report_tutup_end"
+  > | null | undefined,
+  type: ReportType
+) {
+  const configuredStart = type === "BUKA" ? outlet?.report_buka_start : outlet?.report_tutup_start;
+  const configuredEnd = type === "BUKA" ? outlet?.report_buka_end : outlet?.report_tutup_end;
+  const fallback = DEFAULT_REPORT_WINDOWS[type];
+  const start = configuredStart || fallback.start;
+  const end = configuredEnd || fallback.end;
+  return {
+    start,
+    end,
+    label: `${start.slice(0, 5)} - ${end.slice(0, 5)}`
+  };
+}
+
+export function reportWindowStatus(
+  outlet: Parameters<typeof reportWindow>[0],
+  type: ReportType,
+  now = new Date()
+) {
+  const window = reportWindow(outlet, type);
+  const current = timeMakassar(now);
+  return {
+    ...window,
+    current,
+    timeZone: REPORT_TIME_ZONE,
+    allowed: isTimeWithinWindow(current, window.start, window.end)
+  };
 }
 
 export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {

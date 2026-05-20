@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Camera, Check, Flashlight, FlashlightOff, RefreshCw, X } from "lucide-react";
+import { getVideoTrack, setTorch, stopMediaStream, supportsTorch } from "@/lib/camera";
+import { CapturedPhoto, photoFromCanvas, revokePhoto } from "@/lib/client-image";
 
 interface CameraCaptureProps {
   facing?: "user" | "environment";
@@ -10,52 +12,28 @@ interface CameraCaptureProps {
   watermark?: {
     outletName?: string | null;
   };
-  onCapture: (dataUrl: string) => void;
+  onCapture: (photo: CapturedPhoto) => void;
   onCancel: () => void;
 }
 
-type Phase = "starting" | "live" | "preview" | "error";
-type TorchTrack = MediaStreamTrack & {
-  getCapabilities?: () => MediaTrackCapabilities & { torch?: boolean };
-};
-
-async function compress(dataUrl: string, maxDim = 1400, quality = 0.82): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const scale = Math.max(img.width, img.height) > maxDim
-        ? maxDim / Math.max(img.width, img.height) : 1;
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { resolve(dataUrl); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL("image/jpeg", quality));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
+type Phase = "starting" | "live" | "processing" | "preview" | "error";
 
 function formatWatermarkTime(date: Date) {
   const dayDate = new Intl.DateTimeFormat("id-ID", {
-    timeZone: "Asia/Jakarta",
+    timeZone: "Asia/Makassar",
     weekday: "long",
     day: "2-digit",
     month: "long",
     year: "numeric"
   }).format(date);
   const time = new Intl.DateTimeFormat("id-ID", {
-    timeZone: "Asia/Jakarta",
+    timeZone: "Asia/Makassar",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false
   }).format(date).replace(/\./g, ":");
-  return `${dayDate}, ${time} WIB`;
+  return `${dayDate}, ${time} WITA`;
 }
 
 function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
@@ -117,6 +95,15 @@ function drawWatermark(
   ctx.restore();
 }
 
+function photoFileBaseName(value: string) {
+  const safe = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 42);
+  return `${safe || "foto"}-${Date.now()}`;
+}
+
 export function CameraCapture({
   facing = "user",
   title,
@@ -127,22 +114,31 @@ export function CameraCapture({
 }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const previewRef = useRef<CapturedPhoto | null>(null);
   const [phase, setPhase] = useState<Phase>("starting");
-  const [preview, setPreview] = useState("");
+  const [preview, setPreview] = useState<CapturedPhoto | null>(null);
   const [errMsg, setErrMsg] = useState("");
+  const [torchInfo, setTorchInfo] = useState("");
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     startCamera();
-    return () => stopCamera();
+    return () => {
+      stopCamera();
+      if (previewRef.current) {
+        revokePhoto(previewRef.current);
+        previewRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function startCamera() {
     setPhase("starting");
     setErrMsg("");
+    setTorchInfo("");
     setConfirming(false);
     setTorchOn(false);
     setTorchSupported(false);
@@ -156,9 +152,11 @@ export function CameraCapture({
         audio: false
       });
       streamRef.current = stream;
-      const track = stream.getVideoTracks()[0] as TorchTrack | undefined;
-      const capabilities = track?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
-      setTorchSupported(Boolean(allowTorch && facing === "environment" && capabilities?.torch));
+      const torchAvailable = facing === "environment" && supportsTorch(getVideoTrack(stream), allowTorch);
+      setTorchSupported(torchAvailable);
+      if (allowTorch && facing === "environment" && !torchAvailable) {
+        setTorchInfo("Senter tidak didukung di perangkat ini.");
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -172,32 +170,41 @@ export function CameraCapture({
   }
 
   function stopCamera() {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    const track = getVideoTrack(streamRef.current);
+    if (track && torchOn) setTorch(track, false).catch(() => undefined);
+    stopMediaStream(streamRef.current);
     streamRef.current = null;
     setTorchOn(false);
     setTorchSupported(false);
   }
 
   async function toggleTorch() {
-    const track = streamRef.current?.getVideoTracks()[0] as TorchTrack | undefined;
+    const track = getVideoTrack(streamRef.current);
     if (!track || !torchSupported) return;
     const next = !torchOn;
     try {
-      await track.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] });
+      await setTorch(track, next);
       setTorchOn(next);
+      setTorchInfo("");
     } catch {
-      setErrMsg("Senter tidak dapat diaktifkan di perangkat ini.");
+      setTorchInfo("Senter tidak dapat diaktifkan di perangkat ini.");
     }
   }
 
-  function capture() {
+  async function capture() {
     const video = videoRef.current;
     if (!video || phase !== "live") return;
+    setPhase("processing");
+    setErrMsg("");
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      setErrMsg("Gagal mengambil foto. Coba ulangi.");
+      setPhase("live");
+      return;
+    }
     if (facing === "user") {
       ctx.save();
       ctx.translate(canvas.width, 0);
@@ -208,23 +215,46 @@ export function CameraCapture({
       ctx.drawImage(video, 0, 0);
     }
     drawWatermark(ctx, canvas.width, canvas.height, watermark?.outletName);
-    const raw = canvas.toDataURL("image/jpeg", 0.9);
-    setPreview(raw);
-    setPhase("preview");
-    stopCamera();
+    try {
+      const photo = await photoFromCanvas(canvas, {
+        baseName: photoFileBaseName(title || (facing === "user" ? "selfie" : "foto")),
+        maxDimension: facing === "user" ? 1280 : 1600,
+        quality: facing === "user" ? 0.78 : 0.8,
+        preferredType: "image/webp"
+      });
+      if (previewRef.current) revokePhoto(previewRef.current);
+      previewRef.current = photo;
+      setPreview(photo);
+      setPhase("preview");
+      stopCamera();
+    } catch {
+      setErrMsg("Gagal memproses foto. Coba ambil ulang.");
+      setPhase("live");
+    }
   }
 
   function retake() {
-    setPreview("");
+    if (previewRef.current) revokePhoto(previewRef.current);
+    previewRef.current = null;
+    setPreview(null);
     setConfirming(false);
     startCamera();
   }
 
-  async function confirm() {
+  function confirm() {
     if (!preview || confirming) return;
     setConfirming(true);
-    const compressed = await compress(preview);
-    onCapture(compressed);
+    previewRef.current = null;
+    onCapture(preview);
+    onCancel();
+  }
+
+  function cancel() {
+    if (previewRef.current) {
+      revokePhoto(previewRef.current);
+      previewRef.current = null;
+    }
+    stopCamera();
     onCancel();
   }
 
@@ -259,7 +289,7 @@ export function CameraCapture({
             </button>
           )}
           <button
-            onClick={onCancel}
+            onClick={cancel}
             aria-label="Tutup kamera"
             style={{
               width: 34, height: 34, borderRadius: "50%", border: "none",
@@ -283,27 +313,27 @@ export function CameraCapture({
             style={{
               width: "100%",
               height: "100%",
-              objectFit: "cover",
+              objectFit: "contain",
               transform: isMirrored ? "scaleX(-1)" : "none",
-              opacity: phase === "live" ? 1 : 0,
+              opacity: phase === "live" || phase === "processing" ? 1 : 0,
               transition: "opacity 0.3s"
             }}
           />
         )}
 
-        {phase === "preview" && (
+        {phase === "preview" && preview && (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
-            src={preview}
+            src={preview.previewUrl}
             alt="preview"
             style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
           />
         )}
 
-        {phase === "starting" && (
+        {(phase === "starting" || phase === "processing") && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ color: "#fff", opacity: 0.6, fontSize: 13, fontWeight: 600 }}>
-              Membuka kamera...
+              {phase === "starting" ? "Membuka kamera..." : "Memproses foto..."}
             </div>
           </div>
         )}
@@ -322,14 +352,24 @@ export function CameraCapture({
             </button>
           </div>
         )}
+
+        {torchInfo && phase === "live" && (
+          <div style={{
+            position: "absolute", left: 16, right: 16, bottom: 14,
+            color: "#fff", background: "rgba(15,23,42,0.62)", border: "1px solid rgba(255,255,255,0.16)",
+            borderRadius: 12, padding: "8px 10px", fontSize: 12, fontWeight: 600, textAlign: "center"
+          }}>
+            {torchInfo}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
       <div className="camera-controls">
-        {phase === "live" && (
+        {(phase === "live" || phase === "processing") && (
           <>
-            <button className="camera-ghost-btn" onClick={onCancel}>Batal</button>
-            <button className="camera-shutter" onClick={capture} aria-label="Ambil foto">
+            <button className="camera-ghost-btn" onClick={cancel} disabled={phase === "processing"}>Batal</button>
+            <button className="camera-shutter" onClick={capture} aria-label="Ambil foto" disabled={phase === "processing"}>
               <Camera size={28} color="#C0392B" />
             </button>
             <div style={{ width: 80 }} />
