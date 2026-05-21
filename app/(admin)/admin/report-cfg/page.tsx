@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronUp, ImageIcon, Plus, Save, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, ImageIcon, Loader2, Plus, Save, Trash2, Upload } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
-import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
+import { apiFetch } from "@/lib/client-api";
+
+const PHOTO_UPLOAD_ENDPOINT =
+  process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
+  "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
 
 type Outlet = { id: string; name: string; active?: boolean };
 type Item = {
@@ -50,6 +54,7 @@ export default function AdminReportCfgPage() {
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [uploadingIndex, setUploadingIndex] = useState<number | null>(null);
 
   async function loadOutlets() {
     const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
@@ -102,7 +107,30 @@ export default function AdminReportCfgPage() {
 
   async function setExamplePhoto(index: number, file?: File) {
     if (!file) return;
-    update(index, { example_photo: await dataUrlFromFile(file) });
+    setUploadingIndex(index);
+    setMessage("Mengunggah foto contoh..."); setMsgType("info");
+    try {
+      const fd = new FormData();
+      fd.append("foto", file, file.name);
+      let res: Response;
+      try {
+        res = await fetch(PHOTO_UPLOAD_ENDPOINT, { method: "POST", body: fd });
+      } catch {
+        throw new Error("Upload gagal. Pastikan koneksi internet stabil lalu coba lagi.");
+      }
+      let result: { success?: boolean; foto_url?: string; error?: string } | null = null;
+      try { result = await res.json(); } catch { /* ignore */ }
+      if (!res.ok || !result?.success || !result.foto_url) {
+        throw new Error(result?.error || "Upload foto contoh gagal. Coba lagi.");
+      }
+      // Simpan URL hasil upload, kosongkan example_photo agar backend tidak re-upload
+      update(index, { example_photo: "", example_photo_url: result.foto_url });
+      setMessage("Foto contoh berhasil diunggah ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Upload gagal. Coba lagi."); setMsgType("err");
+    } finally {
+      setUploadingIndex(null);
+    }
   }
 
   function addItem() {
@@ -367,9 +395,13 @@ export default function AdminReportCfgPage() {
                       <ImageIcon size={20} style={{ color: "var(--muted-light)" }} />
                     </div>
                   )}
-                  <label className="btn btn-soft" style={{ fontSize: 11, padding: "6px 12px", cursor: "pointer" }}>
-                    <Upload size={12} /> {preview ? "Ubah" : "Upload"}
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => setExamplePhoto(index, e.target.files?.[0])} />
+                  <label
+                    className="btn btn-soft"
+                    style={{ fontSize: 11, padding: "6px 12px", cursor: uploadingIndex === index ? "wait" : "pointer", opacity: uploadingIndex === index ? 0.6 : 1 }}
+                  >
+                    {uploadingIndex === index ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Upload size={12} />}
+                    {uploadingIndex === index ? "Mengunggah..." : preview ? "Ubah" : "Upload"}
+                    <input type="file" accept="image/*" className="hidden" disabled={uploadingIndex !== null} onChange={(e) => setExamplePhoto(index, e.target.files?.[0])} />
                   </label>
                   {preview ? (
                     <button type="button" style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", background: "none", border: "none", cursor: "pointer" }}
@@ -403,8 +435,8 @@ export default function AdminReportCfgPage() {
             className="btn btn-primary"
             style={{ fontSize: 13 }}
             onClick={save}
-            disabled={hasErrors || items.length === 0}
-            title={hasErrors ? "Perbaiki error terlebih dahulu" : ""}
+            disabled={hasErrors || items.length === 0 || uploadingIndex !== null}
+            title={uploadingIndex !== null ? "Tunggu upload foto selesai" : hasErrors ? "Perbaiki error terlebih dahulu" : ""}
           >
             <Save size={15} /> Simpan Konfigurasi
           </button>

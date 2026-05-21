@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ImageIcon, RefreshCw, Save } from "lucide-react";
+import { ImageIcon, Loader2, RefreshCw, Save } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, rupiah } from "@/lib/format";
+
+const PHOTO_UPLOAD_ENDPOINT =
+  process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
+  "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
 
 type PaymentRecord = {
   id: string;
@@ -33,6 +37,7 @@ export default function AdminPayrollPage() {
   const [form, setForm] = useState({ dateFrom: "", dateTo: "", amount: "", note: "" });
   const [proof, setProof] = useState<string>("");
   const [proofName, setProofName] = useState("");
+  const [proofUploading, setProofUploading] = useState(false);
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [loading, setLoading] = useState(true);
@@ -65,9 +70,26 @@ export default function AdminPayrollPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setProofName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => setProof(ev.target?.result as string ?? "");
-    reader.readAsDataURL(file);
+    setProofUploading(true);
+    setMessage("Mengunggah bukti pembayaran..."); setMsgType("info");
+    const fd = new FormData();
+    fd.append("foto", file, file.name);
+    fetch(PHOTO_UPLOAD_ENDPOINT, { method: "POST", body: fd })
+      .then((res) => res.json())
+      .then((result: { success?: boolean; foto_url?: string; error?: string }) => {
+        if (result?.success && result.foto_url) {
+          setProof(result.foto_url);
+          setMessage("Bukti berhasil diunggah ✓"); setMsgType("ok");
+        } else {
+          throw new Error(result?.error || "Upload bukti gagal");
+        }
+      })
+      .catch((err: unknown) => {
+        setProof(""); setProofName("");
+        if (fileRef.current) fileRef.current.value = "";
+        setMessage(err instanceof Error ? err.message : "Upload bukti gagal. Coba lagi."); setMsgType("err");
+      })
+      .finally(() => setProofUploading(false));
   }
 
   async function pay(event: React.FormEvent) {
@@ -208,13 +230,14 @@ export default function AdminPayrollPage() {
                 display: "inline-flex", alignItems: "center", gap: 6,
                 padding: "8px 14px", borderRadius: 10, border: "1.5px dashed var(--border)",
                 background: "var(--surface-soft)", fontSize: 12, fontWeight: 600, color: "var(--muted)",
-                cursor: "pointer"
+                cursor: proofUploading ? "wait" : "pointer",
+                opacity: proofUploading ? 0.6 : 1
               }}>
-                <ImageIcon size={14} />
-                {proofName || "Pilih gambar..."}
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onProofChange} />
+                {proofUploading ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <ImageIcon size={14} />}
+                {proofUploading ? "Mengunggah..." : proofName || "Pilih gambar..."}
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} disabled={proofUploading} onChange={onProofChange} />
               </label>
-              {proof && (
+              {proof && !proofUploading && (
                 <button
                   type="button"
                   onClick={() => { setProof(""); setProofName(""); if (fileRef.current) fileRef.current.value = ""; }}
@@ -224,13 +247,14 @@ export default function AdminPayrollPage() {
                 </button>
               )}
             </div>
-            {proof && (
+            {proof && !proofUploading && (
               <p style={{ fontSize: 11, color: "var(--success)", marginTop: 6, fontWeight: 600 }}>
-                ✓ Bukti dipilih — akan diunggah bersama pembayaran
+                ✓ Bukti berhasil diunggah
               </p>
             )}
           </div>
-          <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}>
+          <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={proofUploading}
+            title={proofUploading ? "Tunggu upload bukti selesai" : ""}>
             <Save size={15} /> Proses Bayar
           </button>
         </form>
