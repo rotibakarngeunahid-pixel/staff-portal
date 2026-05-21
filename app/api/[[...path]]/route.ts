@@ -984,6 +984,13 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
         })
       )
     : false;
+  const earlyMinutes = Math.max(0, Math.round((start.getTime() - now.getTime()) / 60000));
+  const praiseMessage = earlyMinutes >= 30
+    ? `Wow, kamu datang ${earlyMinutes} menit lebih awal! Rajin banget, semangat terus ya! 🌟`
+    : earlyMinutes >= 1
+    ? `Keren! Kamu datang ${earlyMinutes} menit lebih awal. Tetap semangat! 👍`
+    : null;
+
   return ok({
     attendance: inserted,
     checkin_time: now.toISOString(),
@@ -992,6 +999,8 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     final_salary: salary.finalSalary,
     gps_low_accuracy: gpsLowAccuracy,
     distance_m: Math.round(distance),
+    early_minutes: earlyMinutes,
+    praise_message: praiseMessage,
     emailSent,
     lateEmailSent,
     fullShiftEmailSent

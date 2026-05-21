@@ -240,6 +240,7 @@ export default function StaffHomePage() {
 
   const [camera, setCamera] = useState<CameraSlot | null>(null);
   const attendanceBusyRef = useRef(false);
+  const [praiseMessage, setPraiseMessage] = useState("");
 
   /* ─── Report section state ─── */
   const [reportItems, setReportItems] = useState<ReportCfgItem[]>([]);
@@ -465,7 +466,8 @@ export default function StaffHomePage() {
       body.append("lng", String(gps.lng));
       body.append("accuracy", String(gps.accuracy));
       setBusy(action === "checkin" ? "Menyimpan absen masuk..." : "Menyimpan absen pulang...");
-      await apiFetch(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
+      const result = await apiFetch<{ ok: true; praise_message?: string | null }>(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
+      if (action === "checkin" && result.praise_message) setPraiseMessage(result.praise_message);
       await load();
     } catch (err) {
       setError(humanError(err));
@@ -760,6 +762,28 @@ export default function StaffHomePage() {
                 <p className="status-sub">{sc.sub}</p>
               </div>
             ) : null}
+
+            {/* Banner pujian masuk lebih awal */}
+            {!loading && praiseMessage && (
+              <div style={{
+                background: "linear-gradient(135deg,#F0FDF4,#DCFCE7)",
+                border: "1.5px solid #86EFAC",
+                borderRadius: 12, padding: "12px 14px",
+                display: "flex", alignItems: "center", gap: 10
+              }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>🎉</span>
+                <p style={{ fontSize: 13, fontWeight: 700, color: "#15803D", margin: 0, lineHeight: 1.5 }}>
+                  {praiseMessage}
+                </p>
+                <button
+                  onClick={() => setPraiseMessage("")}
+                  style={{ marginLeft: "auto", background: "none", border: "none", color: "#15803D", cursor: "pointer", flexShrink: 0, padding: 4 }}
+                  aria-label="Tutup"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
 
             {/* Full shift info banner */}
             {isFullShift && !loading && (
