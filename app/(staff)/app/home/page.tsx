@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
+import { Camera, CheckCircle2, Clock, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
-import { haversineDistance, reportWindowStatus } from "@/lib/business";
+import { haversineDistance, isCheckoutTimeReached, parseTimeToMinutes, reportWindowStatus, shiftEndTime, timeMakassar } from "@/lib/business";
 import { CapturedPhoto, revokePhoto } from "@/lib/client-image";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
@@ -19,20 +19,26 @@ type Attendance = {
   flags: string | null;
 };
 
+type OutletInfo = {
+  name: string;
+  radius_m: number;
+  shift_mode: number;
+  lat: number;
+  lng: number;
+  shift1_start: string | null;
+  shift1_end: string | null;
+  shift2_start: string | null;
+  shift2_end: string | null;
+  report_buka_start: string | null;
+  report_buka_end: string | null;
+  report_tutup_start: string | null;
+  report_tutup_end: string | null;
+};
+
 type StatusPayload = {
   ok: true;
   staff: { name: string };
-  outlet: {
-    name: string;
-    radius_m: number;
-    shift_mode: number;
-    lat: number;
-    lng: number;
-    report_buka_start: string | null;
-    report_buka_end: string | null;
-    report_tutup_start: string | null;
-    report_tutup_end: string | null;
-  };
+  outlet: OutletInfo;
   date: string;
   shift: number;
   isFullShift?: boolean;
@@ -41,7 +47,6 @@ type StatusPayload = {
   attendance: Attendance | null;
   reports: { type: "BUKA" | "TUTUP" }[];
   serverTime: string;
-  // PRD §8.5 — schedule-based fields
   scheduleState?: string;
   nextStep?: string;
   requiredReports?: string[];
@@ -73,7 +78,6 @@ type GpsState = {
   lng: number | null;
 };
 
-/* ─── Camera slot descriptor ─── */
 type CameraSlot = {
   facing: "user" | "environment";
   title: string;
@@ -81,11 +85,7 @@ type CameraSlot = {
   onCapture: (photo: CapturedPhoto) => void;
 };
 
-type ReportPhoto = CapturedPhoto & {
-  label: string;
-};
-
-/* ─── Flow states ─── */
+type ReportPhoto = CapturedPhoto & { label: string };
 type NextState = "checkin" | "report_buka" | "report_tutup" | "checkout" | "done";
 
 const STATE_CONFIG: Record<NextState, { emoji: string; title: string; sub: string; cls: string }> = {
@@ -98,7 +98,7 @@ const STATE_CONFIG: Record<NextState, { emoji: string; title: string; sub: strin
 
 const GPS_LABEL: Record<GpsStatus, string> = {
   unsupported:      "GPS tidak didukung browser ini",
-  permission_denied: "Izin lokasi ditolak - buka pengaturan browser",
+  permission_denied: "Izin lokasi ditolak — buka pengaturan browser",
   locating:         "Mendeteksi lokasi...",
   ready:            "Lokasi terdeteksi",
   outside_radius:   "Di luar area outlet",
@@ -106,11 +106,116 @@ const GPS_LABEL: Record<GpsStatus, string> = {
   timeout:          "GPS timeout, mencoba ulang otomatis..."
 };
 
+/* ─── Realtime Guide ─── */
+function RealtimeGuide({
+  status, nextState, checkoutAllowed, checkoutBlockedMsg, reportWindow, clockNow
+}: {
+  status: StatusPayload | null;
+  nextState: NextState;
+  checkoutAllowed: boolean;
+  checkoutBlockedMsg: string;
+  reportWindow: { allowed: boolean; label: string; start: string; end: string };
+  clockNow: Date;
+}) {
+  if (!status) return null;
+
+  const shift = status.shift;
+  const shiftLabel = shift === 0 ? "Full Shift" : `Shift ${shift}`;
+  const assignment = status.assignment;
+  const shiftType = assignment?.shift_type || (shift === 0 ? "FULL_SHIFT" : shift === 1 ? "SHIFT_1" : "SHIFT_2");
+  const isFullShift = shiftType === "FULL_SHIFT" || shift === 0;
+
+  // Panduan berdasarkan kondisi saat ini
+  let icon = "ℹ️";
+  let color = "var(--primary)";
+  let bg = "var(--primary-bg, #EEF2FF)";
+  let border = "var(--primary-border, #C7D2FE)";
+  let message = "";
+
+  if (nextState === "checkin") {
+    icon = "👋";
+    color = "#2563EB";
+    bg = "#EFF6FF";
+    border = "#BFDBFE";
+    if (isFullShift) {
+      message = `Anda bertugas Full Shift hari ini. Urutan tugas: Absen Masuk → Laporan Buka Toko → Laporan Tutup Toko → Absen Keluar.`;
+    } else if (shiftType === "SHIFT_1") {
+      const endMsg = status.outlet?.shift1_end ? ` Shift selesai pukul ${status.outlet.shift1_end.slice(0,5)} WITA.` : "";
+      message = `Anda bertugas Shift 1.${endMsg} Setelah absen masuk, isi Laporan Buka Toko, lalu absen keluar.`;
+    } else if (shiftType === "SHIFT_2") {
+      const endMsg = status.outlet?.shift2_end ? ` Shift selesai pukul ${status.outlet.shift2_end.slice(0,5)} WITA.` : "";
+      message = `Anda bertugas Shift 2.${endMsg} Setelah absen masuk, isi Laporan Tutup Toko, lalu absen keluar.`;
+    } else {
+      message = "Silakan absen masuk terlebih dahulu untuk memulai shift.";
+    }
+  } else if (nextState === "report_buka") {
+    icon = "🌅";
+    color = "#1D4ED8";
+    bg = "#EFF6FF";
+    border = "#BFDBFE";
+    if (!reportWindow.allowed) {
+      message = `Laporan Buka Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
+      icon = "⏰";
+      color = "#D97706";
+      bg = "#FFFBEB";
+      border = "#FDE68A";
+    } else {
+      message = "Anda sudah absen masuk. Langkah berikutnya: isi Laporan Buka Toko.";
+    }
+  } else if (nextState === "report_tutup") {
+    icon = "🌙";
+    color = "#6D28D9";
+    bg = "#F5F3FF";
+    border = "#DDD6FE";
+    if (!reportWindow.allowed) {
+      message = `Laporan Tutup Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
+      icon = "⏰";
+      color = "#D97706";
+      bg = "#FFFBEB";
+      border = "#FDE68A";
+    } else if (isFullShift) {
+      message = "Laporan Buka Toko sudah terkirim. Sekarang isi Laporan Tutup Toko sebelum absen keluar.";
+    } else {
+      message = "Anda sudah absen masuk. Langkah berikutnya: isi Laporan Tutup Toko.";
+    }
+  } else if (nextState === "checkout") {
+    if (!checkoutAllowed) {
+      icon = "⏰";
+      color = "#D97706";
+      bg = "#FFFBEB";
+      border = "#FDE68A";
+      message = checkoutBlockedMsg || "Absen keluar belum tersedia. Tunggu hingga jam shift selesai.";
+    } else {
+      icon = "✅";
+      color = "#16A34A";
+      bg = "#F0FDF4";
+      border = "#BBF7D0";
+      message = "Semua laporan sudah terkirim. Silakan lakukan absen keluar saat GPS siap.";
+    }
+  } else if (nextState === "done") {
+    return null; // Done state tidak perlu guide
+  }
+
+  if (!message) return null;
+
+  return (
+    <div style={{
+      background: bg, border: `1.5px solid ${border}`,
+      borderRadius: 12, padding: "10px 14px",
+      display: "flex", alignItems: "flex-start", gap: 10
+    }}>
+      <span style={{ fontSize: 18, flexShrink: 0, lineHeight: 1.4 }}>{icon}</span>
+      <p style={{ fontSize: 12, fontWeight: 600, color, lineHeight: 1.6, margin: 0 }}>
+        {message}
+      </p>
+    </div>
+  );
+}
+
 export default function StaffHomePage() {
   const router = useRouter();
   const setStaffToken = useSessionStore((s) => s.setStaffToken);
 
-  /* ─── Core status state ─── */
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -121,11 +226,10 @@ export default function StaffHomePage() {
   const watchIdRef = useRef<number | null>(null);
   const gpsRetryTimerRef = useRef<number | null>(null);
   const pendingPositionRef = useRef<GeolocationPosition | null>(null);
-  const activeOutletRef = useRef<StatusPayload["outlet"] | null>(null);
+  const activeOutletRef = useRef<OutletInfo | null>(null);
   const gpsPrimedRef = useRef(false);
   const serverClockOffsetRef = useRef(0);
 
-  /* ─── Camera overlay ─── */
   const [camera, setCamera] = useState<CameraSlot | null>(null);
 
   /* ─── Report section state ─── */
@@ -139,10 +243,7 @@ export default function StaffHomePage() {
   const [clockNow, setClockNow] = useState(() => new Date());
   const reportPhotosRef = useRef<Record<string, ReportPhoto>>({});
 
-  useEffect(() => {
-    reportPhotosRef.current = reportPhotos;
-  }, [reportPhotos]);
-
+  useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
     return () => {
       Object.values(reportPhotosRef.current).forEach(revokePhoto);
@@ -154,15 +255,12 @@ export default function StaffHomePage() {
   const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
 
   const nextState = useMemo<NextState>(() => {
-    // PRD §8.5: Gunakan nextStep dari server jika tersedia (schedule-based)
     const serverNext = status?.nextStep;
     if (serverNext === "checkin") return "checkin";
     if (serverNext === "report_buka") return "report_buka";
     if (serverNext === "report_tutup") return "report_tutup";
     if (serverNext === "checkout") return "checkout";
     if (serverNext === "done") return "done";
-
-    // Fallback ke logic lama (backward compat untuk outlet tanpa assignments)
     const att = status?.attendance;
     if (!att?.checkin_time) return "checkin";
     if (!reportTypes.has("BUKA") && (status?.shift === 0 || status?.shift === 1)) return "report_buka";
@@ -170,6 +268,30 @@ export default function StaffHomePage() {
     if (!att.checkout_time) return "checkout";
     return "done";
   }, [reportTypes, status]);
+
+  /* ─── Checkout time validation ─── */
+  const checkoutAllowed = useMemo(() => {
+    if (!status?.outlet) return true;
+    const outlet = status.outlet;
+    const shift = status.shift as 0 | 1 | 2;
+    const endTime = shiftEndTime(
+      { shift1_end: outlet.shift1_end, shift2_end: outlet.shift2_end },
+      shift
+    );
+    return isCheckoutTimeReached(endTime, clockNow);
+  }, [status, clockNow]);
+
+  const checkoutBlockedMsg = useMemo(() => {
+    if (!status?.outlet) return "";
+    const outlet = status.outlet;
+    const shift = status.shift as 0 | 1 | 2;
+    const endTime = shiftEndTime(
+      { shift1_end: outlet.shift1_end, shift2_end: outlet.shift2_end },
+      shift
+    );
+    if (!endTime) return "";
+    return `Absen keluar belum tersedia. Anda dapat absen keluar mulai pukul ${String(endTime).slice(0, 5)} WITA.`;
+  }, [status]);
 
   /* ─── Load status ─── */
   const load = useCallback(async () => {
@@ -197,20 +319,15 @@ export default function StaffHomePage() {
   }, []);
 
   /* ─── GPS watch ─── */
-  const applyGpsPosition = useCallback((pos: GeolocationPosition, outlet: StatusPayload["outlet"]) => {
+  const applyGpsPosition = useCallback((pos: GeolocationPosition, outlet: OutletInfo) => {
     const { latitude, longitude, accuracy } = pos.coords;
     const dist = Math.round(haversineDistance(latitude, longitude, outlet.lat, outlet.lng));
     const acc = Math.max(0, Math.round(accuracy));
     const maxDist = outlet.radius_m + Math.min(acc, outlet.radius_m * 0.3);
-
     let gpsStatus: GpsStatus;
-    if (acc > outlet.radius_m * 3) {
-      gpsStatus = "low_accuracy";
-    } else if (dist > maxDist) {
-      gpsStatus = "outside_radius";
-    } else {
-      gpsStatus = "ready";
-    }
+    if (acc > outlet.radius_m * 3) gpsStatus = "low_accuracy";
+    else if (dist > maxDist) gpsStatus = "outside_radius";
+    else gpsStatus = "ready";
     setGps({ status: gpsStatus, dist, accuracy: acc, lat: latitude, lng: longitude });
   }, []);
 
@@ -223,65 +340,34 @@ export default function StaffHomePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleGpsError = useCallback((err: GeolocationPositionError, outlet?: StatusPayload["outlet"]) => {
-    if (err.code === 1 /* PERMISSION_DENIED */) {
-      setGps({ status: "permission_denied", dist: null, accuracy: 0, lat: null, lng: null });
-      return;
+  const handleGpsError = useCallback((err: GeolocationPositionError, outlet?: OutletInfo) => {
+    if (err.code === 1) { setGps({ status: "permission_denied", dist: null, accuracy: 0, lat: null, lng: null }); return; }
+    if (err.code === 3) {
+      setGps((c) => ({ ...c, status: c.lat !== null ? c.status : "timeout" }));
+      if (outlet) scheduleGpsRetry(); return;
     }
-    if (err.code === 3 /* TIMEOUT */) {
-      setGps((current) => ({
-        ...current,
-        status: current.lat !== null && current.lng !== null ? current.status : "timeout"
-      }));
-      if (outlet) scheduleGpsRetry();
-      return;
-    }
-    setGps((current) => ({
-      ...current,
-      status: current.lat !== null && current.lng !== null ? current.status : "locating"
-    }));
+    setGps((c) => ({ ...c, status: c.lat !== null ? c.status : "locating" }));
     if (outlet) scheduleGpsRetry();
   }, [scheduleGpsRetry]);
 
-  function requestGpsFix(outlet?: StatusPayload["outlet"]) {
+  function requestGpsFix(outlet?: OutletInfo) {
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        pendingPositionRef.current = pos;
-        if (outlet) applyGpsPosition(pos, outlet);
-      },
+      (pos) => { pendingPositionRef.current = pos; if (outlet) applyGpsPosition(pos, outlet); },
       (err) => handleGpsError(err, outlet),
       { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
     );
   }
 
-  function startGpsWatch(outlet: StatusPayload["outlet"]) {
-    if (!navigator.geolocation) {
-      setGps({ status: "unsupported", dist: null, accuracy: 0, lat: null, lng: null });
-      return;
-    }
-
+  function startGpsWatch(outlet: OutletInfo) {
+    if (!navigator.geolocation) { setGps({ status: "unsupported", dist: null, accuracy: 0, lat: null, lng: null }); return; }
     activeOutletRef.current = outlet;
-    if (gpsRetryTimerRef.current !== null) {
-      window.clearTimeout(gpsRetryTimerRef.current);
-      gpsRetryTimerRef.current = null;
-    }
+    if (gpsRetryTimerRef.current !== null) { window.clearTimeout(gpsRetryTimerRef.current); gpsRetryTimerRef.current = null; }
     if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-
-    setGps((current) => ({
-      status: current.lat !== null && current.lng !== null ? current.status : "locating",
-      dist: current.dist,
-      accuracy: current.accuracy,
-      lat: current.lat,
-      lng: current.lng
-    }));
-
+    setGps((c) => ({ status: c.lat !== null ? c.status : "locating", dist: c.dist, accuracy: c.accuracy, lat: c.lat, lng: c.lng }));
     if (pendingPositionRef.current) applyGpsPosition(pendingPositionRef.current, outlet);
     requestGpsFix(outlet);
     watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        pendingPositionRef.current = pos;
-        applyGpsPosition(pos, outlet);
-      },
+      (pos) => { pendingPositionRef.current = pos; applyGpsPosition(pos, outlet); },
       (err) => handleGpsError(err, outlet),
       { enableHighAccuracy: true, timeout: 60000, maximumAge: 5000 }
     );
@@ -298,21 +384,13 @@ export default function StaffHomePage() {
     if (!status?.outlet || !Number.isFinite(Number(status.outlet.lat)) || !Number.isFinite(Number(status.outlet.lng))) return;
     startGpsWatch(status.outlet);
     return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      if (gpsRetryTimerRef.current !== null) {
-        window.clearTimeout(gpsRetryTimerRef.current);
-        gpsRetryTimerRef.current = null;
-      }
+      if (watchIdRef.current !== null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+      if (gpsRetryTimerRef.current !== null) { window.clearTimeout(gpsRetryTimerRef.current); gpsRetryTimerRef.current = null; }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.outlet]);
 
-  function retryGps() {
-    if (status?.outlet) startGpsWatch(status.outlet);
-  }
+  function retryGps() { if (status?.outlet) startGpsWatch(status.outlet); }
 
   function clearReportPhotos() {
     setReportPhotos((current) => {
@@ -340,11 +418,10 @@ export default function StaffHomePage() {
     setReportError("");
     apiFetch<{ ok: true; items: ReportCfgItem[] }>("/api/reports/config", { role: "staff", body: { type } })
       .then((p) => setReportItems(p.items))
-      .catch(() => { setReportItems([]); })
+      .catch(() => setReportItems([]))
       .finally(() => setReportItemsLoading(false));
   }, [nextState]);
 
-  /* ─── Open camera helper ─── */
   function openCamera(slot: CameraSlot) { setCamera(slot); }
   function closeCamera() { setCamera(null); }
 
@@ -355,6 +432,16 @@ export default function StaffHomePage() {
       setError("Lokasi GPS belum siap. Tunggu hingga GPS ready lalu coba lagi.");
       return;
     }
+    if (action === "checkout") {
+      if (gps.lat === null || gps.lng === null) {
+        setError("GPS belum siap untuk absen keluar. Tunggu hingga lokasi terdeteksi.");
+        return;
+      }
+      if (!checkoutAllowed) {
+        setError(checkoutBlockedMsg || "Absen keluar belum tersedia.");
+        return;
+      }
+    }
     setBusy(action === "checkin" ? "Mengunggah selfie absen masuk..." : "Mengunggah selfie absen pulang...");
     try {
       const body = new FormData();
@@ -362,15 +449,10 @@ export default function StaffHomePage() {
       body.append("selfie", selfie.blob, selfie.fileName);
       if (status?.shift !== undefined) body.append("shift", String(status.shift));
       if (status?.date) body.append("shiftDate", status.date);
-
-      // Checkin uses the cached GPS fix — no re-fetch needed
-      // Checkout does not require GPS (only server validates reports)
-      if (action === "checkin") {
-        body.append("lat", String(gps.lat));
-        body.append("lng", String(gps.lng));
-        body.append("accuracy", String(gps.accuracy));
-      }
-
+      // GPS selalu dikirim untuk checkin dan checkout
+      body.append("lat", String(gps.lat));
+      body.append("lng", String(gps.lng));
+      body.append("accuracy", String(gps.accuracy));
       setBusy(action === "checkin" ? "Menyimpan absen masuk..." : "Menyimpan absen pulang...");
       await apiFetch(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       await load();
@@ -387,7 +469,7 @@ export default function StaffHomePage() {
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
     const windowState = reportWindowStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
     if (!windowState.allowed) {
-      setReportError(`Laporan ${type} hanya bisa dikirim antara ${windowState.label} WITA`);
+      setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${windowState.label} WITA`);
       return;
     }
     const missingRequired = effectiveReportItems.filter((item) => item.required && !reportPhotos[item.label]);
@@ -409,25 +491,15 @@ export default function StaffHomePage() {
       body.append("type", type);
       if (status?.date) body.append("shiftDate", status.date);
       if (status?.shift !== undefined) body.append("shift", String(status.shift));
-
       const items = effectiveReportItems.map((item, index) => {
         const photo = reportPhotos[item.label];
         const field = `photo_${index}`;
         if (photo) body.append(field, photo.blob, photo.fileName);
-        return {
-          label: item.label,
-          required: item.required,
-          photoField: photo ? field : ""
-        };
+        return { label: item.label, required: item.required, photoField: photo ? field : "" };
       });
       body.append("items", JSON.stringify(items));
-
       setReportBusyLabel("Mengunggah foto laporan...");
-      await apiFetch("/api/reports/submit", {
-        method: "POST",
-        role: "staff",
-        body
-      });
+      await apiFetch("/api/reports/submit", { method: "POST", role: "staff", body });
       clearReportPhotos();
       setReportBusyLabel("Memuat ulang status...");
       await load();
@@ -478,6 +550,15 @@ export default function StaffHomePage() {
     low_accuracy:      "Akurasi GPS Rendah",
     timeout:           "GPS Timeout"
   }[gps.status];
+
+  // Checkout: perlu GPS dan validasi waktu
+  const checkoutDisabled = Boolean(busy) || !gpsReady || !checkoutAllowed;
+  const checkoutLabel = !checkoutAllowed
+    ? "Belum Waktunya"
+    : !gpsReady
+    ? checkinLabel
+    : "Absen Pulang";
+
   const requiredReportPhotosComplete = effectiveReportItems.every((item) => !item.required || Boolean(reportPhotos[item.label]));
   const reportPhotoDisabled = loading || reportItemsLoading || reportBusy || !reportWindow.allowed;
   const reportSubmitDisabled =
@@ -486,7 +567,7 @@ export default function StaffHomePage() {
 
   function openReportCamera(item: ReportCfgItem) {
     if (!reportWindow.allowed) {
-      setReportError(`Laporan ${reportType} hanya bisa dikirim antara ${reportWindow.label} WITA`);
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${reportWindow.label} WITA`);
       return;
     }
     if (reportPhotoDisabled) return;
@@ -498,7 +579,7 @@ export default function StaffHomePage() {
         const latestWindow = reportWindowStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
         if (!latestWindow.allowed) {
           revokePhoto(photo);
-          setReportError(`Laporan ${reportType} hanya bisa dikirim antara ${latestWindow.label} WITA`);
+          setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${latestWindow.label} WITA`);
           return;
         }
         saveReportPhoto(item.label, photo);
@@ -508,7 +589,6 @@ export default function StaffHomePage() {
 
   return (
     <>
-      {/* Camera overlay (full screen, above everything) */}
       {camera && (
         <CameraCapture
           facing={camera.facing}
@@ -545,11 +625,7 @@ export default function StaffHomePage() {
             color: "var(--danger)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
           }}>
             <span>{error}</span>
-            <button
-              onClick={() => setError("")}
-              aria-label="Tutup pesan error"
-              style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}
-            >
+            <button onClick={() => setError("")} aria-label="Tutup" style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer" }}>
               <X size={16} />
             </button>
           </div>
@@ -557,15 +633,12 @@ export default function StaffHomePage() {
 
         {/* Busy banner */}
         {busy && (
-          <div style={{
-            background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
-            borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "var(--warning)"
-          }}>
+          <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "var(--warning)" }}>
             ⏳ {busy}
           </div>
         )}
 
-        {/* ═══ PRD §8.5 — State Dayoff ═══ */}
+        {/* ═══ State: Libur ═══ */}
         {!loading && status?.scheduleState === "dayoff" && (
           <div className="status-card" style={{ background: "linear-gradient(135deg,#FEF2F2,#FECACA20)", border: "2px solid #FECACA" }}>
             <div className="status-icon">🏖️</div>
@@ -573,33 +646,23 @@ export default function StaffHomePage() {
             <p className="status-sub">
               {status?.staffDayoff?.reason ? `Alasan: ${status.staffDayoff.reason}` : "Kamu telah dijadwalkan libur hari ini."}
             </p>
-            <p style={{ fontSize: 11, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>
-              Tombol absen tidak tersedia saat status libur.
-            </p>
+            <p style={{ fontSize: 11, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>Tombol absen tidak tersedia saat status libur.</p>
           </div>
         )}
 
-        {/* ═══ PRD §8.5 — State Unassigned (outlet 2-shift, belum pilih jadwal) ═══ */}
+        {/* ═══ State: Belum pilih jadwal (legacy untuk outlet yang belum migrasi) ═══ */}
         {!loading && requiresScheduleSelection && (
           <div className="status-card sc-neutral">
             <div className="status-icon">📋</div>
             <h2 className="status-title">Belum Ada Jadwal</h2>
             <p className="status-sub">Kamu belum memilih jadwal kerja untuk hari ini. Pilih jadwal di menu Jadwal sebelum bisa absen.</p>
-            <a
-              href="/app/schedule"
-              style={{
-                display: "inline-block", marginTop: 12,
-                background: "var(--primary)", color: "#fff",
-                borderRadius: 12, padding: "10px 24px",
-                fontSize: 13, fontWeight: 800, textDecoration: "none"
-              }}
-            >
+            <a href="/app/schedule" style={{ display: "inline-block", marginTop: 12, background: "var(--primary)", color: "#fff", borderRadius: 12, padding: "10px 24px", fontSize: 13, fontWeight: 800, textDecoration: "none" }}>
               Pilih Jadwal →
             </a>
           </div>
         )}
 
-        {/* ═══ PRD: State Menunggu Shift 1 Absen Keluar ═══ */}
+        {/* ═══ State: Menunggu Shift 1 selesai ═══ */}
         {!loading && status?.scheduleState === "waiting_shift1" && (
           <div className="status-card" style={{ background: "linear-gradient(135deg,#FFFBEB,#FEF3C720)", border: "2px solid #FDE68A" }}>
             <div className="status-icon">⏳</div>
@@ -612,28 +675,19 @@ export default function StaffHomePage() {
                 Staff Shift 1: {status.shift1WaitingInfo.staff_name}
               </p>
             )}
-            <div style={{
-              marginTop: 12, padding: "10px 14px",
-              background: "#FEF3C7", borderRadius: 10,
-              border: "1px solid #FDE68A"
-            }}>
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "#FEF3C7", borderRadius: 10, border: "1px solid #FDE68A" }}>
               <p style={{ fontSize: 12, color: "#78350F", fontWeight: 600, lineHeight: 1.6 }}>
                 Silakan tunggu staff Shift 1 menyelesaikan absen keluar terlebih dahulu.
               </p>
             </div>
-            <button
-              className="btn btn-soft"
-              style={{ marginTop: 12, fontSize: 12, padding: "9px 16px", width: "100%" }}
-              onClick={load}
-              disabled={loading || Boolean(busy)}
-            >
+            <button className="btn btn-soft" style={{ marginTop: 12, fontSize: 12, padding: "9px 16px", width: "100%" }} onClick={load} disabled={loading || Boolean(busy)}>
               <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
               {loading ? "Memuat..." : "Cek Status Terbaru"}
             </button>
           </div>
         )}
 
-        {/* ═══ MAIN FLOW (not report state, not dayoff, not unassigned, not waiting_shift1) ═══ */}
+        {/* ═══ ALUR UTAMA ═══ */}
         {!isReportState && status?.scheduleState !== "dayoff" && !requiresScheduleSelection && status?.scheduleState !== "waiting_shift1" && (
           <>
             {/* Status card */}
@@ -649,10 +703,7 @@ export default function StaffHomePage() {
                 <h2 className="status-title">{sc.title}</h2>
                 {isFullShift && nextState === "checkin" && (
                   <div style={{ marginBottom: 6 }}>
-                    <span style={{
-                      display: "inline-block", background: "var(--primary)", color: "#fff",
-                      fontSize: 11, fontWeight: 800, borderRadius: 8, padding: "3px 10px", letterSpacing: "0.4px"
-                    }}>
+                    <span style={{ display: "inline-block", background: "var(--primary)", color: "#fff", fontSize: 11, fontWeight: 800, borderRadius: 8, padding: "3px 10px", letterSpacing: "0.4px" }}>
                       FULL SHIFT
                     </span>
                   </div>
@@ -663,12 +714,21 @@ export default function StaffHomePage() {
 
             {/* Full shift info banner */}
             {isFullShift && !loading && (
-              <div style={{
-                background: "var(--primary-bg, #EEF2FF)", border: "1.5px solid var(--primary-border, #C7D2FE)",
-                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--primary)"
-              }}>
+              <div style={{ background: "var(--primary-bg, #EEF2FF)", border: "1.5px solid var(--primary-border, #C7D2FE)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--primary)" }}>
                 🌟 Full Shift aktif — Shift {status?.offShift} libur. Gaji 2x hari ini!
               </div>
+            )}
+
+            {/* Panduan realtime */}
+            {!loading && (
+              <RealtimeGuide
+                status={status}
+                nextState={nextState}
+                checkoutAllowed={checkoutAllowed}
+                checkoutBlockedMsg={checkoutBlockedMsg}
+                reportWindow={reportWindow}
+                clockNow={clockNow}
+              />
             )}
 
             {/* GPS bar */}
@@ -678,8 +738,7 @@ export default function StaffHomePage() {
                 <div>
                   <p className="gps-label">GPS · Jarak ke Outlet</p>
                   <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 1 }}>
-                    {GPS_LABEL[gps.status]}
-                    {gps.accuracy > 0 && gps.status !== "locating" ? ` · ±${gps.accuracy}m` : ""}
+                    {GPS_LABEL[gps.status]}{gps.accuracy > 0 && gps.status !== "locating" ? ` · ±${gps.accuracy}m` : ""}
                   </p>
                 </div>
               </div>
@@ -687,31 +746,27 @@ export default function StaffHomePage() {
                 <p className={`gps-dist ${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`}>
                   {gps.dist !== null ? `${gps.dist}m` : "—"}
                 </p>
-                {outlet && (
-                  <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 1 }}>
-                    radius {outlet.radius_m}m
-                  </p>
-                )}
+                {outlet && <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 1 }}>radius {outlet.radius_m}m</p>}
               </div>
             </div>
 
-            {/* GPS status messages — only after initial load */}
-            {!loading && gps.status === "permission_denied" && nextState === "checkin" && (
+            {/* GPS status messages */}
+            {!loading && gps.status === "permission_denied" && (nextState === "checkin" || nextState === "checkout") && (
               <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
                 🔒 Izin lokasi ditolak. Buka pengaturan browser dan aktifkan izin lokasi untuk aplikasi ini, lalu refresh halaman.
               </div>
             )}
-            {!loading && gps.status === "outside_radius" && nextState === "checkin" && (
+            {!loading && gps.status === "outside_radius" && (nextState === "checkin" || nextState === "checkout") && (
               <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
-                📍 Kamu terlalu jauh dari outlet ({gps.dist}m, batas {outlet?.radius_m}m). Pindah lebih dekat untuk absen masuk.
+                📍 Kamu terlalu jauh dari outlet ({gps.dist}m, batas {outlet?.radius_m}m). Pindah lebih dekat untuk absen.
               </div>
             )}
-            {!loading && gps.status === "low_accuracy" && nextState === "checkin" && (
+            {!loading && gps.status === "low_accuracy" && (nextState === "checkin" || nextState === "checkout") && (
               <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
                 📡 Akurasi GPS terlalu rendah (±{gps.accuracy}m). Pindah ke tempat terbuka atau tunggu GPS membaik.
               </div>
             )}
-            {!loading && (gps.status === "timeout" || gps.status === "locating") && nextState === "checkin" && (
+            {!loading && (gps.status === "timeout" || gps.status === "locating") && (nextState === "checkin" || nextState === "checkout") && (
               <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ color: "var(--muted)", fontWeight: 600 }}>
                   {gps.status === "timeout" ? "GPS timeout, mencoba ulang..." : "Menunggu sinyal GPS..."}
@@ -722,10 +777,18 @@ export default function StaffHomePage() {
               </div>
             )}
 
+            {/* Informasi absen keluar belum tersedia */}
+            {!loading && nextState === "checkout" && !checkoutAllowed && (
+              <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 14, padding: "16px", textAlign: "center" }}>
+                <Clock size={28} color="#D97706" style={{ margin: "0 auto 8px" }} />
+                <p style={{ fontSize: 14, fontWeight: 800, color: "#D97706", marginBottom: 4 }}>Belum Waktunya Absen Keluar</p>
+                <p style={{ fontSize: 12, color: "#78350F", lineHeight: 1.6 }}>{checkoutBlockedMsg}</p>
+              </div>
+            )}
+
             {/* Time info panel (after checkin) */}
             {att?.checkin_time && (
               <div className="panel animate-slide-up" style={{ padding: 14, overflow: "hidden" }}>
-                {/* Jam masuk & pulang */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                   <div style={{ textAlign: "center", padding: "10px 6px", background: "var(--surface-soft)", borderRadius: 12 }}>
                     <p style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: "var(--muted-light)", marginBottom: 4 }}>MASUK</p>
@@ -736,46 +799,22 @@ export default function StaffHomePage() {
                     <p style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 22, fontWeight: 900, lineHeight: 1 }}>{hhmm(att.checkout_time) || "—"}</p>
                   </div>
                 </div>
-
-                {/* Divider */}
                 <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                  {/* Full shift bonus */}
                   {String(att.flags || "").includes("FULL_SHIFT_2X") && (
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      background: "rgba(79,70,229,0.07)", borderRadius: 10, padding: "7px 12px"
-                    }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(79,70,229,0.07)", borderRadius: 10, padding: "7px 12px" }}>
                       <span style={{ fontSize: 12, fontWeight: 700, color: "#4338CA" }}>🌟 Full Shift · Gaji 2×</span>
                       <span className="status-pill" style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontSize: 10 }}>Bonus aktif</span>
                     </div>
                   )}
-
-                  {/* Potongan telat */}
                   {att.late_minutes > 0 && (
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      background: "var(--warning-bg)", borderRadius: 10, padding: "7px 12px"
-                    }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
-                        ⚠️ Telat {att.late_minutes} mnt
-                      </span>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: "var(--danger)" }}>
-                        -{rupiah(att.deduction)}
-                      </span>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--warning-bg)", borderRadius: 10, padding: "7px 12px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>⚠️ Telat {att.late_minutes} mnt</span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: "var(--danger)" }}>-{rupiah(att.deduction)}</span>
                     </div>
                   )}
-
-                  {/* Total gaji */}
-                  <div style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    background: "var(--success-bg)", borderRadius: 10, padding: "9px 12px",
-                    border: "1px solid var(--success-border)"
-                  }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--success-bg)", borderRadius: 10, padding: "9px 12px", border: "1px solid var(--success-border)" }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: "var(--success)" }}>Gaji hari ini</span>
-                    <span style={{
-                      fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
-                      color: "var(--success)", letterSpacing: "-0.3px"
-                    }}>
+                    <span style={{ fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900, color: "var(--success)", letterSpacing: "-0.3px" }}>
                       {rupiah(att.final_salary)}
                     </span>
                   </div>
@@ -783,7 +822,7 @@ export default function StaffHomePage() {
               </div>
             )}
 
-            {/* Action buttons — only after initial load */}
+            {/* Action buttons */}
             {!loading && <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {nextState === "checkin" && (
                 <button
@@ -801,33 +840,33 @@ export default function StaffHomePage() {
 
               {nextState === "checkout" && (
                 <button
-                  className={`btn btn-danger btn-action${!busy ? " btn-glow" : ""}`}
-                  onClick={() => openCamera({
-                    facing: "user",
-                    title: "📸 Selfie Absen Pulang",
-                    onCapture: (photo) => runAttendance("checkout", photo)
-                  })}
-                  disabled={Boolean(busy)}
+                  className={`btn btn-danger btn-action${gpsReady && checkoutAllowed && !busy ? " btn-glow" : ""}`}
+                  onClick={() => {
+                    if (!checkoutAllowed) { setError(checkoutBlockedMsg || "Absen keluar belum tersedia."); return; }
+                    if (!gpsReady) { setError("GPS belum siap. Tunggu hingga lokasi terdeteksi untuk absen keluar."); return; }
+                    openCamera({
+                      facing: "user",
+                      title: "📸 Selfie Absen Pulang",
+                      onCapture: (photo) => runAttendance("checkout", photo)
+                    });
+                  }}
+                  disabled={checkoutDisabled}
                 >
-                  <Camera size={20} /> Absen Pulang
+                  <Camera size={20} /> {busy ? busy : checkoutLabel}
                 </button>
               )}
             </div>}
           </>
         )}
 
-        {/* ═══ REPORT SECTION (inline) ═══ */}
+        {/* ═══ LAPORAN ═══ */}
         {isReportState && !loading && (
           <div key={nextState} className="animate-slide-up" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {/* Report header */}
             <div style={{
-              background: `${reportTypeColor}0E`,
-              border: `1.5px solid ${reportTypeColor}30`,
-              borderRadius: 16,
-              padding: "14px 16px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
+              background: `${reportTypeColor}0E`, border: `1.5px solid ${reportTypeColor}30`,
+              borderRadius: 16, padding: "14px 16px",
+              display: "flex", alignItems: "center", justifyContent: "space-between"
             }}>
               <div>
                 <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.7px", color: reportTypeColor, textTransform: "uppercase", marginBottom: 3 }}>
@@ -860,43 +899,38 @@ export default function StaffHomePage() {
 
             {/* Report error */}
             {reportError && (
-              <div style={{
-                background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
-                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 600, color: "var(--danger)"
-              }}>
+              <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 600, color: "var(--danger)" }}>
                 ⚠️ {reportError}
               </div>
             )}
 
             {reportBusy && (
-              <div style={{
-                background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
-                borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)"
-              }}>
+              <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
                 {reportBusyLabel || "Memproses laporan..."}
               </div>
             )}
 
-            {!reportWindow.allowed && (
-              <div style={{
-                background: "var(--warning-bg)", border: "1.5px solid var(--warning-border)",
-                borderRadius: 14, padding: "18px 16px", textAlign: "center"
-              }}>
-                <p style={{ fontSize: 22, marginBottom: 8 }}>⏰</p>
-                <p style={{ fontSize: 14, fontWeight: 800, color: "var(--warning)", marginBottom: 4 }}>
-                  Belum Waktunya
+            {/* Di luar window waktu laporan — sembunyikan form sepenuhnya */}
+            {!reportWindow.allowed ? (
+              <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 16, padding: "24px 20px", textAlign: "center" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>⏰</div>
+                <h3 style={{ fontSize: 16, fontWeight: 900, color: "#D97706", marginBottom: 8 }}>
+                  Belum Waktunya {reportType === "BUKA" ? "Laporan Buka Toko" : "Laporan Tutup Toko"}
+                </h3>
+                <p style={{ fontSize: 13, color: "#78350F", lineHeight: 1.6, marginBottom: 8 }}>
+                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} dapat diisi mulai pukul{" "}
+                  <strong style={{ color: "#92400E" }}>{reportWindow.start.slice(0, 5)} WITA</strong> hingga{" "}
+                  <strong style={{ color: "#92400E" }}>{reportWindow.end.slice(0, 5)} WITA</strong>.
                 </p>
-                <p style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
-                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara{" "}
-                  <strong style={{ color: "var(--ink)" }}>{reportWindow.label} WITA</strong>.
-                </p>
-                <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 8 }}>
-                  Kembali ke halaman ini saat sudah waktunya.
+                <p style={{ fontSize: 12, color: "#B45309", marginTop: 4 }}>
+                  {reportType === "BUKA"
+                    ? "Silakan kembali ke halaman ini saat sudah waktunya."
+                    : "Selesaikan tugas lain terlebih dahulu dan kembali saat sudah waktunya."}
                 </p>
               </div>
-            )}
-            <>
-                {/* Report items */}
+            ) : (
+              <>
+                {/* Report items — hanya tampil saat window laporan terbuka */}
                 {reportItemsLoading ? (
                   <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
                     Memuat konfigurasi...
@@ -919,9 +953,7 @@ export default function StaffHomePage() {
                             {item.label}
                             {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
                           </h3>
-                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                            {item.required ? "Wajib" : "Opsional"}
-                          </p>
+                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{item.required ? "Wajib" : "Opsional"}</p>
                         </div>
                         <button
                           onClick={() => openReportCamera(item)}
@@ -930,7 +962,8 @@ export default function StaffHomePage() {
                             display: "flex", alignItems: "center", gap: 6,
                             background: done ? "var(--success)" : reportTypeColor,
                             color: "#fff", border: "none", borderRadius: 10,
-                            padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: reportPhotoDisabled ? "not-allowed" : "pointer",
+                            padding: "9px 14px", fontSize: 12, fontWeight: 800,
+                            cursor: reportPhotoDisabled ? "not-allowed" : "pointer",
                             fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0,
                             opacity: reportPhotoDisabled ? 0.48 : 1
                           }}
@@ -940,56 +973,28 @@ export default function StaffHomePage() {
                         </button>
                       </div>
 
-                      {/* Example photo — clearly labeled, visually distinct from uploaded photo */}
                       {item.example_photo_url && !done && (
-                        <div style={{
-                          marginTop: 12,
-                          border: "2.5px dashed #F59E0B",
-                          borderRadius: 12,
-                          overflow: "hidden",
-                          background: "#FFFBEB"
-                        }}>
-                          {/* Header banner — very prominent */}
-                          <div style={{
-                            background: "#F59E0B", padding: "7px 12px",
-                            display: "flex", alignItems: "center", gap: 7
-                          }}>
+                        <div style={{ marginTop: 12, border: "2.5px dashed #F59E0B", borderRadius: 12, overflow: "hidden", background: "#FFFBEB" }}>
+                          <div style={{ background: "#F59E0B", padding: "7px 12px", display: "flex", alignItems: "center", gap: 7 }}>
                             <ImageIcon size={13} color="#fff" />
-                            <span style={{ fontSize: 11, fontWeight: 900, color: "#fff", letterSpacing: "0.6px", textTransform: "uppercase" }}>
-                              Foto Contoh
-                            </span>
-                            <span style={{
-                              marginLeft: "auto", background: "rgba(255,255,255,0.3)",
-                              color: "#fff", fontSize: 9, fontWeight: 800,
-                              borderRadius: 6, padding: "2px 7px", letterSpacing: "0.4px"
-                            }}>
-                              BUKAN FOTO ASLI
-                            </span>
+                            <span style={{ fontSize: 11, fontWeight: 900, color: "#fff", letterSpacing: "0.6px", textTransform: "uppercase" }}>Foto Contoh</span>
+                            <span style={{ marginLeft: "auto", background: "rgba(255,255,255,0.3)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 6, padding: "2px 7px", letterSpacing: "0.4px" }}>BUKAN FOTO ASLI</span>
                           </div>
-                          {/* Keterangan */}
                           <div style={{ padding: "7px 12px 4px", background: "#FEF3C7" }}>
                             <p style={{ fontSize: 11, color: "#92400E", fontWeight: 700, lineHeight: 1.4 }}>
                               Ini hanya contoh foto yang benar. Foto kamu harus sesuai kondisi toko yang sesungguhnya.
                             </p>
                           </div>
-                          {/* Foto contoh */}
                           <a href={item.example_photo_url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={item.example_photo_url}
-                              alt={`Contoh foto: ${item.label}`}
-                              style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 180, background: "#f8fafc", opacity: 0.88 }}
-                            />
+                            <img src={item.example_photo_url} alt={`Contoh: ${item.label}`} style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 180, background: "#f8fafc", opacity: 0.88 }} />
                           </a>
                           <div style={{ padding: "5px 12px 8px", background: "#FEF3C7" }}>
-                            <p style={{ fontSize: 10, color: "#B45309", textAlign: "center", fontWeight: 600 }}>
-                              👆 Tap foto untuk memperbesar contoh
-                            </p>
+                            <p style={{ fontSize: 10, color: "#B45309", textAlign: "center", fontWeight: 600 }}>👆 Tap foto untuk memperbesar contoh</p>
                           </div>
                         </div>
                       )}
 
-                      {/* Uploaded photo preview */}
                       {done && (
                         <div style={{ marginTop: 8 }}>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1000,7 +1005,6 @@ export default function StaffHomePage() {
                   );
                 })}
 
-                {/* Submit */}
                 <button
                   className="btn btn-ok btn-action"
                   disabled={reportSubmitDisabled}
@@ -1008,9 +1012,10 @@ export default function StaffHomePage() {
                   style={{ marginTop: 4, fontSize: 15 }}
                 >
                   <Send size={18} />
-                  {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType}`}
+                  {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}`}
                 </button>
               </>
+            )}
           </div>
         )}
       </StaffPage>
@@ -1029,9 +1034,11 @@ function humanError(err: unknown): string {
     return "Anda tidak memiliki izin untuk melakukan aksi ini.";
   if (msg.includes("nonce") || msg.includes("duplicate"))
     return "Permintaan duplikat terdeteksi. Coba lagi.";
-  if (msg.includes("GPS") || msg.includes("lokasi") || msg.includes("radius"))
+  if (msg.includes("GPS") || msg.includes("lokasi") || msg.includes("radius") || msg.includes("area"))
     return msg;
   if (msg.includes("500") || msg.includes("server"))
     return "Server sedang bermasalah. Coba beberapa saat lagi.";
+  if (msg.includes("Belum") || msg.includes("shift") || msg.includes("Laporan") || msg.includes("Shift"))
+    return msg;
   return msg || "Terjadi kesalahan. Coba lagi.";
 }

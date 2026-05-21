@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Pencil, Image, MapPin, X } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
@@ -21,11 +21,67 @@ type Attendance = {
   final_salary: number;
   paid_status: boolean;
   status: string;
+  selfie_in?: string | null;
+  selfie_out?: string | null;
+  flags?: string | null;
+  revision_note?: string | null;
 };
 type Staff = { id: string; name: string; outlet_id: string | null };
 type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number };
 type BulkEntry = { staffId: string; staffName: string; checked: boolean; checkin_time: string; checkout_time: string };
 type BulkResult = { staffId: string; staffName: string; status: "success" | "error"; message?: string };
+
+function parseCheckoutGps(flags?: string | null): { lat: string; lng: string; acc: string } | null {
+  if (!flags) return null;
+  const seg = flags.split(",").find((f) => f.startsWith("CHECKOUT_GPS:"));
+  if (!seg) return null;
+  const parts = seg.split(":");
+  if (parts.length < 4) return null;
+  return { lat: parts[1], lng: parts[2], acc: parts[3] };
+}
+
+// ----- Modals ----------------------------------------------------------------
+
+function Overlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.5)",
+        zIndex: 900, backdropFilter: "blur(2px)"
+      }}
+    />
+  );
+}
+
+function Modal({ title, onClose, children, width = 480 }: {
+  title: string; onClose: () => void; children: React.ReactNode; width?: number;
+}) {
+  return (
+    <>
+      <Overlay onClose={onClose} />
+      <div style={{
+        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+        width, maxWidth: "calc(100vw - 32px)", background: "#fff",
+        borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,.25)", zIndex: 901,
+        maxHeight: "calc(100vh - 48px)", overflowY: "auto"
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "16px 20px", borderBottom: "1px solid var(--border)"
+        }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, margin: 0 }}>{title}</h2>
+          <button className="btn btn-soft" style={{ padding: "4px 8px" }} onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div style={{ padding: 20 }}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+// ----- Main page -------------------------------------------------------------
 
 export default function AdminAttendancePage() {
   const [rows, setRows] = useState<Attendance[]>([]);
@@ -45,6 +101,18 @@ export default function AdminAttendancePage() {
   const [bulkEntries, setBulkEntries] = useState<BulkEntry[]>([]);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
+
+  // Revise modal
+  const [reviseTarget, setReviseTarget] = useState<Attendance | null>(null);
+  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "" });
+  const [revising, setRevising] = useState(false);
+
+  // Delete modal
+  const [deleteTarget, setDeleteTarget] = useState<Attendance | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Photo modal
+  const [photoTarget, setPhotoTarget] = useState<Attendance | null>(null);
 
   async function load() {
     setLoading(true);
@@ -70,7 +138,6 @@ export default function AdminAttendancePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Rebuild bulk entry list whenever outlet selection or staff list changes
   useEffect(() => {
     if (!bulkOutletId) { setBulkEntries([]); return; }
     const filtered = staff.filter((s) => s.outlet_id === bulkOutletId);
@@ -122,23 +189,64 @@ export default function AdminAttendancePage() {
     }
   }
 
-  async function revise(row: Attendance) {
-    const note = window.prompt("Catatan revisi wajib diisi");
-    if (!note) return;
-    const late = window.prompt("Menit terlambat", String(row.late_minutes));
-    const deduction = window.prompt("Potongan", String(row.deduction));
-    const finalSalary = window.prompt("Gaji final", String(row.final_salary));
+  function openRevise(row: Attendance) {
+    setReviseTarget(row);
+    setReviseForm({
+      revision_note: row.revision_note || "",
+      late_minutes: String(row.late_minutes),
+      deduction: String(row.deduction),
+      final_salary: String(row.final_salary)
+    });
+  }
+
+  async function submitRevise(event: React.FormEvent) {
+    event.preventDefault();
+    if (!reviseTarget) return;
+    if (!reviseForm.revision_note.trim()) {
+      setMessage("Catatan revisi wajib diisi"); setMsgType("err"); return;
+    }
+    setRevising(true);
     setMessage("Menyimpan revisi..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/attendance", {
         method: "PUT",
         role: "admin",
-        body: { attendanceId: row.id, revision_note: note, late_minutes: late, deduction, final_salary: finalSalary }
+        body: {
+          attendanceId: reviseTarget.id,
+          revision_note: reviseForm.revision_note,
+          late_minutes: reviseForm.late_minutes,
+          deduction: reviseForm.deduction,
+          final_salary: reviseForm.final_salary
+        }
       });
       await load();
+      setReviseTarget(null);
       setMessage("Revisi tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan revisi"); setMsgType("err");
+    } finally {
+      setRevising(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setMessage("Menghapus data absen..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/attendance", {
+        method: "DELETE",
+        role: "admin",
+        body: { attendanceId: deleteTarget.id }
+      });
+      await load();
+      setDeleteTarget(null);
+      setMessage("Data absen berhasil dihapus ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menghapus"); setMsgType("err");
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -220,7 +328,6 @@ export default function AdminAttendancePage() {
       {showBulk ? (
         <AdminSection title="Absen Manual Bulk">
           <form onSubmit={submitBulk}>
-            {/* Common settings */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
               <div>
                 <label className="label">Tanggal<span style={{ color: "var(--danger)" }}>*</span></label>
@@ -243,37 +350,27 @@ export default function AdminAttendancePage() {
               </div>
             </div>
 
-            {/* Hint */}
             {bulkShiftHint && (
               <p style={{ fontSize: 12, color: "var(--muted-light)", marginBottom: 10 }}>
                 Jam mulai shift: <strong>{bulkShiftHint}</strong> — kosongkan kolom jam masuk untuk pakai jam ini secara otomatis.
               </p>
             )}
-
-            {/* Placeholder when no outlet selected */}
             {!bulkOutletId && (
               <p style={{ fontSize: 13, color: "var(--muted-light)", padding: "12px 0" }}>Pilih outlet untuk melihat daftar staff.</p>
             )}
-
-            {/* Empty outlet */}
             {bulkOutletId && bulkEntries.length === 0 && (
               <p style={{ fontSize: 13, color: "var(--muted-light)", padding: "12px 0" }}>Tidak ada staff aktif di outlet ini.</p>
             )}
 
-            {/* Staff table */}
             {bulkEntries.length > 0 && (
               <>
                 <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                  <button
-                    type="button" className="btn btn-soft" style={{ fontSize: 12 }}
-                    onClick={() => setBulkEntries((prev) => prev.map((e) => ({ ...e, checked: true })))}
-                  >
+                  <button type="button" className="btn btn-soft" style={{ fontSize: 12 }}
+                    onClick={() => setBulkEntries((prev) => prev.map((e) => ({ ...e, checked: true })))}>
                     Pilih Semua
                   </button>
-                  <button
-                    type="button" className="btn btn-soft" style={{ fontSize: 12 }}
-                    onClick={() => setBulkEntries((prev) => prev.map((e) => ({ ...e, checked: false })))}
-                  >
+                  <button type="button" className="btn btn-soft" style={{ fontSize: 12 }}
+                    onClick={() => setBulkEntries((prev) => prev.map((e) => ({ ...e, checked: false })))}>
                     Batalkan Semua
                   </button>
                   <span style={{ fontSize: 12, color: "var(--muted-light)", marginLeft: 4, alignSelf: "center" }}>
@@ -295,46 +392,22 @@ export default function AdminAttendancePage() {
                       {bulkEntries.map((entry, idx) => {
                         const result = bulkResults?.find((r) => r.staffId === entry.staffId);
                         return (
-                          <tr
-                            key={entry.staffId}
-                            style={
-                              result
-                                ? { background: result.status === "success" ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)" }
-                                : undefined
-                            }
-                          >
+                          <tr key={entry.staffId}
+                            style={result ? { background: result.status === "success" ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)" } : undefined}>
                             <td>
-                              <input
-                                type="checkbox"
-                                checked={entry.checked}
-                                onChange={(e) =>
-                                  setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checked: e.target.checked } : x))
-                                }
-                              />
+                              <input type="checkbox" checked={entry.checked}
+                                onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checked: e.target.checked } : x))} />
                             </td>
                             <td style={{ fontWeight: 700 }}>{entry.staffName}</td>
                             <td>
-                              <input
-                                className="field"
-                                type="time"
-                                value={entry.checkin_time}
-                                placeholder="Default shift"
-                                onChange={(e) =>
-                                  setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkin_time: e.target.value } : x))
-                                }
-                                style={{ minWidth: 110 }}
-                              />
+                              <input className="field" type="time" value={entry.checkin_time} placeholder="Default shift"
+                                onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkin_time: e.target.value } : x))}
+                                style={{ minWidth: 110 }} />
                             </td>
                             <td>
-                              <input
-                                className="field"
-                                type="time"
-                                value={entry.checkout_time}
-                                onChange={(e) =>
-                                  setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkout_time: e.target.value } : x))
-                                }
-                                style={{ minWidth: 110 }}
-                              />
+                              <input className="field" type="time" value={entry.checkout_time}
+                                onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkout_time: e.target.value } : x))}
+                                style={{ minWidth: 110 }} />
                             </td>
                             {bulkResults && (
                               <td style={{ fontSize: 12, fontWeight: 600, color: result?.status === "success" ? "var(--success)" : "var(--danger)" }}>
@@ -351,12 +424,8 @@ export default function AdminAttendancePage() {
             )}
 
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                style={{ fontSize: 13 }}
-                disabled={bulkLoading || !bulkOutletId || bulkEntries.filter((e) => e.checked).length === 0}
-              >
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}
+                disabled={bulkLoading || !bulkOutletId || bulkEntries.filter((e) => e.checked).length === 0}>
                 <Plus size={15} />
                 {bulkLoading ? "Menyimpan..." : `Simpan ${bulkEntries.filter((e) => e.checked).length} Absen`}
               </button>
@@ -427,6 +496,7 @@ export default function AdminAttendancePage() {
                 <th>Telat</th>
                 <th>Gaji</th>
                 <th>Status Bayar</th>
+                <th>Foto / GPS</th>
                 <th>Aksi</th>
               </tr>
             </thead>
@@ -434,33 +504,232 @@ export default function AdminAttendancePage() {
               {loading ? (
                 [1, 2, 3, 4].map((i) => (
                   <tr key={i}>
-                    {[60, 90, 80, 40, 40, 40, 40, 60, 55, 40].map((w, j) => (
+                    {[60, 90, 80, 40, 40, 40, 40, 60, 55, 50, 80].map((w, j) => (
                       <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
                     ))}
                   </tr>
                 ))
               ) : rows.length === 0 ? (
-                <tr><td colSpan={10} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
-              ) : rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{formatDateID(row.date)}</td>
-                  <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
-                  <td>{row.outlet_name}</td>
-                  <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
-                  <td>{hhmm(row.checkin_time)}</td>
-                  <td>{hhmm(row.checkout_time)}</td>
-                  <td>{row.late_minutes} mnt</td>
-                  <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
-                  <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
-                  <td>
-                    <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => revise(row)}>Revisi</button>
-                  </td>
-                </tr>
-              ))}
+                <tr><td colSpan={11} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+              ) : rows.map((row) => {
+                const gps = parseCheckoutGps(row.flags);
+                const hasSelfie = row.selfie_in || row.selfie_out;
+                return (
+                  <tr key={row.id}>
+                    <td>{formatDateID(row.date)}</td>
+                    <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                    <td>{row.outlet_name}</td>
+                    <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                    <td>{hhmm(row.checkin_time)}</td>
+                    <td>{hhmm(row.checkout_time)}</td>
+                    <td>{row.late_minutes} mnt</td>
+                    <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
+                    <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
+                    <td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {hasSelfie && (
+                          <button
+                            className="btn btn-soft"
+                            style={{ fontSize: 11, padding: "4px 8px", display: "flex", alignItems: "center", gap: 3 }}
+                            title="Lihat selfie"
+                            onClick={() => setPhotoTarget(row)}
+                          >
+                            <Image size={13} /> Foto
+                          </button>
+                        )}
+                        {gps && (
+                          <a
+                            href={`https://www.google.com/maps?q=${gps.lat},${gps.lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-soft"
+                            style={{ fontSize: 11, padding: "4px 8px", display: "flex", alignItems: "center", gap: 3, textDecoration: "none" }}
+                            title={`Akurasi GPS: ±${Number(gps.acc).toFixed(0)}m`}
+                          >
+                            <MapPin size={13} /> GPS
+                          </a>
+                        )}
+                        {!hasSelfie && !gps && (
+                          <span style={{ fontSize: 11, color: "var(--muted-light)" }}>—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className="btn btn-soft"
+                          style={{ fontSize: 12, padding: "6px 10px" }}
+                          title="Revisi data absen"
+                          onClick={() => openRevise(row)}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          className="btn btn-soft"
+                          style={{ fontSize: 12, padding: "6px 10px", color: "var(--danger)" }}
+                          title="Hapus absen"
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Revise Modal */}
+      {reviseTarget && (
+        <Modal title={`Revisi Absen — ${reviseTarget.staff_name}`} onClose={() => setReviseTarget(null)} width={520}>
+          <div style={{ background: "var(--surface-soft)", borderRadius: 10, padding: "10px 14px", marginBottom: 18, fontSize: 13 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <span><strong>Tanggal:</strong> {formatDateID(reviseTarget.date)}</span>
+              <span><strong>Shift:</strong> {reviseTarget.shift === 0 ? "Full" : `Shift ${reviseTarget.shift}`}</span>
+              <span><strong>Masuk:</strong> {hhmm(reviseTarget.checkin_time) || "—"}</span>
+              <span><strong>Pulang:</strong> {hhmm(reviseTarget.checkout_time) || "—"}</span>
+            </div>
+          </div>
+          <form onSubmit={submitRevise}>
+            <div style={{ display: "grid", gap: 12, marginBottom: 16 }}>
+              <div>
+                <label className="label">Catatan Revisi <span style={{ color: "var(--danger)" }}>*</span></label>
+                <input
+                  className="field"
+                  placeholder="Tulis alasan revisi (wajib)"
+                  value={reviseForm.revision_note}
+                  onChange={(e) => setReviseForm({ ...reviseForm, revision_note: e.target.value })}
+                  required
+                />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div>
+                  <label className="label">Menit Telat</label>
+                  <input className="field" type="number" min="0" value={reviseForm.late_minutes}
+                    onChange={(e) => setReviseForm({ ...reviseForm, late_minutes: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Potongan (Rp)</label>
+                  <input className="field" type="number" min="0" value={reviseForm.deduction}
+                    onChange={(e) => setReviseForm({ ...reviseForm, deduction: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Gaji Final (Rp)</label>
+                  <input className="field" type="number" min="0" value={reviseForm.final_salary}
+                    onChange={(e) => setReviseForm({ ...reviseForm, final_salary: e.target.value })} />
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={revising}>
+                {revising ? "Menyimpan..." : "Simpan Revisi"}
+              </button>
+              <button type="button" className="btn btn-soft" onClick={() => setReviseTarget(null)}>Batal</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <Modal title="Hapus Data Absen?" onClose={() => setDeleteTarget(null)} width={440}>
+          <div style={{ marginBottom: 18 }}>
+            <p style={{ fontSize: 14, marginBottom: 10 }}>
+              Anda akan menghapus absen <strong>{deleteTarget.staff_name}</strong> pada{" "}
+              <strong>{formatDateID(deleteTarget.date)}</strong> (Shift {deleteTarget.shift === 0 ? "Full" : deleteTarget.shift}).
+            </p>
+            <div style={{
+              background: "rgba(239,68,68,.07)", border: "1px solid rgba(239,68,68,.25)",
+              borderRadius: 10, padding: "12px 14px", fontSize: 13
+            }}>
+              <strong style={{ color: "var(--danger)" }}>Perhatian:</strong>
+              <ul style={{ margin: "6px 0 0 16px", padding: 0, lineHeight: 1.7 }}>
+                <li>Data absen akan hilang permanen dan tidak bisa dikembalikan.</li>
+                <li>Rekap gaji untuk tanggal ini akan berubah.</li>
+                {deleteTarget.paid_status && (
+                  <li style={{ color: "var(--danger)", fontWeight: 700 }}>
+                    Absen ini sudah ditandai DIBAYAR — hapus dapat menyebabkan selisih pembayaran.
+                  </li>
+                )}
+              </ul>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 13, background: "var(--danger)", borderColor: "var(--danger)" }}
+              onClick={confirmDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Menghapus..." : "Ya, Hapus"}
+            </button>
+            <button className="btn btn-soft" onClick={() => setDeleteTarget(null)}>Batal</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Photo Preview Modal */}
+      {photoTarget && (
+        <Modal title={`Selfie — ${photoTarget.staff_name}`} onClose={() => setPhotoTarget(null)} width={600}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: "var(--muted-light)", marginBottom: 8 }}>SELFIE MASUK</p>
+              {photoTarget.selfie_in ? (
+                <a href={photoTarget.selfie_in} target="_blank" rel="noopener noreferrer">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photoTarget.selfie_in}
+                    alt="Selfie masuk"
+                    style={{ width: "100%", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer" }}
+                  />
+                </a>
+              ) : (
+                <div style={{ background: "var(--surface-soft)", borderRadius: 10, padding: 32, textAlign: "center", fontSize: 12, color: "var(--muted-light)" }}>
+                  Tidak ada foto
+                </div>
+              )}
+            </div>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: "var(--muted-light)", marginBottom: 8 }}>SELFIE PULANG</p>
+              {photoTarget.selfie_out ? (
+                <a href={photoTarget.selfie_out} target="_blank" rel="noopener noreferrer">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photoTarget.selfie_out}
+                    alt="Selfie pulang"
+                    style={{ width: "100%", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer" }}
+                  />
+                </a>
+              ) : (
+                <div style={{ background: "var(--surface-soft)", borderRadius: 10, padding: 32, textAlign: "center", fontSize: 12, color: "var(--muted-light)" }}>
+                  Tidak ada foto
+                </div>
+              )}
+            </div>
+          </div>
+          {(() => {
+            const gps = parseCheckoutGps(photoTarget.flags);
+            if (!gps) return null;
+            return (
+              <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--surface-soft)", borderRadius: 10, fontSize: 13 }}>
+                <strong>GPS Pulang:</strong> {gps.lat}, {gps.lng}{" "}
+                <span style={{ color: "var(--muted-light)" }}>(akurasi ±{Number(gps.acc).toFixed(0)}m)</span>{" "}
+                <a
+                  href={`https://www.google.com/maps?q=${gps.lat},${gps.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 12, color: "var(--primary)", marginLeft: 6 }}
+                >
+                  Buka di Maps ↗
+                </a>
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
     </AdminPage>
   );
 }

@@ -190,3 +190,39 @@ export function sanitizePathSegment(value: string) {
 export function formatDateRangeStart(date?: string | null) {
   return date || todayJakarta();
 }
+
+/**
+ * Cek apakah staff sudah boleh absen keluar berdasarkan jam selesai shift.
+ * Menggunakan timezone WITA (Asia/Makassar).
+ * Shift yang selesai setelah tengah malam (mis. 01:00) ditangani secara khusus.
+ */
+export function isCheckoutTimeReached(
+  shiftEnd: string | null | undefined,
+  now = new Date()
+): boolean {
+  if (!shiftEnd) return true; // Tidak ada konfigurasi jam selesai → selalu boleh
+  const currentWita = timeMakassar(now);
+  const currentMin = parseTimeToMinutes(currentWita);
+  const endMin = parseTimeToMinutes(shiftEnd);
+  if (currentMin === null || endMin === null) return true;
+  // Jika jam selesai shift ada setelah tengah malam (00:00 s.d. 02:59 WITA)
+  if (endMin < WORKING_DAY_CUTOFF_HOUR * 60) {
+    return currentMin < WORKING_DAY_CUTOFF_HOUR * 60 && currentMin >= endMin;
+  }
+  return currentMin >= endMin;
+}
+
+/**
+ * Kembalikan jam selesai shift berdasarkan tipe shift.
+ * shift 0 = full shift → gunakan shift2_end.
+ * shift 1 → shift1_end.
+ * shift 2 → shift2_end.
+ */
+export function shiftEndTime(
+  outlet: { shift1_end: string | null; shift2_end?: string | null },
+  shift: 0 | 1 | 2
+): string | null {
+  if (shift === 2) return outlet.shift2_end ?? null;
+  if (shift === 0) return outlet.shift2_end ?? outlet.shift1_end ?? null;
+  return outlet.shift1_end ?? null;
+}

@@ -8,10 +8,14 @@ import {
   detectShift,
   getWorkingDate,
   haversineDistance,
+  isCheckoutTimeReached,
   normalizeCurrency,
+  parseTimeToMinutes,
   reportWindowStatus,
   sanitizePathSegment,
+  shiftEndTime,
   shiftStartTime,
+  timeMakassar,
   todayJakarta
 } from "@/lib/business";
 import { sendReportNotification } from "@/lib/email";
@@ -520,13 +524,49 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
       nextStep = "done";
     }
   } else {
-    // Fallback ke logic lama (backward compat untuk outlet yang belum pakai assignments)
+    // Fallback / auto-detect (untuk outlet yang belum pakai assignments, atau staff lupa pilih jadwal)
     if (!attendance?.checkin_time) {
       if (outlet.shift_mode === 2) {
-        scheduleState = "unassigned";
-        nextStep = "blocked";
+        // PRD: Staff tidak wajib pilih jadwal H-1 — auto-detect berdasarkan jam masuk
+        // Cek apakah shift yang terdeteksi sudah diisi staff lain
+        const { data: sameShiftRow } = await db
+          .from("attendance")
+          .select("staff_id,staff_name,checkout_time")
+          .eq("outlet_id", outlet.id)
+          .eq("date", effective)
+          .eq("shift", effectiveShift)
+          .not("checkin_time", "is", null)
+          .maybeSingle();
+
+        if (sameShiftRow) {
+          if (effectiveShift === 2 && !(sameShiftRow as any).checkout_time) {
+            // Shift 2 sudah diisi & belum checkout → shift 1 juga mungkin sudah selesai
+            scheduleState = "waiting_shift1";
+            nextStep = "blocked_shift1";
+            shift1WaitingInfo = {
+              staff_name: (sameShiftRow as any).staff_name || "Staff lain",
+              outlet_name: outlet.name,
+              date: effective
+            };
+          } else if (effectiveShift === 1 && !(sameShiftRow as any).checkout_time) {
+            // Shift 1 masih aktif, staff ini kemungkinan shift 2 yang datang lebih awal
+            scheduleState = "waiting_shift1";
+            nextStep = "blocked_shift1";
+            shift1WaitingInfo = {
+              staff_name: (sameShiftRow as any).staff_name || "Staff Shift 1",
+              outlet_name: outlet.name,
+              date: effective
+            };
+          } else {
+            // Shift lain sudah selesai → staff ini mungkin lembur/salah shift, izinkan tetap
+            scheduleState = "ready";
+            nextStep = "checkin";
+          }
+        } else {
+          scheduleState = "ready";
+          nextStep = "checkin";
+        }
       } else {
-        // Outlet 1 shift tidak perlu pilih jadwal manual.
         scheduleState = "ready";
         nextStep = "checkin";
       }
@@ -729,6 +769,60 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     .eq("date", date)
     .in("status", ["confirmed", "admin_override", "auto_cover"]);
 
+  // Auto-create assignment jika tidak ada (staff lupa pilih jadwal H-1)
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    const { data: existingAss } = await db
+      .from("staff_shift_assignments")
+      .select("id")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .not("status", "in", '("cancelled","conflict")')
+      .maybeSingle();
+    if (!existingAss) {
+      const shiftType = shift === 1 ? "SHIFT_1" : "SHIFT_2";
+      try {
+        await db.from("staff_shift_assignments").insert({
+          outlet_id: outlet.id,
+          staff_id: staff.id,
+          staff_name: staff.name,
+          date,
+          shift_type: shiftType,
+          status: "locked",
+          source: "checkin",
+          requested_at: now.toISOString(),
+          confirmed_at: now.toISOString(),
+          locked_at: now.toISOString(),
+          created_by: "auto_checkin"
+        });
+      } catch { /* abaikan jika race condition */ }
+    }
+  } else if (outlet.shift_mode === 1) {
+    const { data: existingAss } = await db
+      .from("staff_shift_assignments")
+      .select("id")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .not("status", "in", '("cancelled","conflict")')
+      .maybeSingle();
+    if (!existingAss) {
+      try {
+        await db.from("staff_shift_assignments").insert({
+          outlet_id: outlet.id,
+          staff_id: staff.id,
+          staff_name: staff.name,
+          date,
+          shift_type: "FULL_SHIFT",
+          status: "locked",
+          source: "checkin",
+          requested_at: now.toISOString(),
+          confirmed_at: now.toISOString(),
+          locked_at: now.toISOString(),
+          created_by: "auto_checkin"
+        });
+      } catch { /* abaikan jika race condition */ }
+    }
+  }
+
   await logAudit(db, "checkin", staff.name, { date, shift, distance: Math.round(distance), gpsLowAccuracy });
   return ok({
     attendance: inserted,
@@ -748,7 +842,6 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
-  // Allow shift=0 (full shift) to pass — same fix as checkin
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
 
@@ -763,6 +856,40 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if (!attendance?.checkin_time) throw new HttpError("Belum ada absen masuk untuk shift ini", 400, "NO_CHECKIN");
   if (attendance.checkout_time) throw new HttpError("Absen pulang sudah tercatat", 409, "ALREADY_CHECKED_OUT");
 
+  // Validasi waktu: jangan boleh absen keluar sebelum jam selesai shift
+  const now = new Date();
+  const endTime = shiftEndTime(outlet, shift);
+  if (endTime && !isCheckoutTimeReached(endTime, now)) {
+    const formattedEnd = String(endTime).slice(0, 5);
+    throw new HttpError(
+      `Absen keluar belum tersedia. Shift selesai pukul ${formattedEnd} WITA. Silakan tunggu hingga waktu shift selesai.`,
+      400,
+      "CHECKOUT_TOO_EARLY"
+    );
+  }
+
+  // Validasi GPS wajib untuk absen keluar
+  const checkoutLat = numberBody(body, "lat", NaN);
+  const checkoutLng = numberBody(body, "lng", NaN);
+  const checkoutAcc = Math.max(0, numberBody(body, "accuracy", 0));
+  if (!Number.isFinite(checkoutLat) || !Number.isFinite(checkoutLng)) {
+    throw new HttpError(
+      "GPS wajib diaktifkan untuk absen keluar. Mohon aktifkan lokasi pada browser Anda dan coba lagi.",
+      400,
+      "GPS_REQUIRED_CHECKOUT"
+    );
+  }
+  const checkoutDist = haversineDistance(checkoutLat, checkoutLng, outlet.lat, outlet.lng);
+  const checkoutRadius = outlet.radius_m + Math.min(checkoutAcc, outlet.radius_m * 0.3);
+  if (checkoutDist > checkoutRadius) {
+    throw new HttpError(
+      `Lokasi Anda berada di luar area outlet (${Math.round(checkoutDist)}m dari pusat outlet). Silakan lakukan absen keluar di area outlet.`,
+      400,
+      "OUTSIDE_RADIUS"
+    );
+  }
+  const checkoutGpsLowAccuracy = checkoutAcc > outlet.radius_m * 3;
+
   const { data: reports, error: reportsError } = await db
     .from("reports")
     .select("type")
@@ -771,30 +898,55 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if (reportsError) throw reportsError;
   const hasBuka = (reports || []).some((report) => report.type === "BUKA");
   const hasTutup = (reports || []).some((report) => report.type === "TUTUP");
-  if ((shift === 0 || shift === 1) && !hasBuka) throw new HttpError("Laporan BUKA wajib disubmit sebelum checkout");
-  if ((shift === 0 || shift === 2) && !hasTutup) throw new HttpError("Laporan TUTUP wajib disubmit sebelum checkout");
+  if ((shift === 0 || shift === 1) && !hasBuka) throw new HttpError("Laporan Buka Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_BUKA");
+  if ((shift === 0 || shift === 2) && !hasTutup) throw new HttpError("Laporan Tutup Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_TUTUP");
 
   const selfieUrl = await uploadImage(db, `selfies/checkout/${staff.id}/${date}_${shift}.jpg`, body.selfie || body.photo);
   if (!selfieUrl) throw new HttpError("Selfie absen pulang wajib diupload");
 
-  const now = new Date();
   const durationMin = Math.min(
     18 * 60,
     Math.max(0, Math.round((now.getTime() - new Date(attendance.checkin_time).getTime()) / 60000))
   );
 
+  // Simpan GPS checkout di flags agar admin bisa melihatnya
+  const existingFlags = (attendance.flags || "").split(",").filter(Boolean);
+  const checkoutGpsFlag = `CHECKOUT_GPS:${checkoutLat.toFixed(6)}:${checkoutLng.toFixed(6)}:${Math.round(checkoutAcc)}`;
+  if (checkoutGpsLowAccuracy) existingFlags.push("CHECKOUT_GPS_LOW_ACC");
+  existingFlags.push(checkoutGpsFlag);
+  const newFlags = existingFlags.join(",");
+
+  // Tandai assignment sebagai completed
+  await db
+    .from("staff_shift_assignments")
+    .update({ status: "completed", completed_at: now.toISOString(), updated_at: now.toISOString() })
+    .eq("staff_id", staff.id)
+    .eq("date", date)
+    .eq("status", "locked");
+
   const { data: updated, error } = await db
     .from("attendance")
     .update({
       checkout_time: now.toISOString(),
-      selfie_out: selfieUrl
+      selfie_out: selfieUrl,
+      flags: newFlags
     })
     .eq("id", attendance.id)
     .select("*")
     .single();
   if (error) throw error;
-  await logAudit(db, "checkout", staff.name, { date, shift, durationMin });
-  return ok({ attendance: updated, checkout_time: now.toISOString(), duration_min: durationMin });
+  await logAudit(db, "checkout", staff.name, {
+    date, shift, durationMin,
+    checkoutDist: Math.round(checkoutDist),
+    checkoutGpsLowAccuracy
+  });
+  return ok({
+    attendance: updated,
+    checkout_time: now.toISOString(),
+    duration_min: durationMin,
+    checkout_dist_m: Math.round(checkoutDist),
+    checkout_gps_low_accuracy: checkoutGpsLowAccuracy
+  });
 }
 
 async function reportsConfig(db: Db, request: NextRequest, body: Body) {
@@ -1564,6 +1716,39 @@ async function adminAttendance(db: Db, method: string, body: Body) {
     if (error) throw error;
     await logAudit(db, "admin_revise_attendance", "Admin", { attendanceId, note: updates.revision_note });
     return ok({ attendance: data });
+  }
+
+  if (method === "DELETE") {
+    const attendanceId = stringBody(body, "attendanceId") || stringBody(body, "id");
+    if (!attendanceId) throw new HttpError("Attendance ID wajib diisi");
+
+    const { data: existing, error: fetchErr } = await db
+      .from("attendance")
+      .select("paid_status,staff_name,date,shift,payment_id,flags")
+      .eq("id", attendanceId)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!existing) throw new HttpError("Data absensi tidak ditemukan", 404, "NOT_FOUND");
+
+    if (existing.paid_status) {
+      throw new HttpError(
+        "Absensi ini sudah tercatat sebagai dibayar dan tidak bisa dihapus. Hubungi admin untuk membatalkan pembayaran terlebih dahulu.",
+        400,
+        "ATTENDANCE_PAID"
+      );
+    }
+
+    const { error: delErr } = await db.from("attendance").delete().eq("id", attendanceId);
+    if (delErr) throw delErr;
+
+    await logAudit(db, "admin_delete_attendance", "Admin", {
+      attendanceId,
+      staffName: existing.staff_name,
+      date: existing.date,
+      shift: existing.shift,
+      reason: stringBody(body, "reason") || "Dihapus admin"
+    });
+    return ok({ deleted: true });
   }
 
   throw new HttpError("Method attendance tidak valid", 405);
