@@ -536,21 +536,23 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
 
   // Cek apakah staff sudah checkin hari ini (tanpa filter shift)
   // Penting: admin bisa koreksi shift setelah checkin, sehingga attendance.shift bisa berbeda dari assignment.shift_type
-  const { data: checkedInAtt, error: checkedInAttError } = await db
+  // Gunakan array fetch (bukan maybeSingle) agar aman saat ada lebih dari satu baris per tanggal
+  const { data: attRows, error: attError } = await db
     .from("attendance")
     .select("*")
     .eq("staff_id", staff.id)
     .eq("date", effective)
-    .not("checkin_time", "is", null)
-    .maybeSingle();
-  if (checkedInAttError) throw checkedInAttError;
+    .not("checkin_time", "is", null);
+  if (attError) throw attError;
+
+  // Prioritas: cari attendance yang shiftnya cocok dengan effectiveShift, fallback ke baris pertama
+  const attendance =
+    (attRows || []).find((r: any) => r.shift === effectiveShift) ?? (attRows || [])[0] ?? null;
 
   // Jika sudah ada attendance dengan checkin, gunakan shift dari attendance (respek koreksi admin)
-  if (checkedInAtt && !isFullShift) {
-    effectiveShift = (checkedInAtt as any).shift as 0 | 1 | 2;
+  if (attendance && !isFullShift) {
+    effectiveShift = (attendance as any).shift as 0 | 1 | 2;
   }
-
-  const attendance = checkedInAtt ?? null;
 
   const { data: reports, error: reportsError } = await db
     .from("reports")
@@ -896,7 +898,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       .select("id")
       .eq("staff_id", staff.id)
       .eq("date", date)
-      .not("status", "in", '("cancelled","conflict")')
+      .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
       .maybeSingle();
     if (!existingAss) {
       const shiftType = shift === 1 ? "SHIFT_1" : "SHIFT_2";
@@ -922,7 +924,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       .select("id")
       .eq("staff_id", staff.id)
       .eq("date", date)
-      .not("status", "in", '("cancelled","conflict")')
+      .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
       .maybeSingle();
     if (!existingAss) {
       try {
@@ -1425,7 +1427,7 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
       db.from("shift_schedule").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("leave_requests").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("shift_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
-      db.from("staff_shift_assignments").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).not("status", "in", '("cancelled","conflict")'),
+      db.from("staff_shift_assignments").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"]),
       db.from("staff_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).eq("status", "active")
     ]);
   if (outletError) throw outletError;
@@ -2094,7 +2096,7 @@ async function adminAttendance(db: Db, method: string, body: Body) {
           .update({ shift_type: newShiftType, updated_at: new Date().toISOString() })
           .eq("staff_id", existing.staff_id)
           .eq("date", existing.date)
-          .not("status", "in", '("cancelled","conflict")');
+          .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"]);
       }
     } else {
       // Koreksi manual: late_minutes, deduction, final_salary, status, paid_status
