@@ -11,6 +11,9 @@ interface CameraCaptureProps {
   allowTorch?: boolean;
   watermark?: {
     outletName?: string | null;
+    staffName?: string | null;
+    lat?: number | null;
+    lng?: number | null;
   };
   onCapture: (photo: CapturedPhoto) => void;
   onCancel: () => void;
@@ -36,62 +39,84 @@ function formatWatermarkTime(date: Date) {
   return `${dayDate}, ${time} WITA`;
 }
 
-function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const words = text.trim().split(/\s+/);
-  const lines: string[] = [];
-  let line = "";
-
-  words.forEach((word) => {
-    const testLine = line ? `${line} ${word}` : word;
-    if (ctx.measureText(testLine).width <= maxWidth || !line) {
-      line = testLine;
-      return;
-    }
-    lines.push(line);
-    line = word;
-  });
-
-  if (line) lines.push(line);
-  return lines.slice(0, 2);
+function formatCoords(lat?: number | null, lng?: number | null): string {
+  if (lat == null || lng == null) return "-";
+  const latStr = lat.toFixed(6);
+  const lngStr = lng.toFixed(6);
+  return `${latStr}, ${lngStr}`;
 }
 
 function drawWatermark(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  outletName?: string | null
+  opts?: {
+    outletName?: string | null;
+    staffName?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+  }
 ) {
-  const padding = Math.max(18, Math.round(width * 0.024));
+  const padding = Math.max(14, Math.round(width * 0.018));
   const maxTextWidth = width - padding * 2;
-  const brand = `Roti Bakar Ngeunah - Outlet ${outletName || "-"}`;
-  const brandFont = Math.min(34, Math.max(18, Math.round(width * 0.025)));
-  const timeFont = Math.min(28, Math.max(15, Math.round(width * 0.02)));
+
+  // Font sizes — scale with image width, capped untuk keterbacaan
+  const titleFont = Math.min(30, Math.max(16, Math.round(width * 0.022)));
+  const lineFont  = Math.min(24, Math.max(14, Math.round(width * 0.018)));
+  const timeFont  = Math.min(20, Math.max(12, Math.round(width * 0.015)));
+
+  const lineGap = Math.max(5, Math.round(width * 0.006));
+  const sectionGap = Math.max(3, Math.round(width * 0.004));
+
+  // Susun baris watermark
+  const lines: Array<{ text: string; font: string; isBold: boolean }> = [
+    { text: "Roti Bakar Ngeunah",                                    font: `${titleFont}px`, isBold: true  },
+    { text: `Outlet - ${opts?.outletName || "-"}`,                   font: `${lineFont}px`,  isBold: true  },
+    { text: `Nama Staff: ${opts?.staffName || "-"}`,                 font: `${lineFont}px`,  isBold: false },
+    { text: `Koordinat GPS: ${formatCoords(opts?.lat, opts?.lng)}`,  font: `${lineFont}px`,  isBold: false },
+    { text: formatWatermarkTime(new Date()),                         font: `${timeFont}px`,  isBold: false }
+  ];
+
+  // Hitung tinggi blok watermark
+  const fontHeights = [titleFont, lineFont, lineFont, lineFont, timeFont];
+  const totalTextHeight = fontHeights.reduce((s, h) => s + h, 0)
+    + lineGap * (lines.length - 2)  // antar baris teks biasa
+    + sectionGap;                   // extra gap sebelum timestamp
+
+  const blockHeight = padding + totalTextHeight + padding * 0.8;
+  const top = Math.max(0, height - blockHeight);
 
   ctx.save();
-  ctx.font = `800 ${brandFont}px Arial, sans-serif`;
-  const brandLines = wrapCanvasText(ctx, brand, maxTextWidth);
-  const lineGap = Math.max(8, Math.round(width * 0.008));
-  const blockHeight = padding * 1.25 + brandLines.length * brandFont + lineGap + timeFont + padding * 0.85;
-  const top = height - blockHeight;
 
-  ctx.fillStyle = "rgba(0,0,0,0.62)";
-  ctx.fillRect(0, Math.max(0, top), width, blockHeight);
+  // Background semi-transparan
+  ctx.fillStyle = "rgba(0,0,0,0.68)";
+  ctx.fillRect(0, top, width, blockHeight);
 
-  ctx.shadowColor = "rgba(0,0,0,0.65)";
-  ctx.shadowBlur = 4;
+  ctx.shadowColor = "rgba(0,0,0,0.7)";
+  ctx.shadowBlur = 3;
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#fff";
-  ctx.font = `800 ${brandFont}px Arial, sans-serif`;
 
-  let y = top + padding * 0.6;
-  brandLines.forEach((line) => {
-    ctx.fillText(line, padding, y, maxTextWidth);
-    y += brandFont;
+  let y = top + padding * 0.75;
+
+  lines.forEach((line, idx) => {
+    const isTimestamp = idx === lines.length - 1;
+    const weight = line.isBold ? "800" : "600";
+    ctx.font = `${weight} ${line.font} Arial, sans-serif`;
+    ctx.fillStyle = isTimestamp ? "rgba(255,255,255,0.82)" : "#fff";
+
+    // Truncate teks jika terlalu panjang untuk lebar canvas
+    let text = line.text;
+    while (ctx.measureText(text).width > maxTextWidth && text.length > 4) {
+      text = text.slice(0, -1);
+    }
+    if (text !== line.text) text = text.trimEnd() + "…";
+
+    ctx.fillText(text, padding, y, maxTextWidth);
+
+    const fh = fontHeights[idx];
+    y += fh + (isTimestamp ? 0 : idx === lines.length - 2 ? sectionGap : lineGap);
   });
 
-  y += lineGap;
-  ctx.font = `700 ${timeFont}px Arial, sans-serif`;
-  ctx.fillText(formatWatermarkTime(new Date()), padding, y, maxTextWidth);
   ctx.restore();
 }
 
@@ -214,7 +239,8 @@ export function CameraCapture({
     } else {
       ctx.drawImage(video, 0, 0);
     }
-    drawWatermark(ctx, canvas.width, canvas.height, watermark?.outletName);
+    // Gambar watermark dengan data lengkap
+    drawWatermark(ctx, canvas.width, canvas.height, watermark);
     try {
       const photo = await photoFromCanvas(canvas, {
         baseName: photoFileBaseName(title || (facing === "user" ? "selfie" : "foto")),

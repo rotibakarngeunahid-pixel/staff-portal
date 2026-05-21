@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { KeyRound, Save } from "lucide-react";
+import { KeyRound, Save, ToggleLeft, ToggleRight } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 
@@ -19,6 +19,12 @@ export default function AdminConfigPage() {
   const [pinConfirm, setPinConfirm] = useState("");
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [savingAutoApprove, setSavingAutoApprove] = useState(false);
+  const [savingPin, setSavingPin] = useState(false);
+
+  // leave_auto_approve: default aktif jika config belum di-set
+  const autoApproveActive = config["leave_auto_approve"] !== "false";
 
   async function load() {
     const payload = await apiFetch<{ ok: true; config: Record<string, string> }>("/api/admin/config", { role: "admin" });
@@ -30,18 +36,46 @@ export default function AdminConfigPage() {
   }, []);
 
   async function save() {
+    if (savingConfig) return;
+    setSavingConfig(true);
     setMessage("Menyimpan..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/config", { method: "PUT", role: "admin", body: config });
       setMessage("Pengaturan tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function toggleAutoApprove() {
+    if (savingAutoApprove) return;
+    const newValue = autoApproveActive ? "false" : "true";
+    setSavingAutoApprove(true);
+    setMessage(newValue === "true" ? "Mengaktifkan auto approve..." : "Menonaktifkan auto approve..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/config", {
+        method: "PUT", role: "admin",
+        body: { key: "leave_auto_approve", value: newValue }
+      });
+      setConfig((prev) => ({ ...prev, leave_auto_approve: newValue }));
+      setMessage(newValue === "true"
+        ? "Auto approve permintaan libur diaktifkan ✓"
+        : "Auto approve permintaan libur dinonaktifkan ✓");
+      setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal mengubah pengaturan"); setMsgType("err");
+    } finally {
+      setSavingAutoApprove(false);
     }
   }
 
   async function changePin() {
+    if (savingPin) return;
     if (pin.length < 4) { setMessage("Password minimal 4 karakter"); setMsgType("err"); return; }
     if (pin !== pinConfirm) { setMessage("Konfirmasi password tidak cocok"); setMsgType("err"); return; }
+    setSavingPin(true);
     setMessage("Mengubah password..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/config", { method: "PUT", role: "admin", body: { key: "admin_pin", value: pin } });
@@ -50,6 +84,8 @@ export default function AdminConfigPage() {
       setMessage("Password admin berhasil diubah ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal mengubah password"); setMsgType("err");
+    } finally {
+      setSavingPin(false);
     }
   }
 
@@ -72,9 +108,47 @@ export default function AdminConfigPage() {
             </div>
           ))}
         </div>
-        <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={save}>
-          <Save size={15} /> Simpan Pengaturan
+        <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={save} disabled={savingConfig}>
+          <Save size={15} /> {savingConfig ? "Menyimpan..." : "Simpan Pengaturan"}
         </button>
+      </AdminSection>
+
+      {/* Auto-approve leave */}
+      <AdminSection
+        title="Auto Approve Permintaan Libur"
+        subtitle="Jika aktif, permintaan libur dari staff langsung disetujui otomatis tanpa perlu konfirmasi admin"
+      >
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          background: autoApproveActive ? "var(--success-bg)" : "var(--surface-soft)",
+          border: `1.5px solid ${autoApproveActive ? "var(--success-border)" : "var(--border)"}`,
+          borderRadius: 14, padding: "14px 18px", gap: 16
+        }}>
+          <div>
+            <p style={{ fontSize: 14, fontWeight: 800, color: autoApproveActive ? "var(--success)" : "var(--ink)", marginBottom: 4 }}>
+              Auto Approve {autoApproveActive ? "Aktif" : "Nonaktif"}
+            </p>
+            <p style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+              {autoApproveActive
+                ? "Permintaan libur dari staff langsung disetujui. Admin tetap bisa membatalkan dari menu Libur."
+                : "Permintaan libur masuk dengan status Menunggu. Admin harus menyetujui secara manual."}
+            </p>
+          </div>
+          <button
+            onClick={toggleAutoApprove}
+            disabled={savingAutoApprove}
+            aria-label={autoApproveActive ? "Nonaktifkan auto approve" : "Aktifkan auto approve"}
+            style={{
+              background: "none", border: "none", cursor: savingAutoApprove ? "not-allowed" : "pointer",
+              flexShrink: 0, opacity: savingAutoApprove ? 0.5 : 1
+            }}
+          >
+            {autoApproveActive
+              ? <ToggleRight size={44} color="var(--success)" />
+              : <ToggleLeft size={44} color="var(--muted)" />
+            }
+          </button>
+        </div>
       </AdminSection>
 
       {/* Password change */}
@@ -101,8 +175,8 @@ export default function AdminConfigPage() {
             />
           </div>
         </div>
-        <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={changePin}>
-          <KeyRound size={15} /> Ganti Password
+        <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={changePin} disabled={savingPin}>
+          <KeyRound size={15} /> {savingPin ? "Mengubah..." : "Ganti Password"}
         </button>
       </AdminSection>
     </AdminPage>

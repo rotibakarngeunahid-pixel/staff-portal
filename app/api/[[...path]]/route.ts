@@ -1089,22 +1089,40 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
 async function staffPayroll(db: Db, request: NextRequest) {
   const session = await requireSession(request, "staff");
-  const { data: attendance, error } = await db
-    .from("attendance")
-    .select("*")
-    .eq("staff_id", session.sub)
-    .order("date", { ascending: false });
+
+  // Ambil semua data secara paralel untuk kecepatan
+  const [
+    { data: attendance, error },
+    { data: payments, error: payError },
+    { staff, outlet },
+    cfg
+  ] = await Promise.all([
+    db.from("attendance").select("*").eq("staff_id", session.sub).order("date", { ascending: false }),
+    db.from("payments").select("*").eq("staff_id", session.sub).order("paid_at", { ascending: false }),
+    getStaffWithOutlet(db, session.sub),
+    configMap(db)
+  ]);
+
   if (error) throw error;
-  const { data: payments, error: payError } = await db
-    .from("payments")
-    .select("*")
-    .eq("staff_id", session.sub)
-    .order("paid_at", { ascending: false });
   if (payError) throw payError;
+
   const rows = attendance || [];
   const totalEarned = rows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
   const totalPaid = (payments || []).reduce((sum, row) => sum + normalizeCurrency(row.amount), 0);
-  return ok({ attendance: rows, payments: payments || [], summary: { totalEarned, totalPaid, balance: totalEarned - totalPaid } });
+
+  return ok({
+    attendance: rows,
+    payments: payments || [],
+    summary: { totalEarned, totalPaid, balance: totalEarned - totalPaid },
+    outlet: outlet ? {
+      shift1_start: outlet.shift1_start || null,
+      shift2_start: outlet.shift2_start || null
+    } : null,
+    config: {
+      lateToleranceMinutes: configNumber(cfg, "late_tolerance_minutes", 10),
+      deductionPerMinute: configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
+    }
+  });
 }
 
 async function staffProfile(db: Db, request: NextRequest) {
@@ -1321,6 +1339,12 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
       400, "DEADLINE_PASSED"
     );
   }
+
+  // Cek apakah auto-approve aktif (default: aktif)
+  const cfg = await configMap(db);
+  const autoApprove = cfg["leave_auto_approve"] !== "false";
+  const leaveStatus = autoApprove ? "approved" : "pending";
+
   const { data, error } = await db
     .from("leave_requests")
     .upsert(
@@ -1329,7 +1353,7 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
         staff_id: staff.id,
         staff_name: staff.name,
         date,
-        status: "pending",
+        status: leaveStatus,
         reason: stringBody(body, "reason") || null,
         cancelled_at: null
       },
@@ -1338,8 +1362,24 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
     .select("*")
     .single();
   if (error) throw error;
-  await logAudit(db, "request_leave", staff.name, { date });
-  return ok({ leave: data });
+
+  // Jika auto-approve: batalkan shift_schedule yang konflik (sama seperti admin approve)
+  if (autoApprove) {
+    await db
+      .from("shift_schedule")
+      .update({
+        staff_id: null,
+        staff_name: null,
+        status: "open",
+        cancelled_at: new Date().toISOString(),
+        cancel_reason: "Cuti disetujui otomatis"
+      })
+      .eq("staff_id", staff.id)
+      .eq("date", date);
+  }
+
+  await logAudit(db, "request_leave", staff.name, { date, autoApprove });
+  return ok({ leave: data, autoApproved: autoApprove });
 }
 
 async function cancelLeave(db: Db, request: NextRequest, body: Body) {

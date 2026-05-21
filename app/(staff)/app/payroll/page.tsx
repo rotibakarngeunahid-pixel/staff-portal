@@ -6,20 +6,24 @@ import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
 
+type AttendanceRow = {
+  id: string;
+  date: string;
+  shift: number;
+  checkin_time: string | null;
+  checkout_time: string | null;
+  status: string;
+  late_minutes: number;
+  deduction: number;
+  final_salary: number;
+  paid_status: boolean;
+  flags: string | null;
+};
+
 type PayrollPayload = {
   ok: true;
   summary: { totalEarned: number; totalPaid: number; balance: number };
-  attendance: Array<{
-    id: string;
-    date: string;
-    shift: number;
-    checkin_time: string | null;
-    checkout_time: string | null;
-    status: string;
-    deduction: number;
-    final_salary: number;
-    paid_status: boolean;
-  }>;
+  attendance: AttendanceRow[];
   payments: Array<{
     id: string;
     paid_at: string;
@@ -29,7 +33,76 @@ type PayrollPayload = {
     date_from: string | null;
     date_to: string | null;
   }>;
+  outlet: { shift1_start: string | null; shift2_start: string | null } | null;
+  config: { lateToleranceMinutes: number; deductionPerMinute: number };
 };
+
+function formatTime(isoString: string | null | undefined): string {
+  if (!isoString) return "—";
+  return hhmm(isoString) || "—";
+}
+
+function shiftStartLabel(row: AttendanceRow, outlet: PayrollPayload["outlet"]): string | null {
+  if (!outlet) return null;
+  const start = row.shift === 2 ? outlet.shift2_start : outlet.shift1_start;
+  if (!start) return null;
+  return start.slice(0, 5);
+}
+
+function LateDetail({
+  row,
+  outlet,
+  config
+}: {
+  row: AttendanceRow;
+  outlet: PayrollPayload["outlet"];
+  config: PayrollPayload["config"];
+}) {
+  if (!row.late_minutes || row.late_minutes <= 0) return null;
+
+  const dateLabel = formatDateWithDayID(row.date);
+  const shiftLabel = row.shift === 0 ? "Full Shift" : `Shift ${row.shift}`;
+  const jadwalMasuk = shiftStartLabel(row, outlet);
+  const actualMasuk = formatTime(row.checkin_time);
+  const lateMin = row.late_minutes;
+  const deductPer = config.deductionPerMinute;
+  const totalPotongan = row.deduction;
+
+  return (
+    <div style={{
+      background: "var(--warning-bg)", border: "1px solid var(--warning-border)",
+      borderRadius: 10, padding: "10px 12px", marginBottom: 8
+    }}>
+      <p style={{ fontSize: 12, fontWeight: 800, color: "var(--warning)", marginBottom: 6 }}>
+        ⚠️ Detail Keterlambatan
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: "#78350F", lineHeight: 1.6 }}>
+        <p>
+          Pada tanggal <strong>{dateLabel}</strong> ({shiftLabel}), Anda terlambat{" "}
+          <strong>{lateMin} menit</strong>.
+        </p>
+        {jadwalMasuk && (
+          <p>
+            Jadwal masuk seharusnya pukul <strong>{jadwalMasuk} WITA</strong>,
+            tetapi Anda absen masuk pada pukul <strong>{actualMasuk} WITA</strong>.
+          </p>
+        )}
+        {!jadwalMasuk && (
+          <p>
+            Jam absen masuk: <strong>{actualMasuk} WITA</strong>.
+          </p>
+        )}
+        <p>
+          Berdasarkan aturan potongan{" "}
+          <strong>{rupiah(deductPer)} per menit</strong>, maka potongan keterlambatan adalah:
+        </p>
+        <p style={{ fontWeight: 800, color: "var(--danger)" }}>
+          {lateMin} menit × {rupiah(deductPer)} = {rupiah(totalPotongan)}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function StaffPayrollPage() {
   const [data, setData] = useState<PayrollPayload | null>(null);
@@ -165,19 +238,38 @@ export default function StaffPayrollPage() {
                   🕐 {hhmm(row.checkin_time) || "—"} → {hhmm(row.checkout_time) || "Belum pulang"}
                 </p>
 
-                {/* Row 3: deduction if any */}
+                {/* Row 3: detail keterlambatan (jika terlambat) */}
+                {row.late_minutes > 0 && data && (
+                  <LateDetail row={row} outlet={data.outlet} config={data.config} />
+                )}
+
+                {/* Row 4: ringkasan potongan (compact) */}
                 {row.deduction > 0 && (
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     background: "var(--warning-bg)", borderRadius: 8, padding: "5px 10px",
                     marginBottom: 6
                   }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>⚠️ Potongan keterlambatan</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)" }}>
+                      ⚠️ Telat {row.late_minutes} menit
+                    </span>
                     <span style={{ fontSize: 12, fontWeight: 800, color: "var(--danger)" }}>-{rupiah(row.deduction)}</span>
                   </div>
                 )}
 
-                {/* Row 4: final salary */}
+                {/* Row 5: full shift bonus */}
+                {String(row.flags || "").includes("FULL_SHIFT_2X") && (
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    background: "rgba(79,70,229,0.07)", borderRadius: 8, padding: "5px 10px",
+                    marginBottom: 6, border: "1px solid rgba(79,70,229,0.15)"
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#4338CA" }}>🌟 Full Shift · Gaji 2×</span>
+                    <span className="status-pill" style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontSize: 10 }}>Bonus aktif</span>
+                  </div>
+                )}
+
+                {/* Row 6: final salary */}
                 <div style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   background: "var(--success-bg)", borderRadius: 8, padding: "7px 10px",

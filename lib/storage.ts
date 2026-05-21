@@ -36,14 +36,14 @@ export async function uploadImage(
   if (typeof input === "string") {
     if (!input.startsWith("data:")) return input;
     const parsed = dataUrlToBytes(input);
-    if (parsed.buffer.byteLength > 10 * 1024 * 1024) {
-      throw new Error("Ukuran foto maksimal 10MB");
+    if (parsed.buffer.byteLength > 1 * 1024 * 1024) {
+      throw new Error("Ukuran foto maksimal 1MB");
     }
     file = new Blob([parsed.buffer], { type: parsed.contentType });
     contentType = parsed.contentType;
   } else if (input instanceof Blob) {
-    if (input.size > 10 * 1024 * 1024) {
-      throw new Error("Ukuran foto maksimal 10MB");
+    if (input.size > 1 * 1024 * 1024) {
+      throw new Error("Ukuran foto maksimal 1MB");
     }
     file = input;
     contentType = input.type || fallbackContentType;

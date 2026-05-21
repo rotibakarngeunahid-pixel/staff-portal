@@ -82,6 +82,12 @@ type CameraSlot = {
   facing: "user" | "environment";
   title: string;
   allowTorch?: boolean;
+  watermarkOverride?: {
+    outletName?: string | null;
+    staffName?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+  };
   onCapture: (photo: CapturedPhoto) => void;
 };
 
@@ -231,6 +237,7 @@ export default function StaffHomePage() {
   const serverClockOffsetRef = useRef(0);
 
   const [camera, setCamera] = useState<CameraSlot | null>(null);
+  const attendanceBusyRef = useRef(false);
 
   /* ─── Report section state ─── */
   const [reportItems, setReportItems] = useState<ReportCfgItem[]>([]);
@@ -427,6 +434,7 @@ export default function StaffHomePage() {
 
   /* ─── Checkin / Checkout ─── */
   async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto) {
+    if (attendanceBusyRef.current) return; // anti double-submit
     setError("");
     if (action === "checkin" && (gps.lat === null || gps.lng === null)) {
       setError("Lokasi GPS belum siap. Tunggu hingga GPS ready lalu coba lagi.");
@@ -442,7 +450,8 @@ export default function StaffHomePage() {
         return;
       }
     }
-    setBusy(action === "checkin" ? "Mengunggah selfie absen masuk..." : "Mengunggah selfie absen pulang...");
+    attendanceBusyRef.current = true;
+    setBusy(action === "checkin" ? "Mengompres & mengunggah selfie..." : "Mengompres & mengunggah selfie...");
     try {
       const body = new FormData();
       body.append("nonce", crypto.randomUUID());
@@ -459,6 +468,7 @@ export default function StaffHomePage() {
     } catch (err) {
       setError(humanError(err));
     } finally {
+      attendanceBusyRef.current = false;
       setBusy("");
     }
   }
@@ -575,6 +585,12 @@ export default function StaffHomePage() {
       facing: "environment",
       title: `Foto ${item.label}`,
       allowTorch: true,
+      watermarkOverride: {
+        outletName: outlet?.name,
+        staffName: status?.staff?.name,
+        lat: gps.lat,
+        lng: gps.lng
+      },
       onCapture: (photo) => {
         const latestWindow = reportWindowStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
         if (!latestWindow.allowed) {
@@ -594,7 +610,12 @@ export default function StaffHomePage() {
           facing={camera.facing}
           title={camera.title}
           allowTorch={camera.allowTorch}
-          watermark={{ outletName: outlet?.name }}
+          watermark={camera.watermarkOverride ?? {
+            outletName: outlet?.name,
+            staffName: status?.staff?.name,
+            lat: gps.lat,
+            lng: gps.lng
+          }}
           onCapture={camera.onCapture}
           onCancel={closeCamera}
         />
@@ -830,6 +851,12 @@ export default function StaffHomePage() {
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Masuk",
+                    watermarkOverride: {
+                      outletName: outlet?.name,
+                      staffName: status?.staff?.name,
+                      lat: gps.lat,
+                      lng: gps.lng
+                    },
                     onCapture: (photo) => runAttendance("checkin", photo)
                   })}
                   disabled={checkinDisabled}
@@ -847,6 +874,12 @@ export default function StaffHomePage() {
                     openCamera({
                       facing: "user",
                       title: "📸 Selfie Absen Pulang",
+                      watermarkOverride: {
+                        outletName: outlet?.name,
+                        staffName: status?.staff?.name,
+                        lat: gps.lat,
+                        lng: gps.lng
+                      },
                       onCapture: (photo) => runAttendance("checkout", photo)
                     });
                   }}

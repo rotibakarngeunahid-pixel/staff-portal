@@ -26,12 +26,18 @@ export default function AdminLeavePage() {
   const [status, setStatus] = useState("");
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
+  const [autoApprove, setAutoApprove] = useState<boolean | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     try {
-      const payload = await apiFetch<{ ok: true; leaves: Leave[] }>("/api/admin/leave", { role: "admin", body: { status } });
-      setLeaves(payload.leaves);
+      const [leavePayload, configPayload] = await Promise.all([
+        apiFetch<{ ok: true; leaves: Leave[] }>("/api/admin/leave", { role: "admin", body: { status } }),
+        apiFetch<{ ok: true; config: Record<string, string> }>("/api/admin/config", { role: "admin" })
+      ]);
+      setLeaves(leavePayload.leaves);
+      setAutoApprove(configPayload.config["leave_auto_approve"] !== "false");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
     } finally {
@@ -50,6 +56,8 @@ export default function AdminLeavePage() {
   }, [status]);
 
   async function update(leaveId: string, nextStatus: string) {
+    if (updatingId) return; // anti double-click
+    setUpdatingId(leaveId);
     setMessage("Memperbarui status libur..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/leave", { method: "PUT", role: "admin", body: { leaveId, status: nextStatus } });
@@ -57,6 +65,8 @@ export default function AdminLeavePage() {
       setMessage("Status libur diperbarui ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setUpdatingId(null);
     }
   }
 
@@ -65,6 +75,39 @@ export default function AdminLeavePage() {
   return (
     <AdminPage title="Manajemen Libur" subtitle="Approve atau batalkan permintaan libur staff">
       <MsgBar message={message} type={msgType} />
+
+      {/* Info banner auto-approve */}
+      {autoApprove !== null && (
+        <div style={{
+          background: autoApprove ? "var(--success-bg)" : "var(--warning-bg)",
+          border: `1.5px solid ${autoApprove ? "var(--success-border)" : "var(--warning-border)"}`,
+          borderRadius: 12, padding: "10px 16px",
+          display: "flex", alignItems: "center", gap: 10
+        }}>
+          <span style={{ fontSize: 18 }}>{autoApprove ? "✅" : "⏳"}</span>
+          <div>
+            <p style={{ fontSize: 13, fontWeight: 800, color: autoApprove ? "var(--success)" : "var(--warning)", marginBottom: 2 }}>
+              Auto Approve {autoApprove ? "Aktif" : "Nonaktif"}
+            </p>
+            <p style={{ fontSize: 12, color: "var(--muted)" }}>
+              {autoApprove
+                ? "Permintaan libur dari staff langsung disetujui otomatis. Ubah di menu Pengaturan."
+                : "Permintaan libur masuk dengan status Menunggu dan harus disetujui secara manual."}
+            </p>
+          </div>
+          <a
+            href="/admin/config"
+            style={{
+              marginLeft: "auto", flexShrink: 0, fontSize: 12, fontWeight: 700,
+              color: "var(--primary)", textDecoration: "none",
+              background: "var(--primary-bg, #EEF2FF)", borderRadius: 8,
+              padding: "5px 12px", border: "1px solid var(--primary-border, #C7D2FE)"
+            }}
+          >
+            Ubah Pengaturan
+          </a>
+        </div>
+      )}
 
       {/* Filter */}
       <AdminSection title="Filter Status">
@@ -83,8 +126,8 @@ export default function AdminLeavePage() {
               {STATUS_LABELS[s]}
             </button>
           ))}
-          <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px", marginLeft: "auto" }} onClick={load}>
-            <RefreshCw size={14} /> Refresh
+          <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px", marginLeft: "auto" }} onClick={load} disabled={loading}>
+            <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
           </button>
         </div>
       </AdminSection>
@@ -129,8 +172,9 @@ export default function AdminLeavePage() {
                         className="btn btn-primary"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => update(leave.id, "approved")}
+                        disabled={updatingId !== null}
                       >
-                        <CheckCircle size={13} /> Setujui
+                        <CheckCircle size={13} /> {updatingId === leave.id ? "..." : "Setujui"}
                       </button>
                     ) : null}
                     {leave.status !== "cancelled" ? (
@@ -138,8 +182,9 @@ export default function AdminLeavePage() {
                         className="btn btn-danger"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => update(leave.id, "cancelled")}
+                        disabled={updatingId !== null}
                       >
-                        <XCircle size={13} /> Batalkan
+                        <XCircle size={13} /> {updatingId === leave.id ? "..." : "Batalkan"}
                       </button>
                     ) : null}
                   </div>

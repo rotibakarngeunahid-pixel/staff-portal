@@ -12,6 +12,8 @@ export type CapturedPhoto = {
 
 type ImageFormat = "image/webp" | "image/jpeg";
 
+const MAX_UPLOAD_BYTES = 1 * 1024 * 1024; // 1 MB
+
 function extensionFor(mimeType: string) {
   return mimeType === "image/webp" ? "webp" : "jpg";
 }
@@ -34,6 +36,33 @@ export function scaledSize(width: number, height: number, maxDimension: number) 
   };
 }
 
+async function compressCanvas(
+  source: HTMLCanvasElement,
+  maxDimension: number,
+  quality: number,
+  preferredType: ImageFormat
+): Promise<{ blob: Blob; mimeType: ImageFormat; canvas: HTMLCanvasElement } | null> {
+  const target = scaledSize(source.width, source.height, maxDimension);
+  const canvas = document.createElement("canvas");
+  canvas.width = target.width;
+  canvas.height = target.height;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, target.width, target.height);
+
+  let blob = await canvasToBlob(canvas, preferredType, quality);
+  let mimeType: ImageFormat = preferredType;
+
+  if (!blob || blob.size <= 0) {
+    blob = await canvasToBlob(canvas, "image/jpeg", Math.min(0.86, quality + 0.05));
+    mimeType = "image/jpeg";
+  }
+  if (!blob || blob.size <= 0) return null;
+
+  return { blob, mimeType, canvas };
+}
+
 export async function photoFromCanvas(
   source: HTMLCanvasElement,
   options: {
@@ -43,36 +72,48 @@ export async function photoFromCanvas(
     preferredType?: ImageFormat;
   }
 ): Promise<CapturedPhoto> {
-  const maxDimension = options.maxDimension ?? 1600;
-  const quality = options.quality ?? 0.78;
-  const target = scaledSize(source.width, source.height, maxDimension);
-  const canvas = document.createElement("canvas");
-  canvas.width = target.width;
-  canvas.height = target.height;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Gagal memproses foto");
-  ctx.drawImage(source, 0, 0, target.width, target.height);
-
   const preferredType = options.preferredType ?? "image/webp";
-  let blob = await canvasToBlob(canvas, preferredType, quality);
-  let mimeType = preferredType;
+  const initialMaxDim = options.maxDimension ?? 1600;
+  const initialQuality = options.quality ?? 0.78;
 
-  if (!blob || blob.size <= 0) {
-    mimeType = "image/jpeg";
-    blob = await canvasToBlob(canvas, "image/jpeg", Math.min(0.86, quality + 0.05));
+  // Urutan percobaan: kurangi quality dulu, lalu kurangi dimensi
+  const attempts: Array<{ dim: number; q: number }> = [
+    { dim: initialMaxDim, q: initialQuality },
+    { dim: initialMaxDim, q: Math.max(0.55, initialQuality - 0.12) },
+    { dim: initialMaxDim, q: 0.45 },
+    { dim: Math.round(initialMaxDim * 0.75), q: 0.55 },
+    { dim: Math.round(initialMaxDim * 0.60), q: 0.55 }
+  ];
+
+  let bestResult: { blob: Blob; mimeType: ImageFormat; canvas: HTMLCanvasElement } | null = null;
+
+  for (const attempt of attempts) {
+    const result = await compressCanvas(source, attempt.dim, attempt.q, preferredType);
+    if (!result) continue;
+
+    // Simpan hasil terbaik yang belum tentu < MAX (sebagai fallback terakhir)
+    if (!bestResult || result.blob.size < bestResult.blob.size) {
+      bestResult = result;
+    }
+
+    if (result.blob.size <= MAX_UPLOAD_BYTES) {
+      // Ukuran sudah di bawah 1 MB
+      bestResult = result;
+      break;
+    }
   }
-  if (!blob || blob.size <= 0) throw new Error("Gagal mengompres foto");
 
-  const fileName = `${options.baseName}.${extensionFor(mimeType)}`;
+  if (!bestResult) throw new Error("Gagal mengompres foto");
+
+  const fileName = `${options.baseName}.${extensionFor(bestResult.mimeType)}`;
   return {
-    blob,
-    previewUrl: URL.createObjectURL(blob),
-    mimeType,
+    blob: bestResult.blob,
+    previewUrl: URL.createObjectURL(bestResult.blob),
+    mimeType: bestResult.mimeType,
     fileName,
-    width: canvas.width,
-    height: canvas.height,
-    size: blob.size
+    width: bestResult.canvas.width,
+    height: bestResult.canvas.height,
+    size: bestResult.blob.size
   };
 }
 
