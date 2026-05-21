@@ -186,6 +186,44 @@ export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {
   return 1;
 }
 
+/**
+ * Cek apakah waktu absen masuk terlalu awal untuk shift yang ditentukan.
+ * Staff diperbolehkan absen paling awal earlyWindowMinutes (default 60) menit sebelum shift mulai.
+ * Contoh: Shift 2 mulai 19:00 → boleh absen mulai 18:00.
+ */
+export function isCheckinTooEarly(
+  outlet: { shift1_start: string | null; shift2_start?: string | null },
+  shift: 0 | 1 | 2,
+  now = new Date(),
+  earlyWindowMinutes = 60
+): { tooEarly: boolean; windowOpensAt: string | null } {
+  if (shift === 0) return { tooEarly: false, windowOpensAt: null };
+  const startTime = shift === 2 ? (outlet.shift2_start ?? null) : (outlet.shift1_start ?? null);
+  if (!startTime) return { tooEarly: false, windowOpensAt: null };
+
+  const startMin = parseTimeToMinutes(startTime);
+  if (startMin === null) return { tooEarly: false, windowOpensAt: null };
+
+  const nowMin = parseTimeToMinutes(timeJakarta(now)) ?? 0;
+  const nowHour = hourJakarta(now);
+
+  // Hitung menit pembuka window (earlyWindowMinutes sebelum shift mulai)
+  const windowOpensMin = startMin - earlyWindowMinutes;
+
+  // Window crossing midnight (shift mulai sangat awal, misal 00:30) — tidak perlu cek
+  if (windowOpensMin < 0) return { tooEarly: false, windowOpensAt: null };
+
+  // Setelah tengah malam sebelum cutoff = masih sisa hari kerja sebelumnya — tidak perlu cek
+  if (nowHour < WORKING_DAY_CUTOFF_HOUR) return { tooEarly: false, windowOpensAt: null };
+
+  const tooEarly = nowMin < windowOpensMin;
+  const windowOpensAt = tooEarly
+    ? `${String(Math.floor(windowOpensMin / 60)).padStart(2, "0")}:${String(windowOpensMin % 60).padStart(2, "0")}`
+    : null;
+
+  return { tooEarly, windowOpensAt };
+}
+
 export function shiftStartTime(outlet: Outlet, shift: 0 | 1 | 2) {
   if (shift === 2) return outlet.shift2_start || outlet.shift1_start;
   return outlet.shift1_start;

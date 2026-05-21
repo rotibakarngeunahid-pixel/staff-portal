@@ -8,6 +8,7 @@ import {
   detectShift,
   getWorkingDate,
   haversineDistance,
+  isCheckinTooEarly,
   isCheckoutTimeReached,
   normalizeCurrency,
   reportSubmissionStatus,
@@ -516,6 +517,23 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     }
   }
 
+  // PRD §8.5 — resolve jadwal lebih awal agar shift bisa dikoreksi sebelum query attendance
+  // Staff Shift 2 yang datang lebih awal bisa salah dideteksi sebagai Shift 1 jika tidak dikoreksi di sini
+  const { data: assignment } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("staff_id", staff.id)
+    .eq("date", effective)
+    .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
+    .maybeSingle();
+
+  // Override effectiveShift berdasarkan assignment (lebih akurat dari deteksi berbasis jam)
+  if (assignment && !isFullShift) {
+    const assignedShiftType = (assignment as any).shift_type;
+    if (assignedShiftType === "SHIFT_1") effectiveShift = 1;
+    else if (assignedShiftType === "SHIFT_2") effectiveShift = 2;
+  }
+
   const { data: attendance, error: attendanceError } = await db
     .from("attendance")
     .select("*")
@@ -542,15 +560,6 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
         .eq("shift", scheduleShift)
         .maybeSingle()
     : { data: null };
-
-  // PRD §8.5 — resolve jadwal dari staff_shift_assignments (sumber kebenaran baru)
-  const { data: assignment } = await db
-    .from("staff_shift_assignments")
-    .select("*")
-    .eq("staff_id", staff.id)
-    .eq("date", effective)
-    .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
-    .maybeSingle();
 
   // PRD §8.4 — cek staff_dayoff
   const { data: staffDayoffRow } = await db
@@ -652,6 +661,11 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     else if (effectiveShift === 2) requiredReports = ["TUTUP"];
   }
 
+  // Cek apakah staff datang terlalu awal (sebelum window H-1 jam dari jadwal shift)
+  const checkinTooEarly = !attendance?.checkin_time && !isFullShift && (effectiveShift === 1 || effectiveShift === 2)
+    ? isCheckinTooEarly(outlet, effectiveShift)
+    : { tooEarly: false, windowOpensAt: null };
+
   return ok({
     staff: publicStaff(staff),
     outlet,
@@ -672,6 +686,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     nextStep,
     requiredReports,
     shift1WaitingInfo,
+    checkinTooEarly,
     serverTime: new Date().toISOString()
   });
 }
@@ -686,7 +701,43 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
   // Use nullish coalescing to allow shift=0 (full shift) to pass through correctly
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
-  const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
+  let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
+  const now = new Date();
+
+  // Override shift berdasarkan assignment jika ada (mencegah deteksi shift salah saat datang lebih awal)
+  // Contoh: staff punya assignment SHIFT_2 tapi absen sebelum shift2_start → shift tetap 2 bukan 1
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    const { data: existingAssignment } = await db
+      .from("staff_shift_assignments")
+      .select("shift_type")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .in("status", ["confirmed", "admin_override", "auto_cover"])
+      .maybeSingle();
+    if (existingAssignment) {
+      const assignedShiftNum = (existingAssignment as any).shift_type === "SHIFT_1" ? 1
+        : (existingAssignment as any).shift_type === "SHIFT_2" ? 2
+        : shift;
+      if (assignedShiftNum !== shift) shift = assignedShiftNum as 1 | 2;
+    }
+  }
+
+  // Validasi: cek apakah absen masuk terlalu awal (sebelum window H-1 jam dari jadwal shift)
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    const { tooEarly, windowOpensAt } = isCheckinTooEarly(outlet, shift, now);
+    if (tooEarly) {
+      const shiftLabel = shift === 2 ? "Shift 2" : "Shift 1";
+      const startTime = shiftStartTime(outlet, shift);
+      const startLabel = startTime ? String(startTime).slice(0, 5) : "?";
+      const windowLabel = windowOpensAt ?? "1 jam sebelum jadwal";
+      throw new HttpError(
+        `Absen belum bisa dilakukan. Jadwal ${shiftLabel} dimulai pukul ${startLabel} WIB. Absen baru bisa dilakukan mulai pukul ${windowLabel} WIB.`,
+        400,
+        "TOO_EARLY"
+      );
+    }
+  }
+
   const lat = numberBody(body, "lat", NaN);
   const lng = numberBody(body, "lng", NaN);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new HttpError("Lokasi GPS wajib dikirim");
@@ -742,7 +793,6 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
 
   const cfg = await configMap(db);
-  const now = new Date();
   // Full shift always starts at shift1_start; shiftStartTime(outlet, 0) already returns shift1_start
   const start = dateTimeUtc(date, shiftStartTime(outlet, shift));
 
@@ -1991,14 +2041,49 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       original_deduction: existing.original_deduction ?? existing.deduction,
       original_final_salary: existing.original_final_salary ?? existing.final_salary
     };
-    ["late_minutes", "deduction", "final_salary", "status", "paid_status"].forEach((key) => {
-      if (body[key] !== undefined && body[key] !== null && body[key] !== "") updates[key] = body[key];
-    });
+
+    // Koreksi shift: jika admin mengubah shift, hitung ulang gaji secara otomatis
+    const newShiftRaw = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : null;
+    if (newShiftRaw !== null && [0, 1, 2].includes(newShiftRaw) && newShiftRaw !== existing.shift && existing.checkin_time) {
+      const newShift = newShiftRaw as 0 | 1 | 2;
+      const [{ data: outletRaw }, { data: staffRaw }, revCfg] = await Promise.all([
+        db.from("outlets").select("*").eq("id", existing.outlet_id).single(),
+        db.from("staff").select("salary_per_shift").eq("id", existing.staff_id).single(),
+        configMap(db)
+      ]);
+      if (outletRaw && staffRaw) {
+        const revOutlet = toOutlet(outletRaw);
+        const checkinDt = new Date(existing.checkin_time);
+        const newShiftStart = dateTimeUtc(existing.date, shiftStartTime(revOutlet, newShift));
+        const recalc = calculateSalary(
+          checkinDt,
+          newShiftStart,
+          normalizeCurrency((staffRaw as any).salary_per_shift),
+          configNumber(revCfg, "late_tolerance_minutes", 10),
+          configNumber(revCfg, "deduction_per_minute", configNumber(revCfg, "late_deduction_per_minute", 1000))
+        );
+        updates.shift = newShift;
+        updates.late_minutes = recalc.lateMinutes;
+        updates.deduction = recalc.deduction;
+        updates.final_salary = recalc.finalSalary;
+        updates.status = recalc.lateMinutes > 0 ? "late" : "present";
+      }
+    } else {
+      // Koreksi manual: late_minutes, deduction, final_salary, status, paid_status
+      ["late_minutes", "deduction", "final_salary", "status", "paid_status"].forEach((key) => {
+        if (body[key] !== undefined && body[key] !== null && body[key] !== "") updates[key] = body[key];
+      });
+    }
+
     if (body.checkin_time) updates.checkin_time = dateTimeUtc(existing.date, String(body.checkin_time).slice(0, 5)).toISOString();
     if (body.checkout_time) updates.checkout_time = dateTimeUtc(existing.date, String(body.checkout_time).slice(0, 5)).toISOString();
     const { data, error } = await db.from("attendance").update(updates).eq("id", attendanceId).select("*").single();
     if (error) throw error;
-    await logAudit(db, "admin_revise_attendance", "Admin", { attendanceId, note: updates.revision_note });
+    await logAudit(db, "admin_revise_attendance", "Admin", {
+      attendanceId,
+      note: updates.revision_note,
+      shiftChanged: updates.shift !== undefined ? { from: existing.shift, to: updates.shift } : undefined
+    });
     return ok({ attendance: data });
   }
 

@@ -120,7 +120,7 @@ export default function AdminAttendancePage() {
 
   // Revise modal
   const [reviseTarget, setReviseTarget] = useState<Attendance | null>(null);
-  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "" });
+  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "", shift: "" });
   const [revising, setRevising] = useState(false);
 
   // Delete modal
@@ -211,7 +211,8 @@ export default function AdminAttendancePage() {
       revision_note: row.revision_note || "",
       late_minutes: String(row.late_minutes),
       deduction: String(row.deduction),
-      final_salary: String(row.final_salary)
+      final_salary: String(row.final_salary),
+      shift: String(row.shift)
     });
   }
 
@@ -224,15 +225,18 @@ export default function AdminAttendancePage() {
     setRevising(true);
     setMessage("Menyimpan revisi..."); setMsgType("info");
     try {
+      const shiftChanged = reviseForm.shift !== "" && Number(reviseForm.shift) !== reviseTarget.shift;
       await apiFetch("/api/admin/attendance", {
         method: "PUT",
         role: "admin",
         body: {
           attendanceId: reviseTarget.id,
           revision_note: reviseForm.revision_note,
-          late_minutes: reviseForm.late_minutes,
-          deduction: reviseForm.deduction,
-          final_salary: reviseForm.final_salary
+          ...(shiftChanged ? { shift: reviseForm.shift } : {
+            late_minutes: reviseForm.late_minutes,
+            deduction: reviseForm.deduction,
+            final_salary: reviseForm.final_salary
+          })
         }
       });
       await load();
@@ -623,23 +627,45 @@ export default function AdminAttendancePage() {
                   required
                 />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <div>
-                  <label className="label">Menit Telat</label>
-                  <input className="field" type="number" min="0" value={reviseForm.late_minutes}
-                    onChange={(e) => setReviseForm({ ...reviseForm, late_minutes: e.target.value })} />
-                </div>
-                <div>
-                  <label className="label">Potongan (Rp)</label>
-                  <input className="field" type="number" min="0" value={reviseForm.deduction}
-                    onChange={(e) => setReviseForm({ ...reviseForm, deduction: e.target.value })} />
-                </div>
-                <div>
-                  <label className="label">Gaji Final (Rp)</label>
-                  <input className="field" type="number" min="0" value={reviseForm.final_salary}
-                    onChange={(e) => setReviseForm({ ...reviseForm, final_salary: e.target.value })} />
-                </div>
+              <div>
+                <label className="label">Koreksi Shift</label>
+                <select
+                  className="field"
+                  value={reviseForm.shift}
+                  onChange={(e) => setReviseForm({ ...reviseForm, shift: e.target.value })}
+                >
+                  <option value="0">Full Shift</option>
+                  <option value="1">Shift 1</option>
+                  <option value="2">Shift 2</option>
+                </select>
+                {reviseForm.shift !== "" && Number(reviseForm.shift) !== reviseTarget.shift && (
+                  <p style={{ fontSize: 12, color: "#D97706", fontWeight: 600, marginTop: 4 }}>
+                    ⚡ Shift akan diubah dari{" "}
+                    {reviseTarget.shift === 0 ? "Full" : `Shift ${reviseTarget.shift}`} ke{" "}
+                    {Number(reviseForm.shift) === 0 ? "Full" : `Shift ${reviseForm.shift}`}.
+                    Menit telat, potongan, dan gaji dihitung ulang otomatis.
+                  </p>
+                )}
               </div>
+              {(reviseForm.shift === "" || Number(reviseForm.shift) === reviseTarget.shift) && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label className="label">Menit Telat</label>
+                    <input className="field" type="number" min="0" value={reviseForm.late_minutes}
+                      onChange={(e) => setReviseForm({ ...reviseForm, late_minutes: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="label">Potongan (Rp)</label>
+                    <input className="field" type="number" min="0" value={reviseForm.deduction}
+                      onChange={(e) => setReviseForm({ ...reviseForm, deduction: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="label">Gaji Final (Rp)</label>
+                    <input className="field" type="number" min="0" value={reviseForm.final_salary}
+                      onChange={(e) => setReviseForm({ ...reviseForm, final_salary: e.target.value })} />
+                  </div>
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={revising}>

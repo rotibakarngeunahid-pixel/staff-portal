@@ -54,6 +54,7 @@ type StatusPayload = {
   staffDayoff?: { id: string; reason: string | null } | null;
   approvedLeave?: { id: string; reason: string | null } | null;
   shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
+  checkinTooEarly?: { tooEarly: boolean; windowOpensAt: string | null } | null;
 };
 
 type ReportCfgItem = {
@@ -594,16 +595,20 @@ export default function StaffHomePage() {
 
   /* ─── Checkin button state ─── */
   const gpsReady = gps.status === "ready";
-  const checkinDisabled = Boolean(busy) || !gpsReady;
-  const checkinLabel = {
-    unsupported:       "GPS tidak didukung",
-    permission_denied: "Izin Lokasi Ditolak",
-    locating:          "Menunggu GPS...",
-    ready:             "Absen Masuk",
-    outside_radius:    `Di Luar Area (${gps.dist ?? "—"}m)`,
-    low_accuracy:      "Akurasi GPS Rendah",
-    timeout:           "GPS Timeout"
-  }[gps.status];
+  const tooEarlyForCheckin = Boolean(status?.checkinTooEarly?.tooEarly);
+  const checkinWindowOpensAt = status?.checkinTooEarly?.windowOpensAt ?? null;
+  const checkinDisabled = Boolean(busy) || !gpsReady || tooEarlyForCheckin;
+  const checkinLabel = tooEarlyForCheckin
+    ? `Belum Waktunya (mulai ${checkinWindowOpensAt ?? "1 jam sebelum shift"} WIB)`
+    : ({
+        unsupported:       "GPS tidak didukung",
+        permission_denied: "Izin Lokasi Ditolak",
+        locating:          "Menunggu GPS...",
+        ready:             "Absen Masuk",
+        outside_radius:    `Di Luar Area (${gps.dist ?? "—"}m)`,
+        low_accuracy:      "Akurasi GPS Rendah",
+        timeout:           "GPS Timeout"
+      }[gps.status]);
 
   // Checkout: perlu GPS dan validasi waktu
   const checkoutDisabled = Boolean(busy) || !gpsReady || !checkoutAllowed;
@@ -773,6 +778,13 @@ export default function StaffHomePage() {
                 reportWindow={reportWindow}
                 clockNow={clockNow}
               />
+            )}
+
+            {/* Banner: absen terlalu awal */}
+            {!loading && tooEarlyForCheckin && nextState === "checkin" && (
+              <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "#92400E" }}>
+                ⏰ Terlalu awal untuk absen masuk. Jadwal shift kamu dimulai lebih siang — absen baru bisa dilakukan mulai pukul <strong>{checkinWindowOpensAt ?? "1 jam sebelum shift"} WIB</strong>.
+              </div>
             )}
 
             {/* GPS bar */}
