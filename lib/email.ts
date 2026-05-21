@@ -239,38 +239,31 @@ function formatCurrency(value?: number | string | null) {
 
 function badge(label: string, tone: EmailTone) {
   const color = TONE_COLORS[tone];
-  return `<span style="display:inline-block;background:${color.bg};border:1px solid ${color.border};color:${color.text};border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;line-height:1.2">${escapeHtml(label)}</span>`;
+  return `<span style="display:inline-block;background:${color.bg};border:1.5px solid ${color.border};color:${color.text};border-radius:999px;padding:6px 14px;font-size:13px;font-weight:800;line-height:1.2">${escapeHtml(label)}</span>`;
 }
 
 function infoTable(rows: InfoRow[]) {
   const visibleRows = rows.filter((row) => row.value !== undefined && row.value !== null && row.value !== "");
   if (!visibleRows.length) return "";
-  return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-      ${visibleRows
-        .map((row) => {
-          const color = row.tone ? TONE_COLORS[row.tone].text : "#0F172A";
-          return `
-            <tr>
-              <td style="padding:9px 0;border-bottom:1px solid #E2E8F0;color:#64748B;font-size:13px;width:42%;vertical-align:top">${escapeHtml(row.label)}</td>
-              <td style="padding:9px 0;border-bottom:1px solid #E2E8F0;color:${color};font-size:13px;font-weight:700;text-align:right;vertical-align:top">${escapeHtml(row.value)}</td>
-            </tr>
-          `;
-        })
-        .join("")}
-    </table>
-  `;
+  return visibleRows
+    .map((row, i) => {
+      const isLast = i === visibleRows.length - 1;
+      const color = row.tone ? TONE_COLORS[row.tone].text : "#0F172A";
+      return `<div style="padding:10px 0${isLast ? "" : ";border-bottom:1px solid #F1F5F9"}"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#94A3B8;margin-bottom:3px">${escapeHtml(row.label)}</div><div style="font-size:16px;font-weight:700;color:${color};line-height:1.4">${escapeHtml(row.value)}</div></div>`;
+    })
+    .join("");
 }
 
 function section(title: string, content: string) {
   if (!content.trim()) return "";
   return `
     <tr>
-      <td style="padding:0 24px 18px">
-        <h2 style="margin:0 0 10px;color:#0F172A;font-size:15px;line-height:1.35;font-weight:800">${escapeHtml(title)}</h2>
+      <td style="padding:14px 20px 16px">
+        <p style="margin:0 0 10px;font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:#94A3B8">${escapeHtml(title)}</p>
         ${content}
       </td>
     </tr>
+    <tr><td style="background:#F1F5F9;height:1px;line-height:1px;font-size:1px">&nbsp;</td></tr>
   `;
 }
 
@@ -279,8 +272,8 @@ function actionButton(url: string | null, label: string) {
   return `
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:14px">
       <tr>
-        <td style="background:#C0392B;border-radius:10px">
-          <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer" style="display:inline-block;color:#FFFFFF;text-decoration:none;padding:10px 14px;font-size:13px;font-weight:800">${escapeHtml(label)}</a>
+        <td style="background:#922B21;border-radius:10px">
+          <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer" style="display:inline-block;color:#FFFFFF;text-decoration:none;padding:12px 20px;font-size:14px;font-weight:800">${escapeHtml(label)}</a>
         </td>
       </tr>
     </table>
@@ -289,64 +282,31 @@ function actionButton(url: string | null, label: string) {
 
 function photoGallery(photos: EmailPhoto[]) {
   const items = photos.map((photo) => ({ ...photo, url: publicHttpsUrl(photo.url) }));
-  if (!items.length) {
-    return `<p style="margin:0;color:#64748B;font-size:13px;line-height:1.6">Tidak ada foto dokumentasi untuk email ini.</p>`;
-  }
-
-  return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-      ${items
-        .map((photo) => {
-          if (!photo.url) {
-            return `
-              <tr>
-                <td style="padding:10px 0">
-                  <div style="border:1px dashed #CBD5E1;border-radius:12px;padding:14px;background:#F8FAFC">
-                    <p style="margin:0;color:#0F172A;font-size:13px;font-weight:800">${escapeHtml(photo.label)}</p>
-                    <p style="margin:5px 0 0;color:#64748B;font-size:12px;line-height:1.5">Foto belum tersedia atau URL foto tidak menggunakan HTTPS publik.</p>
-                  </div>
-                </td>
-              </tr>
-            `;
-          }
-          return `
-            <tr>
-              <td style="padding:10px 0">
-                <a href="${escapeHtml(photo.url)}" target="_blank" rel="noreferrer" style="display:block;text-decoration:none">
-                  <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.label)}" width="592" style="display:block;width:100%;max-width:592px;height:auto;border:1px solid #E2E8F0;border-radius:12px;background:#F8FAFC" />
-                </a>
-                <p style="margin:7px 0 0;color:#0F172A;font-size:13px;font-weight:800">${escapeHtml(photo.label)}</p>
-                ${photo.description ? `<p style="margin:4px 0 0;color:#64748B;font-size:12px;line-height:1.5">${escapeHtml(photo.description)}</p>` : ""}
-                <p style="margin:4px 0 0;color:#64748B;font-size:12px;line-height:1.5">Jika gambar tidak tampil di email client, gunakan tombol/foto untuk membuka versi besar.</p>
-              </td>
-            </tr>
-          `;
-        })
-        .join("")}
-    </table>
-  `;
+  const validItems = items.filter((photo) => photo.url);
+  if (!validItems.length) return "";
+  return validItems
+    .map((photo) => `
+      <div style="margin-bottom:14px">
+        <a href="${escapeHtml(photo.url!)}" target="_blank" rel="noreferrer" style="display:block;text-decoration:none">
+          <img src="${escapeHtml(photo.url!)}" alt="${escapeHtml(photo.label)}" width="480" style="display:block;width:100%;max-width:480px;height:auto;border-radius:12px;border:1px solid #E2E8F0" />
+        </a>
+        <p style="margin:6px 0 0;font-size:13px;font-weight:700;color:#334155">${escapeHtml(photo.label)}</p>
+        ${photo.description ? `<p style="margin:2px 0 0;font-size:12px;color:#64748B;line-height:1.5">${escapeHtml(photo.description)}</p>` : ""}
+      </div>
+    `)
+    .join("");
 }
 
 function checklistSummary(items?: Array<{ label?: string | null; required?: boolean | null; submitted?: boolean | null; photo_url?: string | null }>) {
   const list = (items || []).filter((item) => item.label);
-  if (!list.length) return `<p style="margin:0;color:#64748B;font-size:13px;line-height:1.6">Tidak ada item checklist yang dikirim.</p>`;
-  return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-      ${list
-        .map((item) => {
-          const done = Boolean(item.submitted || item.photo_url);
-          return `
-            <tr>
-              <td style="padding:9px 0;border-bottom:1px solid #E2E8F0;color:#0F172A;font-size:13px;font-weight:700">${escapeHtml(item.label)}</td>
-              <td style="padding:9px 0;border-bottom:1px solid #E2E8F0;text-align:right">
-                ${badge(done ? "Selesai" : item.required ? "Wajib belum ada foto" : "Opsional", done ? "success" : item.required ? "warning" : "neutral")}
-              </td>
-            </tr>
-          `;
-        })
-        .join("")}
-    </table>
-  `;
+  if (!list.length) return "";
+  return list
+    .map((item, i) => {
+      const isLast = i === list.length - 1;
+      const done = Boolean(item.submitted || item.photo_url);
+      return `<div style="display:table;width:100%;padding:10px 0${isLast ? "" : ";border-bottom:1px solid #F1F5F9"}"><div style="display:table-cell;font-size:15px;font-weight:700;color:#0F172A;vertical-align:middle">${escapeHtml(item.label)}</div><div style="display:table-cell;text-align:right;vertical-align:middle;white-space:nowrap">${badge(done ? "Selesai" : item.required ? "Wajib" : "Opsional", done ? "success" : item.required ? "warning" : "neutral")}</div></div>`;
+    })
+    .join("");
 }
 
 function emailLayout(input: {
@@ -364,25 +324,25 @@ function emailLayout(input: {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(input.title)}</title>
   </head>
-  <body style="margin:0;padding:0;background:#F1F5F9;font-family:Arial,Helvetica,sans-serif;color:#0F172A">
+  <body style="margin:0;padding:0;background:#F1F5F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#0F172A;-webkit-text-size-adjust:100%">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(preheader)}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F1F5F9;border-collapse:collapse">
       <tr>
-        <td align="center" style="padding:24px 12px">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:16px;overflow:hidden;border-collapse:separate">
+        <td align="center" style="padding:16px 10px 24px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#FFFFFF;border-radius:16px;overflow:hidden;border-collapse:separate;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
             <tr>
-              <td style="background:#922B21;padding:22px 24px;color:#FFFFFF">
-                <p style="margin:0 0 5px;font-size:12px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:#FDE68A">${BRAND_NAME}</p>
-                <h1 style="margin:0;font-size:24px;line-height:1.25;font-weight:900;color:#FFFFFF">${escapeHtml(input.title)}</h1>
-                <p style="margin:8px 0 0;font-size:14px;line-height:1.6;color:#FFE4D6">${escapeHtml(input.subtitle)}</p>
-                ${input.statusLabel ? `<div style="margin-top:14px">${badge(input.statusLabel, input.statusTone || "neutral")}</div>` : ""}
+              <td style="background:#7B241C;padding:20px 20px 18px">
+                <p style="margin:0 0 6px;font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#FCA5A5">${BRAND_NAME}</p>
+                <h1 style="margin:0 0 7px;font-size:22px;line-height:1.2;font-weight:800;color:#FFFFFF">${escapeHtml(input.title)}</h1>
+                <p style="margin:0;font-size:14px;line-height:1.5;color:#FFE4D6">${escapeHtml(input.subtitle)}</p>
+                ${input.statusLabel ? `<div style="margin-top:12px">${badge(input.statusLabel, input.statusTone || "neutral")}</div>` : ""}
               </td>
             </tr>
-            <tr><td style="height:22px;line-height:22px">&nbsp;</td></tr>
+            <tr><td style="background:#F1F5F9;height:1px;line-height:1px;font-size:1px">&nbsp;</td></tr>
             ${input.sections}
             <tr>
-              <td style="padding:18px 24px 22px;border-top:1px solid #E2E8F0;background:#F8FAFC">
-                <p style="margin:0;color:#64748B;font-size:12px;line-height:1.6">Email ini dikirim otomatis oleh sistem absensi ${BRAND_NAME}. Foto ditampilkan dari URL HTTPS publik agar dapat dirender langsung oleh email client.</p>
+              <td style="padding:14px 20px 20px">
+                <p style="margin:0;color:#94A3B8;font-size:11px;line-height:1.6;text-align:center">Email otomatis dari sistem ${BRAND_NAME}.</p>
               </td>
             </tr>
           </table>
@@ -795,6 +755,158 @@ export async function sendFullShiftEmail(db: DbClient | null, data: Parameters<t
   });
 }
 
+export function buildOpeningCombinedEmail(data: {
+  staffName: string;
+  outletName: string;
+  shiftLabel: string;
+  date: string;
+  scheduledStart?: string | null;
+  checkinTime?: string | null;
+  lateMinutes?: number | null;
+  checkinLat?: number | null;
+  checkinLng?: number | null;
+  selfieInUrl?: string | null;
+  submittedAt: string;
+  reportStatusLabel: string;
+  reportStatusTone: EmailTone;
+  deadlineLabel?: string | null;
+  reportLateMinutes?: number | null;
+  items?: Array<{ label?: string | null; required?: boolean | null; submitted?: boolean | null; photo_url?: string | null }>;
+  photos?: EmailPhoto[];
+  note?: string | null;
+}) {
+  const isLate = Number(data.lateMinutes || 0) > 0;
+  const checkinRows: InfoRow[] = [
+    { label: "Tanggal", value: formatDateID(data.date) },
+    { label: "Shift", value: data.shiftLabel },
+    { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : null },
+    { label: "Jam absen masuk", value: data.checkinTime ? formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") : "Belum absen" },
+    { label: "Status", value: isLate ? `Terlambat ${formatMinutes(data.lateMinutes)}` : "Tepat waktu", tone: isLate ? "warning" : "success" },
+  ].filter((r) => r.value !== null && r.value !== undefined && r.value !== "") as InfoRow[];
+  const reportRows: InfoRow[] = [
+    { label: "Jam kirim laporan", value: formatDateTimeID(data.submittedAt, "Asia/Makassar", "WITA") },
+    { label: "Status laporan", value: data.reportStatusLabel, tone: data.reportStatusTone },
+    { label: "Batas kirim", value: data.deadlineLabel || null },
+    { label: "Terlambat", value: data.reportLateMinutes ? formatMinutes(data.reportLateMinutes) : null, tone: "warning" },
+  ].filter((r) => r.value !== null && r.value !== undefined && r.value !== "") as InfoRow[];
+  const mapsUrl = mapUrl(data.checkinLat, data.checkinLng);
+  const html = emailLayout({
+    title: "Absen Masuk + Laporan Buka Toko",
+    subtitle: `${data.staffName} absen masuk dan mengirim laporan buka di ${data.outletName}.`,
+    statusLabel: data.reportStatusLabel,
+    statusTone: data.reportStatusTone,
+    sections:
+      section("Info Staff", infoTable([
+        { label: "Nama staff", value: data.staffName },
+        { label: "Outlet", value: data.outletName },
+      ])) +
+      section("Absen Masuk", infoTable(checkinRows) + (mapsUrl ? actionButton(mapsUrl, "Buka Lokasi GPS") : "")) +
+      section("Foto Selfie Masuk", photoGallery([{ label: "Selfie Absen Masuk", url: data.selfieInUrl }])) +
+      section("Laporan Buka Toko", infoTable(reportRows)) +
+      section("Checklist Laporan", checklistSummary(data.items)) +
+      section("Foto Laporan", photoGallery(data.photos || [])) +
+      (data.note ? section("Catatan Staff", `<p style="margin:0;padding:10px 0;color:#334155;font-size:15px;line-height:1.6">${escapeHtml(data.note)}</p>`) : "")
+  });
+  return {
+    subject: `[RBN] Buka Toko - ${data.staffName} | ${data.outletName}`,
+    html,
+    text: textTemplate("Absen Masuk + Laporan Buka Toko", [...checkinRows, ...reportRows])
+  };
+}
+
+export function buildClosingCombinedEmail(data: {
+  staffName: string;
+  outletName: string;
+  shiftLabel: string;
+  date: string;
+  submittedAt: string;
+  reportStatusLabel: string;
+  reportStatusTone: EmailTone;
+  deadlineLabel?: string | null;
+  reportLateMinutes?: number | null;
+  items?: Array<{ label?: string | null; required?: boolean | null; submitted?: boolean | null; photo_url?: string | null }>;
+  photos?: EmailPhoto[];
+  note?: string | null;
+  checkinTime?: string | null;
+  checkoutTime?: string | null;
+  totalWorkMinutes?: number | null;
+  selfieOutUrl?: string | null;
+  checkoutLat?: number | null;
+  checkoutLng?: number | null;
+  checkoutAcc?: number | null;
+  payrollStatus?: string | null;
+}) {
+  const reportRows: InfoRow[] = [
+    { label: "Tanggal", value: formatDateID(data.date) },
+    { label: "Shift", value: data.shiftLabel },
+    { label: "Jam kirim laporan", value: formatDateTimeID(data.submittedAt, "Asia/Makassar", "WITA") },
+    { label: "Status laporan", value: data.reportStatusLabel, tone: data.reportStatusTone },
+    { label: "Batas kirim", value: data.deadlineLabel || null },
+    { label: "Terlambat", value: data.reportLateMinutes ? formatMinutes(data.reportLateMinutes) : null, tone: "warning" },
+  ].filter((r) => r.value !== null && r.value !== undefined && r.value !== "") as InfoRow[];
+  const checkoutRows: InfoRow[] = [
+    { label: "Jam absen masuk", value: data.checkinTime ? formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") : null },
+    { label: "Jam absen keluar", value: data.checkoutTime ? formatDateTimeID(data.checkoutTime, "Asia/Makassar", "WITA") : "Belum absen keluar" },
+    { label: "Total jam kerja", value: data.totalWorkMinutes ? formatMinutes(data.totalWorkMinutes) : null },
+    { label: "Status gaji", value: data.payrollStatus || null },
+  ].filter((r) => r.value !== null && r.value !== undefined && r.value !== "") as InfoRow[];
+  const checkoutMapsUrl = mapUrl(data.checkoutLat, data.checkoutLng);
+  const html = emailLayout({
+    title: "Laporan Tutup Toko + Absen Keluar",
+    subtitle: `${data.staffName} mengirim laporan tutup toko di ${data.outletName}.`,
+    statusLabel: data.reportStatusLabel,
+    statusTone: data.reportStatusTone,
+    sections:
+      section("Info Staff", infoTable([
+        { label: "Nama staff", value: data.staffName },
+        { label: "Outlet", value: data.outletName },
+      ])) +
+      section("Laporan Tutup Toko", infoTable(reportRows)) +
+      section("Checklist Laporan", checklistSummary(data.items)) +
+      section("Foto Laporan", photoGallery(data.photos || [])) +
+      (data.note ? section("Catatan Staff", `<p style="margin:0;padding:10px 0;color:#334155;font-size:15px;line-height:1.6">${escapeHtml(data.note)}</p>`) : "") +
+      section("Absen Keluar", infoTable(checkoutRows) + (checkoutMapsUrl ? actionButton(checkoutMapsUrl, "Buka Lokasi GPS") : "")) +
+      section("Foto Selfie Keluar", photoGallery([{ label: "Selfie Absen Keluar", url: data.selfieOutUrl }]))
+  });
+  return {
+    subject: `[RBN] Tutup Toko - ${data.staffName} | ${data.outletName}`,
+    html,
+    text: textTemplate("Laporan Tutup Toko + Absen Keluar", [...reportRows, ...checkoutRows])
+  };
+}
+
+export async function sendOpeningCombinedEmail(db: DbClient | null, data: Parameters<typeof buildOpeningCombinedEmail>[0] & BaseActivityData & { reportId?: string | null; to?: string | null; forceType?: EmailNotificationType }) {
+  return sendEmailNotification(db, {
+    type: data.forceType || "opening_report",
+    to: data.to,
+    template: buildOpeningCombinedEmail(data),
+    activityType: "report",
+    activityId: data.reportId,
+    idempotencyKey: data.reportId ? `report:${data.reportId}:opening_combined` : null,
+    staffId: data.staffId,
+    staffName: data.staffName,
+    outletId: data.outletId,
+    outletName: data.outletName,
+    payload: data
+  });
+}
+
+export async function sendClosingCombinedEmail(db: DbClient | null, data: Parameters<typeof buildClosingCombinedEmail>[0] & BaseActivityData & { reportId?: string | null; to?: string | null; forceType?: EmailNotificationType }) {
+  return sendEmailNotification(db, {
+    type: data.forceType || "closing_report",
+    to: data.to,
+    template: buildClosingCombinedEmail(data),
+    activityType: "report",
+    activityId: data.reportId,
+    idempotencyKey: data.reportId ? `report:${data.reportId}:closing_combined` : null,
+    staffId: data.staffId,
+    staffName: data.staffName,
+    outletId: data.outletId,
+    outletName: data.outletName,
+    payload: data
+  });
+}
+
 export async function sendSystemWarningEmail(db: DbClient | null, data: Parameters<typeof buildSystemWarningEmail>[0] & { to?: string | null; idempotencyKey?: string | null }) {
   return sendEmailNotification(db, {
     type: "system_warning",
@@ -1135,14 +1247,21 @@ function buildTestTemplate(type: EmailNotificationType) {
       activityId: type === "report_late" ? "test-report-late" : "test-opening-report",
       staffName: base.staffName,
       outletName: base.outletName,
-      template: buildOpeningReportEmail({
+      template: buildOpeningCombinedEmail({
         ...base,
+        shiftLabel: "Shift 1",
         date,
+        scheduledStart: "09:00",
+        checkinTime: now,
+        lateMinutes: 0,
+        checkinLat: -6.914744,
+        checkinLng: 107.60981,
+        selfieInUrl: SAMPLE_PHOTO_URL,
         submittedAt: now,
-        statusLabel: type === "report_late" ? "Laporan Terlambat" : "Tepat waktu",
-        statusTone: type === "report_late" ? "warning" : "success",
+        reportStatusLabel: type === "report_late" ? "Laporan Terlambat" : "Tepat waktu",
+        reportStatusTone: type === "report_late" ? "warning" : "success",
         deadlineLabel: "Maksimal 19:30 WITA",
-        lateMinutes: type === "report_late" ? 30 : 0,
+        reportLateMinutes: type === "report_late" ? 30 : 0,
         items: sampleItems,
         photos: reportPhotosFromItems(sampleItems),
         note: type === "report_late" ? "Outlet ramai sehingga laporan baru sempat dikirim setelah jam batas." : "Semua area sudah siap operasional."
@@ -1155,17 +1274,26 @@ function buildTestTemplate(type: EmailNotificationType) {
       activityId: "test-closing-report",
       staffName: base.staffName,
       outletName: base.outletName,
-      template: buildClosingReportEmail({
+      template: buildClosingCombinedEmail({
         ...base,
+        shiftLabel: "Shift 2",
         date,
         submittedAt: now,
-        statusLabel: "Tepat waktu",
-        statusTone: "success",
+        reportStatusLabel: "Tepat waktu",
+        reportStatusTone: "success",
         deadlineLabel: "Maksimal 01:00 WITA",
-        lateMinutes: 0,
+        reportLateMinutes: 0,
         items: sampleItems,
         photos: reportPhotosFromItems(sampleItems),
-        note: "Kasir sudah ditutup dan area produksi sudah dibersihkan."
+        note: "Kasir sudah ditutup dan area produksi sudah dibersihkan.",
+        checkinTime: now,
+        checkoutTime: now,
+        totalWorkMinutes: 485,
+        selfieOutUrl: SAMPLE_PHOTO_URL,
+        checkoutLat: -6.914744,
+        checkoutLng: 107.60981,
+        checkoutAcc: 16,
+        payrollStatus: "Belum dibayar — estimasi Rp 85.000"
       })
     };
   }
@@ -1182,7 +1310,7 @@ function buildTestTemplate(type: EmailNotificationType) {
         checkinTime: now,
         checkoutTime: now,
         totalWorkMinutes: 485,
-        taskStatus: "Laporan buka dan tutup sudah selesai",
+        taskStatus: "Laporan buka selesai",
         payrollStatus: "Gaji harian sudah dihitung",
         lat: -6.914744,
         lng: 107.60981,

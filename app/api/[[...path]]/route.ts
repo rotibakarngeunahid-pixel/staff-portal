@@ -24,13 +24,12 @@ import {
   listEmailLogs,
   retryEmailLog,
   sendAttendanceInEmail,
-  sendAttendanceOutEmail,
-  sendClosingReportEmail,
+  sendClosingCombinedEmail,
   sendFullShiftEmail,
   sendLateAttendanceEmail,
   sendLeaveDecisionEmail,
   sendLeaveRequestEmail,
-  sendOpeningReportEmail,
+  sendOpeningCombinedEmail,
   sendTestEmailNotification
 } from "@/lib/email";
 import {
@@ -946,9 +945,13 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     selfieUrl,
     to: notificationEmail
   };
-  const emailSent = await notifySafely(db, "email_attendance_in_failed", staff.name, () =>
-    sendAttendanceInEmail(db, attendanceEmailBase)
-  );
+  // Shift 2 (sore): kirim email absen masuk langsung karena tidak ada laporan buka toko
+  // Shift 1 / full shift: email dikirim saat laporan buka toko disubmit (combined email)
+  const emailSent = shift === 2
+    ? await notifySafely(db, "email_attendance_in_failed", staff.name, () =>
+        sendAttendanceInEmail(db, attendanceEmailBase)
+      )
+    : false;
   const lateEmailSent = salary.lateMinutes > 0
     ? await notifySafely(db, "email_late_attendance_failed", staff.name, () =>
         sendLateAttendanceEmail(db, {
@@ -1092,39 +1095,14 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     checkoutDist: Math.round(checkoutDist),
     checkoutGpsLowAccuracy
   });
-  const cfg = await configMap(db);
-  const taskStatus = [
-    hasBuka ? "Laporan buka selesai" : "Laporan buka belum selesai",
-    hasTutup ? "Laporan tutup selesai" : "Laporan tutup belum selesai"
-  ].join(", ");
-  const emailSent = await notifySafely(db, "email_attendance_out_failed", staff.name, () =>
-    sendAttendanceOutEmail(db, {
-      attendanceId: updated.id,
-      staffId: staff.id,
-      staffName: staff.name,
-      outletId: outlet.id,
-      outletName: outlet.name,
-      shiftLabel: shiftLabel(shift),
-      date,
-      checkinTime: attendance.checkin_time,
-      checkoutTime: now.toISOString(),
-      totalWorkMinutes: durationMin,
-      taskStatus,
-      payrollStatus: updated.paid_status ? "Sudah dibayar" : `Belum dibayar - estimasi gaji ${formatCurrencyForEmail(updated.final_salary)}`,
-      lat: checkoutLat,
-      lng: checkoutLng,
-      accuracy: checkoutAcc,
-      selfieUrl,
-      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
-    })
-  );
+  // Email checkout tidak dikirim di sini — dikirim saat laporan tutup toko disubmit (combined email)
   return ok({
     attendance: updated,
     checkout_time: now.toISOString(),
     duration_min: durationMin,
     checkout_dist_m: Math.round(checkoutDist),
     checkout_gps_low_accuracy: checkoutGpsLowAccuracy,
-    emailSent
+    emailSent: false
   });
 }
 
@@ -1250,7 +1228,8 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   if (error) throw error;
 
   const cfg = await configMap(db);
-  const reportEmailData = {
+  const notifEmail = cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
+  const reportBase = {
     reportId: report.id,
     staffId: staff.id,
     staffName: staff.name,
@@ -1258,21 +1237,77 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     outletName: outlet.name,
     date,
     submittedAt: report.submitted_at,
-    statusLabel: submissionStatus.isLate ? "Laporan Terlambat" : "Tepat waktu",
-    statusTone: submissionStatus.isLate ? "warning" as const : "success" as const,
+    reportStatusLabel: submissionStatus.isLate ? "Laporan Terlambat" : "Tepat waktu",
+    reportStatusTone: submissionStatus.isLate ? "warning" as const : "success" as const,
     deadlineLabel: reportDeadlineLabel(outlet, type),
-    lateMinutes: submissionStatus.lateMinutes,
+    reportLateMinutes: submissionStatus.lateMinutes,
     items: savedItems,
     photos: reportPhotoItems(savedItems),
     note: stringBody(body, "note") || null,
-    to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
+    to: notifEmail,
     forceType: submissionStatus.isLate ? "report_late" as const : undefined
   };
-  const emailSent = await notifySafely(db, "report_email_failed", staff.name, () =>
-    type === "BUKA"
-      ? sendOpeningReportEmail(db, reportEmailData)
-      : sendClosingReportEmail(db, reportEmailData)
-  );
+
+  let emailSent = false;
+  if (type === "BUKA") {
+    const { data: attData } = await db
+      .from("attendance")
+      .select("id, checkin_time, selfie_in, lat, lng, late_minutes, shift, flags")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .in("shift", [0, 1])
+      .not("checkin_time", "is", null)
+      .maybeSingle();
+    const attShift = attData?.shift ?? 1;
+    const attShiftLabel = attShift === 0 ? "Full Shift" : "Shift 1";
+    emailSent = Boolean(await notifySafely(db, "report_email_failed", staff.name, () =>
+      sendOpeningCombinedEmail(db, {
+        ...reportBase,
+        shiftLabel: attShiftLabel,
+        scheduledStart: shiftStartTime(outlet, attShift as 0 | 1 | 2),
+        checkinTime: attData?.checkin_time || null,
+        lateMinutes: attData?.late_minutes || 0,
+        checkinLat: attData?.lat || null,
+        checkinLng: attData?.lng || null,
+        selfieInUrl: attData?.selfie_in || null
+      })
+    ));
+  } else {
+    const { data: attData } = await db
+      .from("attendance")
+      .select("id, checkin_time, checkout_time, selfie_out, flags, paid_status, final_salary, shift")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .in("shift", [0, 2])
+      .maybeSingle();
+    const attShift = attData?.shift ?? 2;
+    const attShiftLabel = attShift === 0 ? "Full Shift" : "Shift 2";
+    const checkoutGpsMatch = (attData?.flags || "").match(/CHECKOUT_GPS:(-?\d+\.\d+):(-?\d+\.\d+):(\d+)/);
+    const checkoutLat = checkoutGpsMatch ? Number(checkoutGpsMatch[1]) : null;
+    const checkoutLng = checkoutGpsMatch ? Number(checkoutGpsMatch[2]) : null;
+    const checkoutAcc = checkoutGpsMatch ? Number(checkoutGpsMatch[3]) : null;
+    const checkinMs = attData?.checkin_time ? new Date(attData.checkin_time).getTime() : null;
+    const checkoutMs = attData?.checkout_time ? new Date(attData.checkout_time).getTime() : null;
+    const totalWorkMinutes = checkinMs && checkoutMs ? Math.round((checkoutMs - checkinMs) / 60000) : null;
+    emailSent = Boolean(await notifySafely(db, "report_email_failed", staff.name, () =>
+      sendClosingCombinedEmail(db, {
+        ...reportBase,
+        shiftLabel: attShiftLabel,
+        checkinTime: attData?.checkin_time || null,
+        checkoutTime: attData?.checkout_time || null,
+        totalWorkMinutes,
+        selfieOutUrl: attData?.selfie_out || null,
+        checkoutLat,
+        checkoutLng,
+        checkoutAcc,
+        payrollStatus: attData?.paid_status
+          ? "Sudah dibayar"
+          : attData?.final_salary
+            ? `Belum dibayar — estimasi ${formatCurrencyForEmail(attData.final_salary)}`
+            : "Belum dibayar"
+      })
+    ));
+  }
   await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
   return ok({ report, reportId: report.id, emailSent });
 }
