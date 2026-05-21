@@ -614,13 +614,8 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     const isLocked = assignment.status === "locked" || assignment.status === "completed";
 
     if (!attendance?.checkin_time) {
-      if (shift1WaitingInfo) {
-        scheduleState = "waiting_shift1";
-        nextStep = "blocked_shift1";
-      } else {
-        scheduleState = isLocked ? "locked" : "ready";
-        nextStep = "checkin";
-      }
+      scheduleState = isLocked ? "locked" : "ready";
+      nextStep = "checkin";
     } else if (!attendance.checkout_time) {
       scheduleState = "ready";
       if (requiredReports.includes("BUKA") && !hasBuka) {
@@ -637,50 +632,8 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   } else {
     // Fallback / auto-detect (untuk outlet yang belum pakai assignments, atau staff lupa pilih jadwal)
     if (!attendance?.checkin_time) {
-      if (outlet.shift_mode === 2) {
-        // PRD: Staff tidak wajib pilih jadwal H-1 — auto-detect berdasarkan jam masuk
-        // Cek apakah shift yang terdeteksi sudah diisi staff lain
-        const { data: sameShiftRow } = await db
-          .from("attendance")
-          .select("staff_id,staff_name,checkout_time")
-          .eq("outlet_id", outlet.id)
-          .eq("date", effective)
-          .eq("shift", effectiveShift)
-          .not("checkin_time", "is", null)
-          .maybeSingle();
-
-        if (sameShiftRow) {
-          if (effectiveShift === 2 && !(sameShiftRow as any).checkout_time) {
-            // Shift 2 sudah diisi & belum checkout → shift 1 juga mungkin sudah selesai
-            scheduleState = "waiting_shift1";
-            nextStep = "blocked_shift1";
-            shift1WaitingInfo = {
-              staff_name: (sameShiftRow as any).staff_name || "Staff lain",
-              outlet_name: outlet.name,
-              date: effective
-            };
-          } else if (effectiveShift === 1 && !(sameShiftRow as any).checkout_time) {
-            // Shift 1 masih aktif, staff ini kemungkinan shift 2 yang datang lebih awal
-            scheduleState = "waiting_shift1";
-            nextStep = "blocked_shift1";
-            shift1WaitingInfo = {
-              staff_name: (sameShiftRow as any).staff_name || "Staff Shift 1",
-              outlet_name: outlet.name,
-              date: effective
-            };
-          } else {
-            // Shift lain sudah selesai → staff ini mungkin lembur/salah shift, izinkan tetap
-            scheduleState = "ready";
-            nextStep = "checkin";
-          }
-        } else {
-          scheduleState = "ready";
-          nextStep = "checkin";
-        }
-      } else {
-        scheduleState = "ready";
-        nextStep = "checkin";
-      }
+      scheduleState = "ready";
+      nextStep = "checkin";
     } else if (!attendance.checkout_time) {
       scheduleState = "ready";
       if ((effectiveShift === 0 || effectiveShift === 1) && !hasBuka) {
@@ -748,27 +701,6 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       .eq("shift", shift)
       .maybeSingle();
     if (thisOff) throw new HttpError("Shift ini sedang libur, tidak bisa absen masuk", 400, "SHIFT_OFF");
-  }
-
-  // Validasi: shift 2 baru bisa absen masuk setelah shift 1 absen keluar
-  if (outlet.shift_mode === 2 && shift === 2) {
-    const { data: shift1Active, error: shift1ActiveError } = await db
-      .from("attendance")
-      .select("id,staff_name,checkout_time")
-      .eq("outlet_id", outlet.id)
-      .eq("date", date)
-      .eq("shift", 1)
-      .not("checkin_time", "is", null)
-      .maybeSingle();
-    if (shift1ActiveError) throw shift1ActiveError;
-    if (shift1Active && !(shift1Active as any).checkout_time) {
-      const s1Name = (shift1Active as any).staff_name || "Staff Shift 1";
-      throw new HttpError(
-        `Shift 2 belum bisa absen masuk karena ${s1Name} (Shift 1) di ${outlet.name} belum melakukan absen keluar. Silakan tunggu Shift 1 menyelesaikan absen keluar terlebih dahulu.`,
-        409,
-        "SHIFT1_NOT_CHECKED_OUT"
-      );
-    }
   }
 
   const { data: existing, error: existingError } = await db
