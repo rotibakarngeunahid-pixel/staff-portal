@@ -10,15 +10,29 @@ import {
   haversineDistance,
   isCheckoutTimeReached,
   normalizeCurrency,
-  parseTimeToMinutes,
-  reportWindowStatus,
+  reportSubmissionStatus,
   sanitizePathSegment,
   shiftEndTime,
   shiftStartTime,
   timeMakassar,
   todayJakarta
 } from "@/lib/business";
-import { sendReportNotification } from "@/lib/email";
+import {
+  EMAIL_NOTIFICATION_TYPES,
+  isEmailNotificationType,
+  isValidEmailList,
+  listEmailLogs,
+  retryEmailLog,
+  sendAttendanceInEmail,
+  sendAttendanceOutEmail,
+  sendClosingReportEmail,
+  sendFullShiftEmail,
+  sendLateAttendanceEmail,
+  sendLeaveDecisionEmail,
+  sendLeaveRequestEmail,
+  sendOpeningReportEmail,
+  sendTestEmailNotification
+} from "@/lib/email";
 import {
   importAttendanceCsv,
   isCsvUpload,
@@ -162,6 +176,59 @@ async function logAudit(db: Db, action: string, userName: string, detail: unknow
     .insert({ action, user_name: userName || "system", detail: value.slice(0, 500) });
 }
 
+function cleanEmailError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const lower = raw.toLowerCase();
+  if (!raw || lower.includes("undefined") || lower.includes("null") || lower.includes("stack")) {
+    return "Email gagal dikirim. Periksa konfigurasi email atau koneksi server.";
+  }
+  if (lower.includes("fetch") || lower.includes("network") || lower.includes("timeout")) {
+    return "Email gagal dikirim. Periksa koneksi server atau provider email.";
+  }
+  if (lower.includes("api key") || lower.includes("resend_api_key") || lower.includes("unauthorized")) {
+    return "Email gagal dikirim. Periksa konfigurasi API key email.";
+  }
+  return raw.slice(0, 220);
+}
+
+async function notifySafely(db: Db, auditAction: string, userName: string, send: () => Promise<unknown>) {
+  try {
+    await send();
+    return true;
+  } catch (emailError) {
+    await logAudit(db, auditAction, userName, { error: cleanEmailError(emailError) }).catch(() => undefined);
+    return false;
+  }
+}
+
+function shiftLabel(shift: 0 | 1 | 2) {
+  if (shift === 0) return "Full Shift";
+  return `Shift ${shift}`;
+}
+
+function formatCurrencyForEmail(value: unknown) {
+  const numeric = normalizeCurrency(value);
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0
+  }).format(numeric);
+}
+
+function reportDeadlineLabel(outlet: Outlet, type: "BUKA" | "TUTUP") {
+  const end = type === "BUKA" ? outlet.report_buka_end : outlet.report_tutup_end;
+  return end ? `Maksimal ${String(end).slice(0, 5)} WITA` : null;
+}
+
+function reportPhotoItems(items: SavedReportItem[]) {
+  return items
+    .filter((item) => item.photo_url)
+    .map((item) => ({
+      label: item.label || "Foto laporan",
+      url: item.photo_url
+    }));
+}
+
 async function consumeNonce(db: Db, nonce?: string) {
   if (!nonce) return;
   const { error } = await db.from("nonces").insert({ nonce });
@@ -183,16 +250,6 @@ function reportType(body: Body) {
   const type = String(body.type || "").toUpperCase();
   if (type !== "BUKA" && type !== "TUTUP") throw new HttpError("Tipe laporan tidak valid");
   return type as "BUKA" | "TUTUP";
-}
-
-function assertReportWindow(outlet: Outlet, type: "BUKA" | "TUTUP") {
-  const window = reportWindowStatus(outlet, type);
-  if (window.allowed) return;
-  throw new HttpError(
-    `Laporan ${type} hanya bisa dikirim antara ${window.label} WITA`,
-    400,
-    "OUTSIDE_REPORT_WINDOW"
-  );
 }
 
 function isLegacySelfieReportItem(label: unknown) {
@@ -824,6 +881,52 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   }
 
   await logAudit(db, "checkin", staff.name, { date, shift, distance: Math.round(distance), gpsLowAccuracy });
+
+  const notificationEmail = cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
+  const attendanceEmailBase = {
+    attendanceId: inserted.id,
+    staffId: staff.id,
+    staffName: staff.name,
+    outletId: outlet.id,
+    outletName: outlet.name,
+    shiftLabel: shiftLabel(shift),
+    date,
+    scheduledStart: shiftStartTime(outlet, shift),
+    checkinTime: now.toISOString(),
+    lateMinutes: salary.lateMinutes,
+    lat,
+    lng,
+    accuracy,
+    selfieUrl,
+    to: notificationEmail
+  };
+  const emailSent = await notifySafely(db, "email_attendance_in_failed", staff.name, () =>
+    sendAttendanceInEmail(db, attendanceEmailBase)
+  );
+  const lateEmailSent = salary.lateMinutes > 0
+    ? await notifySafely(db, "email_late_attendance_failed", staff.name, () =>
+        sendLateAttendanceEmail(db, {
+          ...attendanceEmailBase,
+          lateMinutes: salary.lateMinutes
+        })
+      )
+    : false;
+  const fullShiftEmailSent = isFullShift2x
+    ? await notifySafely(db, "email_full_shift_failed", staff.name, () =>
+        sendFullShiftEmail(db, {
+          attendanceId: inserted.id,
+          staffId: staff.id,
+          staffName: staff.name,
+          outletId: outlet.id,
+          outletName: outlet.name,
+          date,
+          shiftLabel: shiftLabel(shift),
+          checkinTime: now.toISOString(),
+          note: "Full shift terdeteksi karena outlet dua shift hanya memiliki satu shift aktif.",
+          to: notificationEmail
+        })
+      )
+    : false;
   return ok({
     attendance: inserted,
     checkin_time: now.toISOString(),
@@ -831,7 +934,10 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     deduction: salary.deduction,
     final_salary: salary.finalSalary,
     gps_low_accuracy: gpsLowAccuracy,
-    distance_m: Math.round(distance)
+    distance_m: Math.round(distance),
+    emailSent,
+    lateEmailSent,
+    fullShiftEmailSent
   });
 }
 
@@ -940,12 +1046,39 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     checkoutDist: Math.round(checkoutDist),
     checkoutGpsLowAccuracy
   });
+  const cfg = await configMap(db);
+  const taskStatus = [
+    hasBuka ? "Laporan buka selesai" : "Laporan buka belum selesai",
+    hasTutup ? "Laporan tutup selesai" : "Laporan tutup belum selesai"
+  ].join(", ");
+  const emailSent = await notifySafely(db, "email_attendance_out_failed", staff.name, () =>
+    sendAttendanceOutEmail(db, {
+      attendanceId: updated.id,
+      staffId: staff.id,
+      staffName: staff.name,
+      outletId: outlet.id,
+      outletName: outlet.name,
+      shiftLabel: shiftLabel(shift),
+      date,
+      checkinTime: attendance.checkin_time,
+      checkoutTime: now.toISOString(),
+      totalWorkMinutes: durationMin,
+      taskStatus,
+      payrollStatus: updated.paid_status ? "Sudah dibayar" : `Belum dibayar - estimasi gaji ${formatCurrencyForEmail(updated.final_salary)}`,
+      lat: checkoutLat,
+      lng: checkoutLng,
+      accuracy: checkoutAcc,
+      selfieUrl,
+      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+    })
+  );
   return ok({
     attendance: updated,
     checkout_time: now.toISOString(),
     duration_min: durationMin,
     checkout_dist_m: Math.round(checkoutDist),
-    checkout_gps_low_accuracy: checkoutGpsLowAccuracy
+    checkout_gps_low_accuracy: checkoutGpsLowAccuracy,
+    emailSent
   });
 }
 
@@ -991,7 +1124,15 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
-  assertReportWindow(outlet, type);
+  const submittedAt = new Date();
+  const submissionStatus = reportSubmissionStatus(outlet, type, submittedAt);
+  if (!submissionStatus.canSubmit) {
+    throw new HttpError(
+      `Laporan ${type} belum bisa dikirim. Tersedia mulai pukul ${submissionStatus.start.slice(0, 5)} WITA.`,
+      400,
+      "REPORT_TOO_EARLY"
+    );
+  }
 
   const inputItems = parseItems(body.items).filter((item) => !isLegacySelfieReportItem(item?.label));
 
@@ -1054,7 +1195,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
         type,
         items_json: savedItems,
         selfie: null,
-        submitted_at: new Date().toISOString()
+        submitted_at: submittedAt.toISOString()
       },
       { onConflict: "outlet_id,date,type" }
     )
@@ -1063,26 +1204,29 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   if (error) throw error;
 
   const cfg = await configMap(db);
-  let emailSent = false;
-  try {
-    emailSent = await sendReportNotification({
-      type,
-      outlet_name: outlet.name,
-      staff_name: staff.name,
-      date,
-      submitted_at: report.submitted_at,
-      itemCount: savedItems.filter((item) => item.photo_url).length,
-      selfieUrl: null,
-      items: savedItems,
-      to: cfg.notification_email
-    });
-  } catch (emailError) {
-    await logAudit(db, "report_email_failed", staff.name, {
-      date,
-      type,
-      error: emailError instanceof Error ? emailError.message : "Unknown email error"
-    });
-  }
+  const reportEmailData = {
+    reportId: report.id,
+    staffId: staff.id,
+    staffName: staff.name,
+    outletId: outlet.id,
+    outletName: outlet.name,
+    date,
+    submittedAt: report.submitted_at,
+    statusLabel: submissionStatus.isLate ? "Laporan Terlambat" : "Tepat waktu",
+    statusTone: submissionStatus.isLate ? "warning" as const : "success" as const,
+    deadlineLabel: reportDeadlineLabel(outlet, type),
+    lateMinutes: submissionStatus.lateMinutes,
+    items: savedItems,
+    photos: reportPhotoItems(savedItems),
+    note: stringBody(body, "note") || null,
+    to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
+    forceType: submissionStatus.isLate ? "report_late" as const : undefined
+  };
+  const emailSent = await notifySafely(db, "report_email_failed", staff.name, () =>
+    type === "BUKA"
+      ? sendOpeningReportEmail(db, reportEmailData)
+      : sendClosingReportEmail(db, reportEmailData)
+  );
   await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
   return ok({ report, reportId: report.id, emailSent });
 }
@@ -1379,7 +1523,22 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
   }
 
   await logAudit(db, "request_leave", staff.name, { date, autoApprove });
-  return ok({ leave: data, autoApproved: autoApprove });
+  const emailSent = await notifySafely(db, "email_leave_request_failed", staff.name, () =>
+    sendLeaveRequestEmail(db, {
+      leaveId: data.id,
+      staffId: staff.id,
+      staffName: staff.name,
+      outletId: outlet.id,
+      outletName: outlet.name,
+      leaveDate: date,
+      reason: data.reason,
+      requestedAt: data.created_at,
+      status: data.status,
+      adminUrl: `${process.env.NEXT_PUBLIC_APP_URL || ""}/admin/leave`,
+      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+    })
+  );
+  return ok({ leave: data, autoApproved: autoApprove, emailSent });
 }
 
 async function cancelLeave(db: Db, request: NextRequest, body: Body) {
@@ -1432,6 +1591,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/report-cfg") return adminReportCfg(db, method, body);
   if (path === "/admin/dayoff") return adminDayoff(db, method, body);
   if (path === "/admin/staff-dayoff") return adminStaffDayoff(db, method, body);
+  if (path === "/admin/email") return adminEmail(db, method, body);
   if (path === "/admin/config") return adminConfig(db, method, body);
   throw new HttpError("Endpoint admin tidak ditemukan", 404, "ADMIN_NOT_FOUND");
 }
@@ -2141,7 +2301,27 @@ async function adminLeave(db: Db, method: string, body: Body) {
         .eq("date", leave.date);
     }
     await logAudit(db, "admin_update_leave", "Admin", { leaveId, status });
-    return ok({ leave: data });
+    let emailSent = false;
+    if (status === "approved" || status === "cancelled") {
+      const [{ data: outletRow }, cfg] = await Promise.all([
+        db.from("outlets").select("name").eq("id", leave.outlet_id).maybeSingle(),
+        configMap(db)
+      ]);
+      emailSent = await notifySafely(db, "email_leave_decision_failed", "Admin", () =>
+        sendLeaveDecisionEmail(db, {
+          leaveId,
+          staffId: leave.staff_id,
+          staffName: leave.staff_name,
+          outletId: leave.outlet_id,
+          outletName: outletRow?.name || "Outlet",
+          leaveDate: leave.date,
+          approved: status === "approved",
+          adminNote: stringBody(body, "note") || null,
+          to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+        })
+      );
+    }
+    return ok({ leave: data, emailSent });
   }
 
   throw new HttpError("Method leave tidak valid", 405);
@@ -2158,6 +2338,60 @@ async function adminReports(db: Db, body: Body) {
   const { data, error } = await query.limit(500);
   if (error) throw error;
   return ok({ reports: data || [] });
+}
+
+async function adminEmail(db: Db, method: string, body: Body) {
+  if (method === "GET") {
+    const [cfg, logsResult] = await Promise.all([
+      configMap(db),
+      listEmailLogs(db, numberBody(body, "limit", 30))
+    ]);
+    return ok({
+      config: {
+        notification_email: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
+        test_notification_email:
+          cfg.test_notification_email || process.env.TEST_NOTIFICATION_EMAIL || cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+      },
+      notificationTypes: EMAIL_NOTIFICATION_TYPES,
+      logs: logsResult.logs,
+      logsUnavailable: logsResult.unavailable
+    });
+  }
+
+  if (method === "PUT") {
+    const testEmail = stringBody(body, "test_notification_email") || stringBody(body, "testEmail");
+    if (!isValidEmailList(testEmail)) throw new HttpError("Format email tujuan test tidak valid", 400, "INVALID_EMAIL");
+    const { error } = await db.from("config").upsert({ key: "test_notification_email", value: testEmail });
+    if (error) throw error;
+    await logAudit(db, "admin_update_test_email", "Admin", { testEmail });
+    return ok({ saved: true, test_notification_email: testEmail });
+  }
+
+  if (method === "POST") {
+    const action = stringBody(body, "action", "test");
+
+    if (action === "retry") {
+      const logId = stringBody(body, "logId") || stringBody(body, "id");
+      if (!logId) throw new HttpError("Log email wajib dipilih", 400, "EMAIL_LOG_REQUIRED");
+      const log = await retryEmailLog(db, logId);
+      await logAudit(db, "admin_retry_email", "Admin", { logId, status: log.status });
+      return ok({ log, message: `Email berhasil dikirim ulang ke ${log.recipient}.` });
+    }
+
+    const type = stringBody(body, "type");
+    if (!isEmailNotificationType(type)) {
+      throw new HttpError("Jenis email test tidak valid", 400, "INVALID_EMAIL_TYPE");
+    }
+    const cfg = await configMap(db);
+    const to = stringBody(body, "to") || cfg.test_notification_email || process.env.TEST_NOTIFICATION_EMAIL || cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
+    if (!isValidEmailList(to)) throw new HttpError("Format email tujuan test tidak valid", 400, "INVALID_EMAIL");
+
+    await sendTestEmailNotification(db, type, to);
+    await logAudit(db, "admin_send_test_email", "Admin", { type, to });
+    return ok({ message: `Email test berhasil dikirim ke ${to}.` });
+  }
+
+  throw new HttpError("Method email tidak valid", 405);
 }
 
 async function adminReportCfg(db: Db, method: string, body: Body) {

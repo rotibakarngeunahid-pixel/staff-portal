@@ -132,6 +132,50 @@ export function reportWindowStatus(
   };
 }
 
+export function reportSubmissionStatus(
+  outlet: Parameters<typeof reportWindow>[0],
+  type: ReportType,
+  now = new Date()
+) {
+  const window = reportWindowStatus(outlet, type, now);
+  const currentMinutes = parseTimeToMinutes(window.current);
+  const startMinutes = parseTimeToMinutes(window.start);
+  const endMinutes = parseTimeToMinutes(window.end);
+
+  if (window.allowed || currentMinutes === null || startMinutes === null || endMinutes === null) {
+    return {
+      ...window,
+      canSubmit: window.allowed,
+      tooEarly: !window.allowed,
+      isLate: false,
+      lateMinutes: 0
+    };
+  }
+
+  if (startMinutes <= endMinutes) {
+    const isLate = currentMinutes > endMinutes;
+    return {
+      ...window,
+      canSubmit: isLate,
+      tooEarly: !isLate,
+      isLate,
+      lateMinutes: isLate ? currentMinutes - endMinutes : 0
+    };
+  }
+
+  // Cross-midnight window, e.g. 20:00-01:00. Allow late submissions only
+  // shortly after the closing boundary, before the working-day cutoff.
+  const cutoffMinutes = WORKING_DAY_CUTOFF_HOUR * 60;
+  const isLate = currentMinutes > endMinutes && currentMinutes < cutoffMinutes;
+  return {
+    ...window,
+    canSubmit: isLate,
+    tooEarly: !isLate,
+    isLate,
+    lateMinutes: isLate ? currentMinutes - endMinutes : 0
+  };
+}
+
 export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {
   if (Number(outlet.shift_mode) === 1) return 0;
   const current = parseTimeToMinutes(timeJakarta(now)) ?? 0;

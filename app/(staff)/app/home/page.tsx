@@ -5,7 +5,7 @@ import { Camera, CheckCircle2, Clock, ImageIcon, LogOut, MapPin, RefreshCw, Send
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
-import { haversineDistance, isCheckoutTimeReached, parseTimeToMinutes, reportWindowStatus, shiftEndTime, timeMakassar } from "@/lib/business";
+import { haversineDistance, isCheckoutTimeReached, reportSubmissionStatus, shiftEndTime } from "@/lib/business";
 import { CapturedPhoto, revokePhoto } from "@/lib/client-image";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
@@ -120,7 +120,7 @@ function RealtimeGuide({
   nextState: NextState;
   checkoutAllowed: boolean;
   checkoutBlockedMsg: string;
-  reportWindow: { allowed: boolean; label: string; start: string; end: string };
+  reportWindow: { canSubmit: boolean; isLate: boolean; lateMinutes: number; label: string; start: string; end: string };
   clockNow: Date;
 }) {
   if (!status) return null;
@@ -159,7 +159,7 @@ function RealtimeGuide({
     color = "#1D4ED8";
     bg = "#EFF6FF";
     border = "#BFDBFE";
-    if (!reportWindow.allowed) {
+    if (!reportWindow.canSubmit) {
       message = `Laporan Buka Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
       icon = "⏰";
       color = "#D97706";
@@ -173,7 +173,7 @@ function RealtimeGuide({
     color = "#6D28D9";
     bg = "#F5F3FF";
     border = "#DDD6FE";
-    if (!reportWindow.allowed) {
+    if (!reportWindow.canSubmit) {
       message = `Laporan Tutup Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
       icon = "⏰";
       color = "#D97706";
@@ -477,9 +477,9 @@ export default function StaffHomePage() {
   async function submitReport() {
     if (reportBusyRef.current || loading || reportItemsLoading) return;
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
-    const windowState = reportWindowStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
-    if (!windowState.allowed) {
-      setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${windowState.label} WITA`);
+    const windowState = reportSubmissionStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
+    if (!windowState.canSubmit) {
+      setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${windowState.start.slice(0, 5)} WITA.`);
       return;
     }
     const missingRequired = effectiveReportItems.filter((item) => item.required && !reportPhotos[item.label]);
@@ -534,7 +534,7 @@ export default function StaffHomePage() {
   const isReportState = nextState === "report_buka" || nextState === "report_tutup";
   const reportType = nextState === "report_buka" ? "BUKA" : "TUTUP";
   const reportTypeColor = reportType === "BUKA" ? "#2563EB" : "#7C3AED";
-  const reportWindow = reportWindowStatus(outlet, reportType, clockNow);
+  const reportWindow = reportSubmissionStatus(outlet, reportType, clockNow);
   const effectiveReportItems = useMemo<ReportCfgItem[]>(() => {
     if (!isReportState || reportItemsLoading || reportItems.length > 0) return reportItems;
     return [{
@@ -570,14 +570,14 @@ export default function StaffHomePage() {
     : "Absen Pulang";
 
   const requiredReportPhotosComplete = effectiveReportItems.every((item) => !item.required || Boolean(reportPhotos[item.label]));
-  const reportPhotoDisabled = loading || reportItemsLoading || reportBusy || !reportWindow.allowed;
+  const reportPhotoDisabled = loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit;
   const reportSubmitDisabled =
-    loading || reportItemsLoading || reportBusy || !reportWindow.allowed ||
+    loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit ||
     !requiredReportPhotosComplete || effectiveReportItems.length === 0;
 
   function openReportCamera(item: ReportCfgItem) {
-    if (!reportWindow.allowed) {
-      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${reportWindow.label} WITA`);
+    if (!reportWindow.canSubmit) {
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)} WITA.`);
       return;
     }
     if (reportPhotoDisabled) return;
@@ -592,10 +592,10 @@ export default function StaffHomePage() {
         lng: gps.lng
       },
       onCapture: (photo) => {
-        const latestWindow = reportWindowStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
-        if (!latestWindow.allowed) {
+        const latestWindow = reportSubmissionStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
+        if (!latestWindow.canSubmit) {
           revokePhoto(photo);
-          setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} hanya bisa dikirim antara ${latestWindow.label} WITA`);
+          setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)} WITA.`);
           return;
         }
         saveReportPhoto(item.label, photo);
@@ -944,7 +944,7 @@ export default function StaffHomePage() {
             )}
 
             {/* Di luar window waktu laporan — sembunyikan form sepenuhnya */}
-            {!reportWindow.allowed ? (
+            {!reportWindow.canSubmit ? (
               <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 16, padding: "24px 20px", textAlign: "center" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>⏰</div>
                 <h3 style={{ fontSize: 16, fontWeight: 900, color: "#D97706", marginBottom: 8 }}>
@@ -963,6 +963,11 @@ export default function StaffHomePage() {
               </div>
             ) : (
               <>
+                {reportWindow.isLate && (
+                  <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
+                    Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} WITA dan akan tercatat sebagai laporan terlambat.
+                  </div>
+                )}
                 {/* Report items — hanya tampil saat window laporan terbuka */}
                 {reportItemsLoading ? (
                   <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>

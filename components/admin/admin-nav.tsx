@@ -12,6 +12,7 @@ import {
   FileUp,
   LayoutDashboard,
   LogOut,
+  MailCheck,
   MapPinned,
   Settings,
   Store,
@@ -31,6 +32,7 @@ const items = [
   { href: "/admin/payroll", label: "Payroll", icon: BadgeDollarSign },
   { href: "/admin/reports", label: "Laporan", icon: FileImage },
   { href: "/admin/report-cfg", label: "Konfig Laporan", icon: MapPinned },
+  { href: "/admin/email", label: "Test Email", icon: MailCheck },
   { href: "/admin/dayoff", label: "Hari Libur", icon: CalendarOff },
   { href: "/admin/config", label: "Pengaturan", icon: Settings }
 ];
