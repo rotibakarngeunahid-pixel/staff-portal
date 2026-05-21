@@ -534,14 +534,23 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     else if (assignedShiftType === "SHIFT_2") effectiveShift = 2;
   }
 
-  const { data: attendance, error: attendanceError } = await db
+  // Cek apakah staff sudah checkin hari ini (tanpa filter shift)
+  // Penting: admin bisa koreksi shift setelah checkin, sehingga attendance.shift bisa berbeda dari assignment.shift_type
+  const { data: checkedInAtt, error: checkedInAttError } = await db
     .from("attendance")
     .select("*")
     .eq("staff_id", staff.id)
     .eq("date", effective)
-    .eq("shift", effectiveShift)
+    .not("checkin_time", "is", null)
     .maybeSingle();
-  if (attendanceError) throw attendanceError;
+  if (checkedInAttError) throw checkedInAttError;
+
+  // Jika sudah ada attendance dengan checkin, gunakan shift dari attendance (respek koreksi admin)
+  if (checkedInAtt && !isFullShift) {
+    effectiveShift = (checkedInAtt as any).shift as 0 | 1 | 2;
+  }
+
+  const attendance = checkedInAtt ?? null;
 
   const { data: reports, error: reportsError } = await db
     .from("reports")
@@ -618,8 +627,9 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     scheduleState = "dayoff";
     nextStep = "blocked";
   } else if (assignment) {
-    const shiftType = assignment.shift_type as string;
-    requiredReports = shiftType === "SHIFT_1" ? ["BUKA"] : shiftType === "SHIFT_2" ? ["TUTUP"] : ["BUKA", "TUTUP"];
+    // Gunakan effectiveShift (sudah dikoreksi dari attendance jika admin mengubah shift)
+    // bukan assignment.shift_type agar requiredReports selalu sesuai shift yang aktual
+    requiredReports = effectiveShift === 1 ? ["BUKA"] : effectiveShift === 2 ? ["TUTUP"] : ["BUKA", "TUTUP"];
     const isLocked = assignment.status === "locked" || assignment.status === "completed";
 
     if (!attendance?.checkin_time) {
@@ -2076,6 +2086,15 @@ async function adminAttendance(db: Db, method: string, body: Body) {
         updates.deduction = recalc.deduction;
         updates.final_salary = recalc.finalSalary;
         updates.status = recalc.lateMinutes > 0 ? "late" : "present";
+
+        // Sinkronkan shift_type di staff_shift_assignments agar status endpoint konsisten
+        const newShiftType = newShift === 1 ? "SHIFT_1" : newShift === 2 ? "SHIFT_2" : "FULL_SHIFT";
+        await db
+          .from("staff_shift_assignments")
+          .update({ shift_type: newShiftType, updated_at: new Date().toISOString() })
+          .eq("staff_id", existing.staff_id)
+          .eq("date", existing.date)
+          .not("status", "in", '("cancelled","conflict")');
       }
     } else {
       // Koreksi manual: late_minutes, deduction, final_salary, status, paid_status
