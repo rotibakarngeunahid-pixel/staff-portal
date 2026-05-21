@@ -561,6 +561,15 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     .eq("status", "active")
     .maybeSingle();
 
+  // Cek leave_requests yang sudah disetujui (cuti staff)
+  const { data: approvedLeaveRow } = await db
+    .from("leave_requests")
+    .select("id,reason")
+    .eq("staff_id", staff.id)
+    .eq("date", effective)
+    .eq("status", "approved")
+    .maybeSingle();
+
   // Cek shift 2 menunggu shift 1 absen keluar (hanya jika ada assignment SHIFT_2 dan belum checkin)
   let shift1WaitingInfo: { staff_name: string; outlet_name: string; date: string } | null = null;
   if (
@@ -596,7 +605,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   let nextStep: string;
   let requiredReports: string[] = [];
 
-  if (staffDayoffRow) {
+  if (staffDayoffRow || approvedLeaveRow) {
     scheduleState = "dayoff";
     nextStep = "blocked";
   } else if (assignment) {
@@ -705,6 +714,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     // PRD: schedule-based fields
     assignment,
     staffDayoff: staffDayoffRow || null,
+    approvedLeave: approvedLeaveRow || null,
     scheduleState,
     nextStep,
     requiredReports,
@@ -770,6 +780,22 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     .maybeSingle();
   if (existingError) throw existingError;
   if (existing) throw new HttpError("Absen masuk untuk shift ini sudah tercatat", 409, "ALREADY_CHECKED_IN");
+
+  // Blokir checkin jika ada cuti yang disetujui untuk tanggal ini
+  const { data: approvedLeave } = await db
+    .from("leave_requests")
+    .select("id")
+    .eq("staff_id", staff.id)
+    .eq("date", date)
+    .eq("status", "approved")
+    .maybeSingle();
+  if (approvedLeave) {
+    throw new HttpError(
+      "Kamu memiliki cuti yang sudah disetujui untuk hari ini. Tidak bisa absen masuk. Hubungi admin jika ini keliru.",
+      400,
+      "ON_APPROVED_LEAVE"
+    );
+  }
 
   const accuracy = Math.max(0, numberBody(body, "accuracy", 0));
   const distance = haversineDistance(lat, lng, outlet.lat, outlet.lng);
@@ -1589,7 +1615,7 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
     .single();
   if (error) throw error;
 
-  // Jika auto-approve: batalkan shift_schedule yang konflik (sama seperti admin approve)
+  // Jika auto-approve: batalkan shift_schedule dan staff_shift_assignments yang konflik
   if (autoApprove) {
     await db
       .from("shift_schedule")
@@ -1602,6 +1628,17 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
       })
       .eq("staff_id", staff.id)
       .eq("date", date);
+    await db
+      .from("staff_shift_assignments")
+      .update({
+        status: "cancelled",
+        cancelled_at: new Date().toISOString(),
+        cancel_reason: "Cuti disetujui otomatis",
+        updated_at: new Date().toISOString()
+      })
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .in("status", ["confirmed", "admin_override", "auto_cover"]);
   }
 
   await logAudit(db, "request_leave", staff.name, { date, autoApprove });
@@ -2220,6 +2257,23 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       .eq("paid_status", false);
     if (rowsError) throw rowsError;
     const earned = (rows || []).reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
+
+    // Cegah double payment untuk range tanggal dan staff yang sama
+    const { data: existingPayment } = await db
+      .from("payments")
+      .select("id")
+      .eq("staff_id", staffId)
+      .eq("date_from", dateFrom)
+      .eq("date_to", dateTo)
+      .maybeSingle();
+    if (existingPayment) {
+      throw new HttpError(
+        "Pembayaran untuk staff dan periode ini sudah pernah diproses sebelumnya. Cek riwayat pembayaran untuk memastikan.",
+        409,
+        "DUPLICATE_PAYMENT"
+      );
+    }
+
     const proofId = crypto.randomUUID();
     const proofUrl = body.proof ? await uploadImage(db, `payments/proof/${proofId}.jpg`, body.proof) : "";
     const overpayment = Math.max(0, amount - earned);
@@ -2407,6 +2461,17 @@ async function adminLeave(db: Db, method: string, body: Body) {
         })
         .eq("staff_id", leave.staff_id)
         .eq("date", leave.date);
+      await db
+        .from("staff_shift_assignments")
+        .update({
+          status: "cancelled",
+          cancelled_at: new Date().toISOString(),
+          cancel_reason: "Cuti disetujui admin",
+          updated_at: new Date().toISOString()
+        })
+        .eq("staff_id", leave.staff_id)
+        .eq("date", leave.date)
+        .in("status", ["confirmed", "admin_override", "auto_cover"]);
     }
     await logAudit(db, "admin_update_leave", "Admin", { leaveId, status });
     let emailSent = false;

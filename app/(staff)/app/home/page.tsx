@@ -52,6 +52,7 @@ type StatusPayload = {
   requiredReports?: string[];
   assignment?: { id: string; shift_type: string; status: string } | null;
   staffDayoff?: { id: string; reason: string | null } | null;
+  approvedLeave?: { id: string; reason: string | null } | null;
   shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
 };
 
@@ -659,15 +660,19 @@ export default function StaffHomePage() {
           </div>
         )}
 
-        {/* ═══ State: Libur ═══ */}
+        {/* ═══ State: Libur / Cuti ═══ */}
         {!loading && status?.scheduleState === "dayoff" && (
           <div className="status-card" style={{ background: "linear-gradient(135deg,#FEF2F2,#FECACA20)", border: "2px solid #FECACA" }}>
-            <div className="status-icon">🏖️</div>
-            <h2 className="status-title" style={{ color: "#DC2626" }}>Hari Ini Kamu Libur</h2>
+            <div className="status-icon">{status?.approvedLeave ? "🌴" : "🏖️"}</div>
+            <h2 className="status-title" style={{ color: "#DC2626" }}>
+              {status?.approvedLeave ? "Cuti Disetujui" : "Hari Ini Kamu Libur"}
+            </h2>
             <p className="status-sub">
-              {status?.staffDayoff?.reason ? `Alasan: ${status.staffDayoff.reason}` : "Kamu telah dijadwalkan libur hari ini."}
+              {status?.approvedLeave
+                ? (status.approvedLeave.reason ? `Alasan cuti: ${status.approvedLeave.reason}` : "Pengajuan cutimu telah disetujui untuk hari ini.")
+                : (status?.staffDayoff?.reason ? `Alasan: ${status.staffDayoff.reason}` : "Kamu telah dijadwalkan libur hari ini.")}
             </p>
-            <p style={{ fontSize: 11, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>Tombol absen tidak tersedia saat status libur.</p>
+            <p style={{ fontSize: 11, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>Tombol absen tidak tersedia saat status libur/cuti.</p>
           </div>
         )}
 
