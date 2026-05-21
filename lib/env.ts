@@ -36,3 +36,11 @@ export function photoUploadEndpoint() {
     "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php"
   );
 }
+
+// Dipakai dari browser (client-side). Variabel NEXT_PUBLIC_ di-inline oleh Next.js saat build.
+export function clientPhotoUploadEndpoint() {
+  return (
+    process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
+    "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php"
+  );
+}

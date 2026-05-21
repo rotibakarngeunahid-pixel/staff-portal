@@ -494,23 +494,66 @@ export default function StaffHomePage() {
     }
     reportBusyRef.current = true;
     setReportBusy(true);
-    setReportBusyLabel("Menyiapkan foto...");
     setReportError("");
     try {
-      const body = new FormData();
-      body.append("nonce", crypto.randomUUID());
-      body.append("type", type);
-      if (status?.date) body.append("shiftDate", status.date);
-      if (status?.shift !== undefined) body.append("shift", String(status.shift));
-      const items = effectiveReportItems.map((item, index) => {
+      // Upload setiap foto langsung ke PHP server (bypass Vercel payload limit).
+      // Payload ke API route hanya berisi URL kecil, bukan blob besar.
+      const uploadEndpoint =
+        process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
+        "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
+
+      const itemsWithPhoto = effectiveReportItems.filter((item) => reportPhotos[item.label]);
+      const photoUrls: Record<string, string> = {};
+
+      for (let i = 0; i < itemsWithPhoto.length; i++) {
+        const item = itemsWithPhoto[i];
         const photo = reportPhotos[item.label];
-        const field = `photo_${index}`;
-        if (photo) body.append(field, photo.blob, photo.fileName);
-        return { label: item.label, required: item.required, photoField: photo ? field : "" };
+        setReportBusyLabel(`Mengunggah foto ${i + 1} dari ${itemsWithPhoto.length}...`);
+
+        const fd = new FormData();
+        fd.append("foto", photo.blob, photo.fileName);
+
+        let uploadRes: Response;
+        try {
+          uploadRes = await fetch(uploadEndpoint, { method: "POST", body: fd });
+        } catch {
+          throw new Error("Upload foto gagal. Pastikan koneksi internet stabil lalu coba lagi.");
+        }
+
+        let result: { success?: boolean; foto_url?: string; error?: string } | null = null;
+        try { result = await uploadRes.json(); } catch { /* ignore parse error */ }
+
+        if (!uploadRes.ok || !result?.success || !result.foto_url) {
+          const serverMsg = result?.error || "";
+          if (serverMsg.includes("10MB") || serverMsg.includes("besar") || uploadRes.status === 413) {
+            throw new Error("Foto terlalu besar meski sudah dikompres. Coba ambil foto ulang dengan pencahayaan lebih baik.");
+          }
+          throw new Error("Upload foto gagal. Pastikan koneksi stabil lalu coba lagi.");
+        }
+
+        photoUrls[item.label] = result.foto_url;
+      }
+
+      // Kirim laporan ke API dengan URL foto saja (payload kecil, tidak ada blob)
+      setReportBusyLabel("Menyimpan laporan...");
+      const items = effectiveReportItems.map((item) => ({
+        label: item.label,
+        required: item.required,
+        photo_url: photoUrls[item.label] || "",
+      }));
+
+      await apiFetch("/api/reports/submit", {
+        method: "POST",
+        role: "staff",
+        body: {
+          nonce: crypto.randomUUID(),
+          type,
+          shiftDate: status?.date,
+          shift: status?.shift,
+          items,
+        },
       });
-      body.append("items", JSON.stringify(items));
-      setReportBusyLabel("Mengunggah foto laporan...");
-      await apiFetch("/api/reports/submit", { method: "POST", role: "staff", body });
+
       clearReportPhotos();
       setReportBusyLabel("Memuat ulang status...");
       await load();
@@ -1069,6 +1112,8 @@ export default function StaffHomePage() {
 function humanError(err: unknown): string {
   if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
   const msg = err.message;
+  if (msg.includes("PAYLOAD_TOO_LARGE") || msg.includes("Too Large") || msg.includes("413") || msg.includes("Entity Too Large"))
+    return "Upload gagal karena foto terlalu besar. Coba ambil foto ulang lalu kirim lagi.";
   if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
     return "Data belum berhasil dimuat. Periksa koneksi internet lalu coba lagi.";
   if (msg.includes("401") || msg.includes("Sesi") || msg.includes("login"))

@@ -1197,6 +1197,14 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   const effectiveCfgItems = (cfgItems || []).filter((item: any) => !isLegacySelfieReportItem(item.label));
   const savedItems: SavedReportItem[] = await Promise.all(effectiveCfgItems.map(async (cfgItem: any) => {
     const submitted = inputItems.find((item) => String(item.label || "") === String(cfgItem.label));
+
+    // Client sudah upload langsung ke PHP server dan mengirim URL — pakai langsung tanpa re-upload
+    const directUrl = submitted?.photo_url;
+    if (directUrl && typeof directUrl === "string" && directUrl.startsWith("https://")) {
+      return { label: cfgItem.label, required: cfgItem.required, photo_url: directUrl, submitted: true };
+    }
+
+    // Fallback: client kirim blob via FormData (backward compat)
     const photoInput = photoInputForItem(body, submitted);
     if (cfgItem.required && !photoInput) {
       throw new HttpError(`Foto "${cfgItem.label}" wajib diupload`);
@@ -1217,12 +1225,23 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   }));
 
   if (!effectiveCfgItems.length) {
-    if (!inputItems.some((item) => photoInputForItem(body, item))) {
+    const hasPhoto = inputItems.some((item) => {
+      const url = item?.photo_url;
+      return (url && typeof url === "string" && url.startsWith("https://")) || photoInputForItem(body, item);
+    });
+    if (!hasPhoto) {
       throw new HttpError("Minimal satu foto laporan wajib diupload");
     }
     const fallbackItems = await Promise.all(inputItems.map(async (item) => {
+      if (!item?.label) return null;
+      // Client upload langsung → gunakan URL
+      const directUrl = item?.photo_url;
+      if (directUrl && typeof directUrl === "string" && directUrl.startsWith("https://")) {
+        return { label: item.label, required: false, photo_url: directUrl, submitted: true };
+      }
+      // Fallback blob
       const photoInput = photoInputForItem(body, item);
-      if (!item?.label || !photoInput) return null;
+      if (!photoInput) return null;
       const photoUrl = await uploadImage(
         db,
         `reports/${outlet.id}/${date}/${type}/${sanitizePathSegment(String(item.label))}.jpg`,
