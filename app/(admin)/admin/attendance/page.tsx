@@ -26,8 +26,8 @@ type Attendance = {
   flags?: string | null;
   revision_note?: string | null;
 };
-type Staff = { id: string; name: string; outlet_id: string | null };
-type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number };
+type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
+type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number; active?: boolean };
 type BulkEntry = { staffId: string; staffName: string; checked: boolean; checkin_time: string; checkout_time: string };
 type BulkResult = { staffId: string; staffName: string; status: "success" | "error"; message?: string };
 
@@ -52,6 +52,22 @@ function Overlay({ onClose }: { onClose: () => void }) {
       }}
     />
   );
+}
+
+function isActiveStaff(staff: Staff): boolean {
+  return staff.active !== false;
+}
+
+function isActiveOutlet(outlet: Outlet): boolean {
+  return outlet.active !== false;
+}
+
+function staffOptionLabel(staff: Staff): string {
+  return isActiveStaff(staff) ? staff.name : `${staff.name} (nonaktif)`;
+}
+
+function outletOptionLabel(outlet: Outlet): string {
+  return isActiveOutlet(outlet) ? outlet.name : `${outlet.name} (nonaktif)`;
 }
 
 function Modal({ title, onClose, children, width = 480 }: {
@@ -140,7 +156,7 @@ export default function AdminAttendancePage() {
 
   useEffect(() => {
     if (!bulkOutletId) { setBulkEntries([]); return; }
-    const filtered = staff.filter((s) => s.outlet_id === bulkOutletId);
+    const filtered = staff.filter((s) => isActiveStaff(s) && s.outlet_id === bulkOutletId);
     setBulkEntries(filtered.map((s) => ({ staffId: s.id, staffName: s.name, checked: true, checkin_time: "", checkout_time: "" })));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bulkOutletId, staff]);
@@ -251,6 +267,8 @@ export default function AdminAttendancePage() {
   }
 
   const selectedOutlet = outlets.find((o) => o.id === bulkOutletId);
+  const activeStaff = staff.filter(isActiveStaff);
+  const activeOutlets = outlets.filter(isActiveOutlet);
   const bulkShiftHint = selectedOutlet
     ? (Number(bulkShift) === 2 ? selectedOutlet.shift2_start : selectedOutlet.shift1_start) || "-"
     : null;
@@ -283,14 +301,14 @@ export default function AdminAttendancePage() {
                 <label className="label">Staff<span style={{ color: "var(--danger)" }}>*</span></label>
                 <select className="field" value={manual.staffId} onChange={(e) => setManual({ ...manual, staffId: e.target.value })} required>
                   <option value="">Pilih staff</option>
-                  {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  {activeStaff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="label">Outlet<span style={{ color: "var(--danger)" }}>*</span></label>
                 <select className="field" value={manual.outletId} onChange={(e) => setManual({ ...manual, outletId: e.target.value })} required>
                   <option value="">Pilih outlet</option>
-                  {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  {activeOutlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </div>
               <div>
@@ -337,7 +355,7 @@ export default function AdminAttendancePage() {
                 <label className="label">Outlet<span style={{ color: "var(--danger)" }}>*</span></label>
                 <select className="field" value={bulkOutletId} onChange={(e) => { setBulkOutletId(e.target.value); setBulkResults(null); }} required>
                   <option value="">Pilih outlet</option>
-                  {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  {activeOutlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </div>
               <div>
@@ -452,14 +470,14 @@ export default function AdminAttendancePage() {
             <label className="label">Staff</label>
             <select className="field" value={filters.staffId} onChange={(e) => setFilters({ ...filters, staffId: e.target.value })}>
               <option value="">Semua staff</option>
-              {staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {staff.map((item) => <option key={item.id} value={item.id}>{staffOptionLabel(item)}</option>)}
             </select>
           </div>
           <div>
             <label className="label">Outlet</label>
             <select className="field" value={filters.outletId} onChange={(e) => setFilters({ ...filters, outletId: e.target.value })}>
               <option value="">Semua outlet</option>
-              {outlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {outlets.map((item) => <option key={item.id} value={item.id}>{outletOptionLabel(item)}</option>)}
             </select>
           </div>
           <div>

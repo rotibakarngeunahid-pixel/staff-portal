@@ -15,7 +15,7 @@ type Staff = {
   phone: string | null;
   deleted_at?: string | null;
 };
-type Outlet = { id: string; name: string };
+type Outlet = { id: string; name: string; active?: boolean };
 
 type DeletePreview = {
   staffId: string;
@@ -87,6 +87,9 @@ export default function AdminStaffPage() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!form.name.trim()) { setMessage("Nama staff wajib diisi"); setMsgType("err"); return; }
+    if (form.outlet_id && outlets.find((outlet) => outlet.id === form.outlet_id)?.active === false) {
+      setMessage("Outlet yang dipilih sudah nonaktif. Pilih outlet aktif."); setMsgType("err"); return;
+    }
     if (form.pin && !/^\d+$/.test(form.pin)) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
     if (form.pin && form.pin.length > 4) { setMessage("PIN hanya boleh angka dan maksimal 4 digit"); setMsgType("err"); return; }
     if (!editing && form.pin.length < 4) { setMessage("PIN wajib diisi 4 digit angka untuk staff baru"); setMsgType("err"); return; }
@@ -167,6 +170,10 @@ export default function AdminStaffPage() {
   }
 
   const filtered = staff.filter((s) => filter === "all" ? true : filter === "active" ? s.active : !s.active);
+  const activeOutlets = outlets.filter(isActiveOutlet);
+  const selectedInactiveOutlet = form.outlet_id
+    ? outlets.find((outlet) => outlet.id === form.outlet_id && !isActiveOutlet(outlet))
+    : null;
 
   return (
     <AdminPage
@@ -347,7 +354,10 @@ export default function AdminStaffPage() {
                 <label className="label">Outlet</label>
                 <select className="field" value={form.outlet_id} onChange={(e) => setForm({ ...form, outlet_id: e.target.value })}>
                   <option value="">Belum ditentukan</option>
-                  {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  {selectedInactiveOutlet ? (
+                    <option value={selectedInactiveOutlet.id} disabled>{selectedInactiveOutlet.name} (nonaktif)</option>
+                  ) : null}
+                  {activeOutlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </div>
               <div>
@@ -435,7 +445,7 @@ export default function AdminStaffPage() {
                       {row.name}
                       {row.deleted_at && <span className="status-pill status-danger" style={{ fontSize: 9, marginLeft: 6 }}>Arsip</span>}
                     </td>
-                    <td>{outlets.find((o) => o.id === row.outlet_id)?.name || "—"}</td>
+                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
                     <td>{rupiah(row.salary_per_shift)}</td>
                     <td>{row.phone || "—"}</td>
                     <td>
@@ -470,4 +480,13 @@ export default function AdminStaffPage() {
       ) : null}
     </AdminPage>
   );
+}
+
+function isActiveOutlet(outlet: Outlet): boolean {
+  return outlet.active !== false;
+}
+
+function outletLabel(outlet?: Outlet): string {
+  if (!outlet) return "—";
+  return isActiveOutlet(outlet) ? outlet.name : `${outlet.name} (nonaktif)`;
 }

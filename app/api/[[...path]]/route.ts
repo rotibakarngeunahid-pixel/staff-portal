@@ -161,10 +161,28 @@ function toOutlet(raw: any): Outlet {
   };
 }
 
+function assertOperationalOutlet(raw: any, message = "Outlet tidak aktif. Pilih outlet aktif.") {
+  if (raw?.active === false) {
+    throw new HttpError(message, 400, "OUTLET_INACTIVE");
+  }
+}
+
+function assertOperationalStaff(raw: any, message = "Staff tidak aktif. Pilih staff aktif.") {
+  if (raw?.active === false || raw?.deleted_at) {
+    throw new HttpError(message, 400, "STAFF_INACTIVE");
+  }
+}
+
 async function getStaffWithOutlet(db: Db, staffId: string) {
   const { data, error } = await db.from("staff").select("*, outlets(*)").eq("id", staffId).maybeSingle();
   if (error) throw error;
   if (!data) throw new HttpError("Karyawan tidak ditemukan", 404, "STAFF_NOT_FOUND");
+  if (data.active === false || data.deleted_at) {
+    throw new HttpError("Akun staff sudah nonaktif. Hubungi admin.", 403, "STAFF_INACTIVE");
+  }
+  if (data.outlets?.active === false) {
+    throw new HttpError("Outlet staff sudah nonaktif. Hubungi admin.", 403, "OUTLET_INACTIVE");
+  }
   const outlet = data.outlets ? toOutlet(data.outlets) : null;
   return { staff: data as Staff, outlet };
 }
@@ -339,11 +357,15 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 async function getStaffList(db: Db) {
   const { data, error } = await db
     .from("staff")
-    .select("id,name,outlet_id,active")
+    .select("id,name,outlet_id,active,outlets(active)")
     .eq("active", true)
+    .is("deleted_at", null)
     .order("name", { ascending: true });
   if (error) throw error;
-  return ok({ staff: data || [] });
+  const staff = (data || [])
+    .filter((item: any) => !item.outlet_id || item.outlets?.active !== false)
+    .map(({ outlets: _outlets, ...item }: any) => item);
+  return ok({ staff });
 }
 
 async function staffLogin(db: Db, body: Body) {
@@ -370,6 +392,9 @@ async function staffLogin(db: Db, body: Body) {
   const staff = data && data.length === 1 ? data[0] : null;
   if (!staff || staff.pin_hash !== hashPin(parsed.pin)) {
     throw new HttpError("Nama atau PIN tidak sesuai", 401, "INVALID_STAFF_LOGIN");
+  }
+  if (staff.deleted_at || staff.outlets?.active === false) {
+    throw new HttpError("Akun atau outlet staff sudah nonaktif. Hubungi admin.", 403, "STAFF_INACTIVE");
   }
 
   const cfg = await configMap(db);
@@ -1300,7 +1325,7 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
     { data: staffDayoffs, error: sdError }
   ] =
     await Promise.all([
-      db.from("outlets").select("id,shift_mode").eq("id", outletId).single(),
+      db.from("outlets").select("id,shift_mode,active").eq("id", outletId).single(),
       db.from("shift_schedule").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("leave_requests").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("shift_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
@@ -1313,6 +1338,7 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
   if (offError) throw offError;
   if (assError) throw assError;
   if (sdError) throw sdError;
+  assertOperationalOutlet(outlet, "Jadwal hanya bisa dibuka untuk outlet aktif.");
 
   const shiftNumbers = Number(outlet?.shift_mode) === 2 ? [1, 2] : [0];
   const days = [];
@@ -1659,6 +1685,11 @@ async function adminStaff(db: Db, method: string, body: Body) {
       address: z.string().optional().nullable()
     });
     const parsed = schema.parse(body);
+    if (parsed.outlet_id) {
+      const { data: outlet, error: outletError } = await db.from("outlets").select("id,active").eq("id", parsed.outlet_id).single();
+      if (outletError) throw outletError;
+      assertOperationalOutlet(outlet, "Staff hanya bisa ditugaskan ke outlet aktif.");
+    }
     const { data: staff, error } = await db
       .from("staff")
       .insert({
@@ -1705,6 +1736,11 @@ async function adminStaff(db: Db, method: string, body: Body) {
     if (body.pin) updates.pin_hash = hashPin(String(body.pin));
     if (body.photo) updates.photo_url = await uploadImage(db, `staff/photos/${staffId}.jpg`, body.photo);
     if (body.ktp_photo) updates.ktp_photo_url = await uploadImage(db, `staff/ktp/${staffId}.jpg`, body.ktp_photo);
+    if (updates.outlet_id) {
+      const { data: outlet, error: outletError } = await db.from("outlets").select("id,active").eq("id", updates.outlet_id).single();
+      if (outletError) throw outletError;
+      assertOperationalOutlet(outlet, "Staff hanya bisa ditugaskan ke outlet aktif.");
+    }
     const { data, error } = await db.from("staff").update(updates).eq("id", staffId).select("*").single();
     if (error) throw error;
     await logAudit(db, "admin_update_staff", "Admin", { staffId });
@@ -1854,6 +1890,8 @@ async function adminAttendance(db: Db, method: string, body: Body) {
     ]);
     if (staffError) throw staffError;
     if (outletError) throw outletError;
+    assertOperationalStaff(staff, "Absen manual hanya bisa dibuat untuk staff aktif.");
+    assertOperationalOutlet(outletRaw, "Absen manual hanya bisa dibuat untuk outlet aktif.");
     const outlet = toOutlet(outletRaw);
     const checkin = body.checkin_time
       ? dateTimeUtc(date, String(body.checkin_time).slice(0, 5))
@@ -1997,6 +2035,16 @@ async function adminAttendanceBulk(db: Db, body: Body) {
 
     if (!staff || !outlet) {
       results.push({ staffId, staffName: String(staff?.name || staffId), status: "error", message: "Staff atau outlet tidak ditemukan" });
+      errorCount++;
+      continue;
+    }
+    if (staff.active === false || staff.deleted_at) {
+      results.push({ staffId, staffName: String(staff.name || staffId), status: "error", message: "Staff tidak aktif" });
+      errorCount++;
+      continue;
+    }
+    if (outlet.active === false) {
+      results.push({ staffId, staffName: String(staff.name || staffId), status: "error", message: "Outlet tidak aktif" });
       errorCount++;
       continue;
     }
@@ -2175,8 +2223,9 @@ async function adminSchedule(db: Db, method: string, body: Body) {
     const date = stringBody(body, "date");
     const shift = Number(body.shift) as 1 | 2;
     if (!outletId || !date || ![1, 2].includes(shift)) throw new HttpError("Outlet, tanggal, dan shift wajib diisi");
-    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode").eq("id", outletId).single();
+    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode,active").eq("id", outletId).single();
     if (outletError) throw outletError;
+    assertOperationalOutlet(outlet, "Jadwal shift hanya untuk outlet aktif");
     if (Number(outlet.shift_mode) !== 2) throw new HttpError("Jadwal shift hanya untuk outlet 2 shift");
 
     if (body.status === "off") {
@@ -2224,8 +2273,9 @@ async function adminSchedule(db: Db, method: string, body: Body) {
     if (!staffId && body.forceCancel !== true && body.forceCancel !== "true") throw new HttpError("Staff wajib dipilih");
     let staffName: string | null = null;
     if (staffId) {
-      const { data: staff, error: staffError } = await db.from("staff").select("id,name").eq("id", staffId).single();
+      const { data: staff, error: staffError } = await db.from("staff").select("id,name,active,deleted_at").eq("id", staffId).single();
       if (staffError) throw staffError;
+      assertOperationalStaff(staff, "Jadwal hanya bisa di-assign ke staff aktif.");
       staffName = staff.name;
     }
     const status = staffId ? "claimed" : "open";
@@ -2415,6 +2465,9 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
   const outletId = stringBody(body, "outletId");
   const type = reportType(body);
   if (!outletId) throw new HttpError("Outlet wajib dipilih");
+  const { data: outletRow, error: outletError } = await db.from("outlets").select("id,active").eq("id", outletId).single();
+  if (outletError) throw outletError;
+  assertOperationalOutlet(outletRow, "Konfigurasi laporan hanya bisa diubah untuk outlet aktif.");
 
   if (method === "POST") {
     const isBatchMode = Array.isArray(body.items);
@@ -2556,8 +2609,9 @@ async function adminDayoff(db: Db, method: string, body: Body) {
     const dateTo = stringBody(body, "dateTo") || dateFrom;
     const shifts = body.shifts ? parseItems(body.shifts) : [Number(body.shift || 1)];
     if (!outletId || !dateFrom) throw new HttpError("Outlet dan tanggal wajib diisi");
-    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode").eq("id", outletId).single();
+    const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode,active").eq("id", outletId).single();
     if (outletError) throw outletError;
+    assertOperationalOutlet(outlet, "Hari libur shift hanya untuk outlet aktif.");
     if (Number(outlet.shift_mode) !== 2) throw new HttpError("Hari libur shift hanya untuk outlet 2 shift");
     const payload: { outlet_id: string; date: string; shift: number }[] = [];
     for (let date = dateFrom; date <= dateTo; date = addDays(date, 1)) {
@@ -2889,13 +2943,22 @@ async function adminStaffDayoff(db: Db, method: string, body: Body) {
     const reason = stringBody(body, "reason") || null;
     if (!outletId || !staffId || !date) throw new HttpError("Outlet, staff, dan tanggal wajib diisi");
 
-    const { data: staffRow } = await db
-      .from("staff")
-      .select("id,name,outlet_id,active")
-      .eq("id", staffId)
-      .maybeSingle();
+    const [{ data: staffRow }, { data: outletRow, error: outletError }] = await Promise.all([
+      db
+        .from("staff")
+        .select("id,name,outlet_id,active,deleted_at")
+        .eq("id", staffId)
+        .maybeSingle(),
+      db.from("outlets").select("id,active").eq("id", outletId).single()
+    ]);
+    if (outletError) throw outletError;
+    assertOperationalOutlet(outletRow, "Libur staff hanya bisa dibuat untuk outlet aktif.");
     if (!staffRow || !staffRow.active) {
       throw new HttpError("Staff tidak ditemukan atau tidak aktif", 404, "STAFF_NOT_FOUND");
+    }
+    assertOperationalStaff(staffRow, "Libur staff hanya bisa dibuat untuk staff aktif.");
+    if (staffRow.outlet_id !== outletId) {
+      throw new HttpError("Staff tidak terdaftar di outlet yang dipilih", 400, "STAFF_OUTLET_MISMATCH");
     }
 
     // Tolak jika staff sudah check-in

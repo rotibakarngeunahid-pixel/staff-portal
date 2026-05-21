@@ -5,7 +5,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, ImageIcon, Plus, Save, Trash2, U
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch, dataUrlFromFile } from "@/lib/client-api";
 
-type Outlet = { id: string; name: string };
+type Outlet = { id: string; name: string; active?: boolean };
 type Item = {
   id?: string;
   label: string;
@@ -53,11 +53,15 @@ export default function AdminReportCfgPage() {
 
   async function loadOutlets() {
     const payload = await apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" });
-    setOutlets(payload.outlets);
-    if (!outletId && payload.outlets[0]) {
-      const firstId = payload.outlets[0].id;
-      setOutletId(firstId);
-      loadItemsFor(firstId, type).catch((err: Error) => setMessage(humanError(err)));
+    const activeOutlets = payload.outlets.filter(isActiveOutlet);
+    setOutlets(activeOutlets);
+    const nextOutletId = activeOutlets.some((outlet) => outlet.id === outletId) ? outletId : activeOutlets[0]?.id || "";
+    if (nextOutletId) {
+      setOutletId(nextOutletId);
+      loadItemsFor(nextOutletId, type).catch((err: Error) => setMessage(humanError(err)));
+    } else {
+      setOutletId("");
+      setItems([]);
     }
   }
 
@@ -224,6 +228,7 @@ export default function AdminReportCfgPage() {
               value={outletId}
               onChange={(e) => { setOutletId(e.target.value); setItems([]); }}
             >
+              {outlets.length === 0 ? <option value="">Tidak ada outlet aktif</option> : null}
               {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           </div>
@@ -430,6 +435,10 @@ export default function AdminReportCfgPage() {
       </AdminSection>
     </AdminPage>
   );
+}
+
+function isActiveOutlet(outlet: Outlet): boolean {
+  return outlet.active !== false;
 }
 
 function humanError(err: unknown): string {

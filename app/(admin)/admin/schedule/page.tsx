@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID } from "@/lib/format";
 
 type Outlet = { id: string; name: string; shift_mode: number; active?: boolean };
-type Staff = { id: string; name: string; outlet_id: string | null };
+type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
 type Slot = { shift: number; scheduleId: string | null; staffName: string | null; status: string };
 type Day = { date: string; slots: Slot[] };
 type AssignTarget = { date: string; shift: number } | null;
@@ -33,7 +33,7 @@ export default function AdminSchedulePage() {
       ]);
       const shiftOutlets = outletPayload.outlets.filter(isActiveTwoShiftOutlet);
       setOutlets(shiftOutlets);
-      setStaff(staffPayload.staff);
+      setStaff(staffPayload.staff.filter(isActiveStaff));
       const nextOutletId = shiftOutlets.some((outlet) => outlet.id === outletId)
         ? outletId
         : shiftOutlets[0]?.id || "";
@@ -101,7 +101,7 @@ export default function AdminSchedulePage() {
     }
   }
 
-  const outletStaff = staff.filter((item) => !item.outlet_id || item.outlet_id === outletId);
+  const outletStaff = staff.filter((item) => isActiveStaff(item) && (!item.outlet_id || item.outlet_id === outletId));
 
   return (
     <AdminPage title="Jadwal Shift" subtitle="Assign, cancel, dan mark off shift outlet 2-shift">
@@ -235,6 +235,10 @@ export default function AdminSchedulePage() {
 
 function isActiveTwoShiftOutlet(outlet: Outlet): boolean {
   return outlet.active !== false && Number(outlet.shift_mode) === 2;
+}
+
+function isActiveStaff(staff: Staff): boolean {
+  return staff.active !== false;
 }
 
 function humanError(err: unknown): string {

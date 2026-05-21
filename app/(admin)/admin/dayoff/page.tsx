@@ -6,7 +6,7 @@ import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID } from "@/lib/format";
 
-type Outlet = { id: string; name: string; shift_mode: number };
+type Outlet = { id: string; name: string; shift_mode: number; active?: boolean };
 type Staff = { id: string; name: string; outlet_id: string | null; active: boolean };
 
 // Tipe baru: dayoff berbasis staff (PRD §8.4)
@@ -55,17 +55,20 @@ export default function AdminDayoffPage() {
         apiFetch<{ ok: true; dayoff: StaffDayoff[] }>("/api/admin/staff-dayoff", { role: "admin" }),
         apiFetch<{ ok: true; dayoff: ShiftDayoff[] }>("/api/admin/dayoff", { role: "admin" })
       ]);
+      const activeOutlets = outletPayload.outlets.filter(isActiveOutlet);
+      const activeShiftOutlets = activeOutlets.filter(isTwoShiftOutlet);
       setOutlets(outletPayload.outlets);
       setStaffList(staffPayload.staff.filter((s) => s.active));
       setStaffDayoffs(staffDayoffPayload.dayoff);
       setShiftDayoffs(shiftDayoffPayload.dayoff);
-      if (!staffForm.outletId && outletPayload.outlets[0]) {
-        setStaffForm((f) => ({ ...f, outletId: outletPayload.outlets[0].id }));
-      }
-      const shiftOutlets = outletPayload.outlets.filter((o) => o.shift_mode === 2);
-      if (!shiftForm.outletId && shiftOutlets[0]) {
-        setShiftForm((f) => ({ ...f, outletId: shiftOutlets[0].id }));
-      }
+      setStaffForm((f) => {
+        const nextOutletId = activeOutlets.some((o) => o.id === f.outletId) ? f.outletId : activeOutlets[0]?.id || "";
+        return nextOutletId === f.outletId ? f : { ...f, outletId: nextOutletId, staffId: "" };
+      });
+      setShiftForm((f) => {
+        const nextOutletId = activeShiftOutlets.some((o) => o.id === f.outletId) ? f.outletId : activeShiftOutlets[0]?.id || "";
+        return nextOutletId === f.outletId ? f : { ...f, outletId: nextOutletId };
+      });
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
     } finally {
@@ -77,7 +80,8 @@ export default function AdminDayoffPage() {
 
   // Staff di outlet yang dipilih
   const outletStaff = staffList.filter((s) => s.outlet_id === staffForm.outletId);
-  const shiftOutlets = outlets.filter((o) => o.shift_mode === 2);
+  const activeOutlets = outlets.filter(isActiveOutlet);
+  const shiftOutlets = activeOutlets.filter(isTwoShiftOutlet);
 
   async function addStaffDayoff(event: React.FormEvent) {
     event.preventDefault();
@@ -174,8 +178,8 @@ export default function AdminDayoffPage() {
                     value={staffForm.outletId}
                     onChange={(e) => setStaffForm({ ...staffForm, outletId: e.target.value, staffId: "" })}
                   >
-                    {outlets.length === 0 ? <option value="">Tidak ada outlet</option> : null}
-                    {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                    {activeOutlets.length === 0 ? <option value="">Tidak ada outlet aktif</option> : null}
+                    {activeOutlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -242,7 +246,7 @@ export default function AdminDayoffPage() {
                 ) : staffDayoffs.map((row) => (
                   <tr key={row.id}>
                     <td>{formatDateID(row.date)}</td>
-                    <td>{outlets.find((o) => o.id === row.outlet_id)?.name || "—"}</td>
+                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
                     <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
                     <td>{row.reason || "—"}</td>
                     <td>
@@ -323,7 +327,7 @@ export default function AdminDayoffPage() {
                 ) : shiftDayoffs.map((row) => (
                   <tr key={row.id}>
                     <td>{formatDateID(row.date)}</td>
-                    <td>{outlets.find((o) => o.id === row.outlet_id)?.name || row.outlet_id}</td>
+                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id), row.outlet_id)}</td>
                     <td>Shift {row.shift}</td>
                     <td>
                       <button
@@ -343,6 +347,19 @@ export default function AdminDayoffPage() {
       )}
     </AdminPage>
   );
+}
+
+function isActiveOutlet(outlet: Outlet): boolean {
+  return outlet.active !== false;
+}
+
+function isTwoShiftOutlet(outlet: Outlet): boolean {
+  return Number(outlet.shift_mode) === 2;
+}
+
+function outletLabel(outlet?: Outlet, fallback = "—"): string {
+  if (!outlet) return fallback;
+  return isActiveOutlet(outlet) ? outlet.name : `${outlet.name} (nonaktif)`;
 }
 
 function humanError(err: unknown): string {

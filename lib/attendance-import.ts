@@ -281,10 +281,12 @@ async function validateRows(
   if (staffError) throw staffError;
   if (outletError) throw outletError;
 
-  const staffById = new Map<string, any>((staffRows || []).map((staff: any) => [staff.id, staff]));
-  const outletById = new Map<string, Outlet>((outletRows || []).map((outlet: any) => [outlet.id, toOutlet(outlet)]));
-  const staffByName = groupedByName(staffRows || []);
-  const outletByName = groupedByName(outletRows || []);
+  const activeStaffRows = (staffRows || []).filter((staff: any) => staff.active !== false && !staff.deleted_at);
+  const activeOutletRows = (outletRows || []).filter((outlet: any) => outlet.active !== false);
+  const staffById = new Map<string, any>(activeStaffRows.map((staff: any) => [staff.id, staff]));
+  const outletById = new Map<string, Outlet>(activeOutletRows.map((outlet: any) => [outlet.id, toOutlet(outlet)]));
+  const staffByName = groupedByName(activeStaffRows);
+  const outletByName = groupedByName(activeOutletRows);
 
   const lateTolerance = configNumber(cfg, "late_tolerance_minutes", 10);
   const deductionPerMinute = configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000));

@@ -9,7 +9,7 @@ import { formatDateID, hhmm } from "@/lib/format";
 
 type ReportItem = { label: string; photo_url: string | null; required: boolean };
 type Report = { id: string; staff_name: string; outlet_name: string; date: string; type: string; selfie: string | null; items_json: ReportItem[]; submitted_at: string };
-type Outlet = { id: string; name: string };
+type Outlet = { id: string; name: string; active?: boolean };
 
 export default function AdminReportsPage() {
   const [reports, setReports] = useState<Report[]>([]);
@@ -69,7 +69,7 @@ export default function AdminReportsPage() {
             <label className="label">Outlet</label>
             <select className="field" value={filters.outletId} onChange={(e) => setFilters({ ...filters, outletId: e.target.value })}>
               <option value="">Semua outlet</option>
-              {outlets.map((outlet) => <option key={outlet.id} value={outlet.id}>{outlet.name}</option>)}
+              {outlets.map((outlet) => <option key={outlet.id} value={outlet.id}>{outletOptionLabel(outlet)}</option>)}
             </select>
           </div>
           <div>
@@ -156,6 +156,10 @@ export default function AdminReportsPage() {
       )}
     </AdminPage>
   );
+}
+
+function outletOptionLabel(outlet: Outlet): string {
+  return outlet.active !== false ? outlet.name : `${outlet.name} (nonaktif)`;
 }
 
 function humanError(err: unknown): string {
