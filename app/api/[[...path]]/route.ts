@@ -39,6 +39,7 @@ import {
   parseMapping,
   previewAttendanceImport
 } from "@/lib/attendance-import";
+import { photoStorageBaseUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { uploadImage } from "@/lib/storage";
 import type { ConfigMap, Outlet, SessionPayload, Staff } from "@/types/domain";
@@ -268,6 +269,155 @@ function reportPhotoItems(items: SavedReportItem[]) {
     }));
 }
 
+function trustedHttpsPhotoUrl(input: unknown) {
+  const raw = typeof input === "string" ? input.trim() : "";
+  if (!raw) return "";
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return "";
+  }
+
+  if (url.protocol !== "https:") return "";
+
+  let configuredHost = "";
+  try {
+    configuredHost = new URL(photoStorageBaseUrl()).hostname.toLowerCase();
+  } catch {
+    configuredHost = "";
+  }
+
+  const host = url.hostname.toLowerCase();
+  const allowed =
+    (configuredHost && host === configuredHost) ||
+    host === "foto-laporan-area.rotibakarngeunah.my.id" ||
+    host === "res.cloudinary.com" ||
+    host.endsWith(".supabase.co");
+
+  return allowed ? url.toString() : "";
+}
+
+async function resolveShiftDayoffState(
+  db: Db,
+  outlet: Outlet,
+  date: string,
+  preferredShift: 0 | 1 | 2
+) {
+  if (outlet.shift_mode !== 2) {
+    return { shift: preferredShift, isFullShift: false, offShift: null as number | null, activeShift: null as number | null };
+  }
+
+  const { data, error } = await db
+    .from("shift_dayoff")
+    .select("shift")
+    .eq("outlet_id", outlet.id)
+    .eq("date", date);
+  if (error) throw error;
+
+  const offSet = new Set((data || []).map((row: any) => Number(row.shift)));
+  const shift1Off = offSet.has(1);
+  const shift2Off = offSet.has(2);
+
+  if (shift1Off && !shift2Off) {
+    return { shift: 0 as const, isFullShift: true, offShift: 1, activeShift: 2 };
+  }
+  if (shift2Off && !shift1Off) {
+    return { shift: 0 as const, isFullShift: true, offShift: 2, activeShift: 1 };
+  }
+
+  return { shift: preferredShift, isFullShift: false, offShift: null as number | null, activeShift: null as number | null };
+}
+
+function checkoutGpsFromFlags(flags?: string | null) {
+  const match = String(flags || "").match(/CHECKOUT_GPS:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+)/);
+  return {
+    lat: match ? Number(match[1]) : null,
+    lng: match ? Number(match[2]) : null,
+    accuracy: match ? Number(match[3]) : null
+  };
+}
+
+function workMinutes(checkinTime?: string | null, checkoutTime?: string | null) {
+  if (!checkinTime || !checkoutTime) return null;
+  const checkinMs = new Date(checkinTime).getTime();
+  const checkoutMs = new Date(checkoutTime).getTime();
+  if (!Number.isFinite(checkinMs) || !Number.isFinite(checkoutMs)) return null;
+  return Math.max(0, Math.round((checkoutMs - checkinMs) / 60000));
+}
+
+function payrollStatusLabel(attendance: Body) {
+  if (attendance.paid_status) return "Sudah dibayar";
+  const finalSalary = normalizeCurrency(attendance.final_salary);
+  return finalSalary ? `Belum dibayar - estimasi ${formatCurrencyForEmail(finalSalary)}` : "Belum dibayar";
+}
+
+async function sendClosingReportAfterCheckout(
+  db: Db,
+  staff: Staff,
+  outlet: Outlet,
+  date: string,
+  attendance: Body
+) {
+  try {
+    const { data: report, error } = await db
+      .from("reports")
+      .select("*")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .eq("type", "TUTUP")
+      .maybeSingle();
+    if (error) throw error;
+    if (!report) return false;
+
+    const cfg = await configMap(db);
+    const submittedAt = typeof report.submitted_at === "string" ? report.submitted_at : new Date().toISOString();
+    const submissionStatus = reportSubmissionStatus(outlet, "TUTUP", new Date(submittedAt));
+    const items = Array.isArray(report.items_json) ? (report.items_json as SavedReportItem[]) : [];
+    const flags = String(attendance.flags || "");
+    const gps = checkoutGpsFromFlags(flags);
+    const attShift = Number(attendance.shift || 2) as 0 | 1 | 2;
+    const isFullShiftAttendance = attShift === 0 || flags.includes("FULL_SHIFT_2X");
+
+    return await notifySafely(db, "report_email_failed", staff.name, () =>
+      sendClosingCombinedEmail(db, {
+        reportId: report.id,
+        staffId: staff.id,
+        staffName: staff.name,
+        outletId: outlet.id,
+        outletName: outlet.name,
+        date,
+        submittedAt,
+        reportStatusLabel: submissionStatus.isLate ? "Laporan Terlambat" : "Tepat waktu",
+        reportStatusTone: submissionStatus.isLate ? "warning" as const : "success" as const,
+        deadlineLabel: reportDeadlineLabel(outlet, "TUTUP"),
+        reportLateMinutes: submissionStatus.lateMinutes,
+        items,
+        photos: reportPhotoItems(items),
+        note: null,
+        shiftLabel: isFullShiftAttendance ? "Full Shift" : shiftLabel(attShift),
+        checkinTime: typeof attendance.checkin_time === "string" ? attendance.checkin_time : null,
+        checkoutTime: typeof attendance.checkout_time === "string" ? attendance.checkout_time : null,
+        totalWorkMinutes: workMinutes(
+          typeof attendance.checkin_time === "string" ? attendance.checkin_time : null,
+          typeof attendance.checkout_time === "string" ? attendance.checkout_time : null
+        ),
+        selfieOutUrl: typeof attendance.selfie_out === "string" ? attendance.selfie_out : null,
+        checkoutLat: gps.lat,
+        checkoutLng: gps.lng,
+        checkoutAcc: gps.accuracy,
+        payrollStatus: payrollStatusLabel(attendance),
+        to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
+        forceType: submissionStatus.isLate ? "report_late" as const : undefined
+      })
+    );
+  } catch (error) {
+    await logAudit(db, "report_email_failed", staff.name, { error: cleanEmailError(error), stage: "checkout" }).catch(() => undefined);
+    return false;
+  }
+}
+
 async function consumeNonce(db: Db, nonce?: string) {
   if (!nonce) return;
   const { error } = await db.from("nonces").insert({ nonce });
@@ -451,6 +601,19 @@ async function recordAdminLoginAttempt(db: Db, request: NextRequest, success: bo
   });
 }
 
+function initialAdminPin() {
+  const value = process.env.ADMIN_INITIAL_PIN?.trim();
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new HttpError(
+      "Password admin awal belum dikonfigurasi. Set ADMIN_INITIAL_PIN di environment atau isi admin_pin_hash di tabel config.",
+      503,
+      "ADMIN_PIN_NOT_CONFIGURED"
+    );
+  }
+  return "admin1234";
+}
+
 async function adminLogin(db: Db, request: NextRequest, body: Body) {
   const pin = stringBody(body, "pin");
   if (pin.length < 4) throw new HttpError("Password admin minimal 4 karakter");
@@ -463,12 +626,13 @@ async function adminLogin(db: Db, request: NextRequest, body: Body) {
     throw new HttpError(`Terlalu banyak percobaan. Coba lagi ${lockoutMinutes} menit lagi.`, 429, "LOCKED");
   }
 
-  const expected = cfg.admin_pin_hash?.trim() ? cfg.admin_pin_hash : hashPin("admin1234");
+  const configuredAdminHash = cfg.admin_pin_hash?.trim();
+  const expected = configuredAdminHash || hashPin(initialAdminPin());
   const success = expected === hashPin(pin);
   await recordAdminLoginAttempt(db, request, success).catch(() => undefined);
   if (!success) throw new HttpError("Password salah, silakan coba lagi.", 401, "INVALID_ADMIN_PASSWORD");
 
-  if (!cfg.admin_pin_hash) {
+  if (!configuredAdminHash) {
     await db.from("config").upsert({ key: "admin_pin_hash", value: expected });
   }
   const hours = configNumber(cfg, "token_hours", 8);
@@ -492,30 +656,13 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan untuk staff ini", 400, "NO_OUTLET");
 
   const effective = stringBody(body, "date") || getWorkingDate().date;
-  const rawShift = detectShift(outlet);
   const cfg = await configMap(db);
 
-  // Detect full shift scenario for 2-shift outlets
-  let effectiveShift: 0 | 1 | 2 = rawShift;
-  let isFullShift = false;
-  let offShift: number | null = null;
-  let activeShift: number | null = null;
-
-  if (outlet.shift_mode === 2) {
-    const { data: dayoffs } = await db
-      .from("shift_dayoff")
-      .select("shift")
-      .eq("outlet_id", outlet.id)
-      .eq("date", effective);
-    const offSet = new Set((dayoffs || []).map((d: any) => Number(d.shift)));
-    const shift1Off = offSet.has(1);
-    const shift2Off = offSet.has(2);
-    if (shift1Off && !shift2Off) {
-      isFullShift = true; offShift = 1; activeShift = 2; effectiveShift = 0;
-    } else if (shift2Off && !shift1Off) {
-      isFullShift = true; offShift = 2; activeShift = 1; effectiveShift = 0;
-    }
-  }
+  const dayoffShift = await resolveShiftDayoffState(db, outlet, effective, detectShift(outlet));
+  let effectiveShift: 0 | 1 | 2 = dayoffShift.shift;
+  const isFullShift = dayoffShift.isFullShift;
+  const offShift = dayoffShift.offShift;
+  const activeShift = dayoffShift.activeShift;
 
   // PRD §8.5 — resolve jadwal lebih awal agar shift bisa dikoreksi sebelum query attendance
   // Staff Shift 2 yang datang lebih awal bisa salah dideteksi sebagai Shift 1 jika tidak dikoreksi di sini
@@ -705,7 +852,6 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
 
 async function checkin(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request, "staff");
-  await consumeNonce(db, stringBody(body, "nonce"));
 
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
@@ -715,6 +861,8 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
   const now = new Date();
+  const dayoffShift = await resolveShiftDayoffState(db, outlet, date, shift);
+  shift = dayoffShift.shift;
 
   // Override shift berdasarkan assignment jika ada (mencegah deteksi shift salah saat datang lebih awal)
   // Contoh: staff punya assignment SHIFT_2 tapi absen sebelum shift2_start → shift tetap 2 bukan 1
@@ -766,15 +914,15 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     if (thisOff) throw new HttpError("Shift ini sedang libur, tidak bisa absen masuk", 400, "SHIFT_OFF");
   }
 
-  const { data: existing, error: existingError } = await db
+  let existingQuery = db
     .from("attendance")
     .select("id")
     .eq("staff_id", staff.id)
-    .eq("date", date)
-    .eq("shift", shift)
-    .maybeSingle();
+    .eq("date", date);
+  if (shift !== 0) existingQuery = existingQuery.eq("shift", shift);
+  const { data: existingRows, error: existingError } = await existingQuery.limit(1);
   if (existingError) throw existingError;
-  if (existing) throw new HttpError("Absen masuk untuk shift ini sudah tercatat", 409, "ALREADY_CHECKED_IN");
+  if ((existingRows || []).length > 0) throw new HttpError("Absen masuk untuk shift ini sudah tercatat", 409, "ALREADY_CHECKED_IN");
 
   // Blokir checkin jika ada cuti yang disetujui untuk tanggal ini
   const { data: approvedLeave } = await db
@@ -803,28 +951,14 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const selfie = body.selfie || body.photo;
   const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
   if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
+  await consumeNonce(db, stringBody(body, "nonce"));
 
   const cfg = await configMap(db);
   // Full shift always starts at shift1_start; shiftStartTime(outlet, 0) already returns shift1_start
   const start = dateTimeUtc(date, shiftStartTime(outlet, shift));
 
-  // Full shift: shift=0 for 2-shift outlet always means full shift (other shift is off)
-  let isFullShift2x = false;
-  if (outlet.shift_mode === 2) {
-    if (shift === 0) {
-      isFullShift2x = true;
-    } else if (shift === 1 || shift === 2) {
-      const otherShift = shift === 1 ? 2 : 1;
-      const { data: otherOff } = await db
-        .from("shift_dayoff")
-        .select("id")
-        .eq("outlet_id", outlet.id)
-        .eq("date", date)
-        .eq("shift", otherShift)
-        .maybeSingle();
-      if (otherOff) isFullShift2x = true;
-    }
-  }
+  // Full shift: shift=0 for 2-shift outlet means one person covers both shifts.
+  const isFullShift2x = outlet.shift_mode === 2 && shift === 0;
 
   const effectiveSalary = normalizeCurrency(staff.salary_per_shift) * (isFullShift2x ? 2 : 1);
   const salary = calculateSalary(
@@ -884,9 +1018,15 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   }
 
   // Kunci assignment agar tidak bisa dibatalkan setelah absen masuk
+  const assignmentLockUpdates: Body = {
+    status: "locked",
+    locked_at: now.toISOString(),
+    updated_at: now.toISOString()
+  };
+  if (shift === 0) assignmentLockUpdates.shift_type = "FULL_SHIFT";
   await db
     .from("staff_shift_assignments")
-    .update({ status: "locked", locked_at: now.toISOString(), updated_at: now.toISOString() })
+    .update(assignmentLockUpdates)
     .eq("staff_id", staff.id)
     .eq("date", date)
     .in("status", ["confirmed", "admin_override", "auto_cover"]);
@@ -918,7 +1058,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
         });
       } catch { /* abaikan jika race condition */ }
     }
-  } else if (outlet.shift_mode === 1) {
+  } else if (shift === 0) {
     const { data: existingAss } = await db
       .from("staff_shift_assignments")
       .select("id")
@@ -1021,22 +1161,28 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
 
 async function checkout(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request, "staff");
-  await consumeNonce(db, stringBody(body, "nonce"));
 
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
-  const shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
+  let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
+  const dayoffShift = await resolveShiftDayoffState(db, outlet, date, shift);
+  shift = dayoffShift.shift;
 
-  const { data: attendance, error: attendanceError } = await db
+  let attendanceQuery = db
     .from("attendance")
     .select("*")
     .eq("staff_id", staff.id)
-    .eq("date", date)
-    .eq("shift", shift)
-    .maybeSingle();
+    .eq("date", date);
+  if (shift !== 0) attendanceQuery = attendanceQuery.eq("shift", shift);
+  const { data: attendanceRows, error: attendanceError } = await attendanceQuery
+    .not("checkin_time", "is", null)
+    .order("shift", { ascending: true });
   if (attendanceError) throw attendanceError;
+  const attendance = shift === 0
+    ? (attendanceRows || []).find((row) => row.shift === 0 || String(row.flags || "").includes("FULL_SHIFT_2X")) ?? (attendanceRows || [])[0]
+    : (attendanceRows || [])[0];
   if (!attendance?.checkin_time) throw new HttpError("Belum ada absen masuk untuk shift ini", 400, "NO_CHECKIN");
   if (attendance.checkout_time) throw new HttpError("Absen pulang sudah tercatat", 409, "ALREADY_CHECKED_OUT");
 
@@ -1087,6 +1233,7 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
 
   const selfieUrl = await uploadImage(db, `selfies/checkout/${staff.id}/${date}_${shift}.jpg`, body.selfie || body.photo);
   if (!selfieUrl) throw new HttpError("Selfie absen pulang wajib diupload");
+  await consumeNonce(db, stringBody(body, "nonce"));
 
   const durationMin = Math.min(
     18 * 60,
@@ -1124,14 +1271,15 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     checkoutDist: Math.round(checkoutDist),
     checkoutGpsLowAccuracy
   });
-  // Email checkout tidak dikirim di sini — dikirim saat laporan tutup toko disubmit (combined email)
+  // Kirim setelah checkout agar email tutup toko memuat selfie dan GPS keluar.
+  const emailSent = await sendClosingReportAfterCheckout(db, staff, outlet, date, updated);
   return ok({
     attendance: updated,
     checkout_time: now.toISOString(),
     duration_min: durationMin,
     checkout_dist_m: Math.round(checkoutDist),
     checkout_gps_low_accuracy: checkoutGpsLowAccuracy,
-    emailSent: false
+    emailSent
   });
 }
 
@@ -1156,7 +1304,6 @@ async function reportsConfig(db: Db, request: NextRequest, body: Body) {
 
 async function submitReport(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request, "staff");
-  await consumeNonce(db, stringBody(body, "nonce"));
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
 
@@ -1166,14 +1313,15 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
   const { data: checkinRows, error: attCheckError } = await db
     .from("attendance")
-    .select("id")
+    .select("id,shift,flags")
     .eq("staff_id", staff.id)
     .eq("date", date)
-    .in("shift", allowedShifts)
-    .not("checkin_time", "is", null)
-    .limit(1);
+    .not("checkin_time", "is", null);
   if (attCheckError) throw attCheckError;
-  if (!checkinRows || checkinRows.length === 0) {
+  const hasEligibleCheckin = (checkinRows || []).some((row) =>
+    allowedShifts.includes(Number(row.shift)) || String(row.flags || "").includes("FULL_SHIFT_2X")
+  );
+  if (!hasEligibleCheckin) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
@@ -1202,8 +1350,8 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     const submitted = inputItems.find((item) => String(item.label || "") === String(cfgItem.label));
 
     // Client sudah upload langsung ke PHP server dan mengirim URL — pakai langsung tanpa re-upload
-    const directUrl = submitted?.photo_url;
-    if (directUrl && typeof directUrl === "string" && directUrl.startsWith("https://")) {
+    const directUrl = trustedHttpsPhotoUrl(submitted?.photo_url);
+    if (directUrl) {
       return { label: cfgItem.label, required: cfgItem.required, photo_url: directUrl, submitted: true };
     }
 
@@ -1228,18 +1376,15 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   }));
 
   if (!effectiveCfgItems.length) {
-    const hasPhoto = inputItems.some((item) => {
-      const url = item?.photo_url;
-      return (url && typeof url === "string" && url.startsWith("https://")) || photoInputForItem(body, item);
-    });
+    const hasPhoto = inputItems.some((item) => trustedHttpsPhotoUrl(item?.photo_url) || photoInputForItem(body, item));
     if (!hasPhoto) {
       throw new HttpError("Minimal satu foto laporan wajib diupload");
     }
     const fallbackItems = await Promise.all(inputItems.map(async (item) => {
       if (!item?.label) return null;
       // Client upload langsung → gunakan URL
-      const directUrl = item?.photo_url;
-      if (directUrl && typeof directUrl === "string" && directUrl.startsWith("https://")) {
+      const directUrl = trustedHttpsPhotoUrl(item?.photo_url);
+      if (directUrl) {
         return { label: item.label, required: false, photo_url: directUrl, submitted: true };
       }
       // Fallback blob
@@ -1254,6 +1399,8 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     }));
     savedItems.push(...fallbackItems.filter((item): item is SavedReportItem => Boolean(item)));
   }
+
+  await consumeNonce(db, stringBody(body, "nonce"));
 
   const { data: report, error } = await db
     .from("reports")
@@ -1298,21 +1445,24 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
   let emailSent = false;
   if (type === "BUKA") {
-    const { data: attData } = await db
+    const { data: attRows, error: attEmailError } = await db
       .from("attendance")
       .select("id, checkin_time, selfie_in, lat, lng, late_minutes, shift, flags")
       .eq("staff_id", staff.id)
       .eq("date", date)
-      .in("shift", [0, 1])
-      .not("checkin_time", "is", null)
-      .maybeSingle();
+      .not("checkin_time", "is", null);
+    if (attEmailError) throw attEmailError;
+    const attData = (attRows || []).find((row) =>
+      [0, 1].includes(Number(row.shift)) || String(row.flags || "").includes("FULL_SHIFT_2X")
+    );
     const attShift = attData?.shift ?? 1;
-    const attShiftLabel = attShift === 0 ? "Full Shift" : "Shift 1";
+    const isFullShiftAttendance = attShift === 0 || String(attData?.flags || "").includes("FULL_SHIFT_2X");
+    const attShiftLabel = isFullShiftAttendance ? "Full Shift" : "Shift 1";
     emailSent = Boolean(await notifySafely(db, "report_email_failed", staff.name, () =>
       sendOpeningCombinedEmail(db, {
         ...reportBase,
         shiftLabel: attShiftLabel,
-        scheduledStart: shiftStartTime(outlet, attShift as 0 | 1 | 2),
+        scheduledStart: shiftStartTime(outlet, isFullShiftAttendance ? 0 : (attShift as 0 | 1 | 2)),
         checkinTime: attData?.checkin_time || null,
         lateMinutes: attData?.late_minutes || 0,
         checkinLat: attData?.lat || null,
@@ -1321,40 +1471,18 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
       })
     ));
   } else {
-    const { data: attData } = await db
+    const { data: attRows, error: attEmailError } = await db
       .from("attendance")
       .select("id, checkin_time, checkout_time, selfie_out, flags, paid_status, final_salary, shift")
       .eq("staff_id", staff.id)
-      .eq("date", date)
-      .in("shift", [0, 2])
-      .maybeSingle();
-    const attShift = attData?.shift ?? 2;
-    const attShiftLabel = attShift === 0 ? "Full Shift" : "Shift 2";
-    const checkoutGpsMatch = (attData?.flags || "").match(/CHECKOUT_GPS:(-?\d+\.\d+):(-?\d+\.\d+):(\d+)/);
-    const checkoutLat = checkoutGpsMatch ? Number(checkoutGpsMatch[1]) : null;
-    const checkoutLng = checkoutGpsMatch ? Number(checkoutGpsMatch[2]) : null;
-    const checkoutAcc = checkoutGpsMatch ? Number(checkoutGpsMatch[3]) : null;
-    const checkinMs = attData?.checkin_time ? new Date(attData.checkin_time).getTime() : null;
-    const checkoutMs = attData?.checkout_time ? new Date(attData.checkout_time).getTime() : null;
-    const totalWorkMinutes = checkinMs && checkoutMs ? Math.round((checkoutMs - checkinMs) / 60000) : null;
-    emailSent = Boolean(await notifySafely(db, "report_email_failed", staff.name, () =>
-      sendClosingCombinedEmail(db, {
-        ...reportBase,
-        shiftLabel: attShiftLabel,
-        checkinTime: attData?.checkin_time || null,
-        checkoutTime: attData?.checkout_time || null,
-        totalWorkMinutes,
-        selfieOutUrl: attData?.selfie_out || null,
-        checkoutLat,
-        checkoutLng,
-        checkoutAcc,
-        payrollStatus: attData?.paid_status
-          ? "Sudah dibayar"
-          : attData?.final_salary
-            ? `Belum dibayar — estimasi ${formatCurrencyForEmail(attData.final_salary)}`
-            : "Belum dibayar"
-      })
-    ));
+      .eq("date", date);
+    if (attEmailError) throw attEmailError;
+    const attData = (attRows || []).find((row) =>
+      [0, 2].includes(Number(row.shift)) || String(row.flags || "").includes("FULL_SHIFT_2X")
+    );
+    if (attData?.checkout_time) {
+      emailSent = await sendClosingReportAfterCheckout(db, staff, outlet, date, attData as Body);
+    }
   }
   await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
   return ok({ report, reportId: report.id, emailSent });
@@ -2802,6 +2930,22 @@ async function adminDayoff(db: Db, method: string, body: Body) {
         if ([1, 2].includes(Number(shift))) payload.push({ outlet_id: outletId, date, shift: Number(shift) });
       }
       if (payload.length > 366 * 2) break;
+    }
+    const requestedShiftsByDate = new Map<string, Set<number>>();
+    payload.forEach((item) => {
+      const set = requestedShiftsByDate.get(item.date) || new Set<number>();
+      set.add(item.shift);
+      requestedShiftsByDate.set(item.date, set);
+    });
+    const selfConflictDates = [...requestedShiftsByDate.entries()]
+      .filter(([, requestedShifts]) => requestedShifts.has(1) && requestedShifts.has(2))
+      .map(([date]) => date);
+    if (selfConflictDates.length > 0) {
+      throw new HttpError(
+        `Tidak bisa meliburkan kedua shift pada tanggal yang sama: ${selfConflictDates.join(", ")}`,
+        400,
+        "BOTH_SHIFTS_OFF"
+      );
     }
 
     // Prevent making both shifts off on any date in the range

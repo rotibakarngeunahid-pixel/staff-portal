@@ -83,7 +83,8 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     Object.entries(options.body).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
     });
-    url += `?${params.toString()}`;
+    const query = params.toString();
+    if (query) url += `${url.includes("?") ? "&" : "?"}${query}`;
   } else if (options.body) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);

@@ -10,7 +10,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Isi `SUPABASE_SERVICE_ROLE_KEY`, `PIN_SECRET`, dan `JWT_SECRET` sebelum mencoba login atau memanggil API.
+Isi `SUPABASE_SERVICE_ROLE_KEY`, `PIN_SECRET`, dan `JWT_SECRET` sebelum mencoba login atau memanggil API. Untuk production pertama kali, set `ADMIN_INITIAL_PIN` jika tabel `config` belum punya `admin_pin_hash`.
 
 ## Setup Supabase
 
@@ -20,4 +20,4 @@ Isi `SUPABASE_SERVICE_ROLE_KEY`, `PIN_SECRET`, dan `JWT_SECRET` sebelum mencoba 
 4. Pastikan `PHOTO_UPLOAD_ENDPOINT` mengarah ke `/api/upload-laporan-area.php`.
 5. Set env production di Vercel dengan nilai yang sama seperti `.env.local`.
 
-PIN admin default saat database belum punya `admin_pin_hash` adalah `admin1234`. Ganti dari `/admin/config` setelah login pertama.
+Di development, PIN admin default saat database belum punya `admin_pin_hash` adalah `admin1234`. Di production, default ini dinonaktifkan; gunakan `ADMIN_INITIAL_PIN` atau isi `admin_pin_hash` lebih dulu. Ganti password dari `/admin/config` setelah login pertama.

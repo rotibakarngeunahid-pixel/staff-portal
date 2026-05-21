@@ -22,7 +22,7 @@ const SECTIONS: Section[] = [
       { icon: "2️⃣", title: "Absen Masuk", desc: "Buka Home → izinkan GPS → tunggu GPS siap → ambil selfie → tap Absen Masuk." },
       { icon: "3️⃣", title: "Laporan Buka Toko", desc: "Setelah absen masuk, isi laporan buka toko dengan foto yang diminta admin." },
       { icon: "4️⃣", title: "Laporan Tutup Toko", desc: "Sebelum pulang, isi laporan tutup toko dengan foto kondisi toko saat penutupan." },
-      { icon: "5️⃣", title: "Absen Pulang", desc: "Setelah semua laporan terkirim, tap Absen Pulang dengan selfie." }
+      { icon: "5️⃣", title: "Absen Pulang", desc: "Setelah semua laporan terkirim, pastikan GPS siap lalu tap Absen Pulang dengan selfie." }
     ],
     tips: ["Selesaikan setiap langkah secara berurutan", "Jangan keluar dari app saat sedang mengisi laporan"]
   },
@@ -39,7 +39,7 @@ const SECTIONS: Section[] = [
     tips: [
       "Harus berada dalam radius outlet (tertera di layar)",
       "Jika GPS 'Di Luar Area', pindah lebih dekat ke toko",
-      "Absen pulang tidak perlu GPS — cukup selfie",
+      "Absen pulang perlu GPS aktif dan selfie",
       "Outlet 2 shift: Shift 2 baru bisa absen masuk setelah Shift 1 absen keluar — jika tombol belum aktif, tunggu Shift 1 selesai"
     ]
   },

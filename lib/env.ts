@@ -18,12 +18,21 @@ export function serverEnv(name: string) {
   return value;
 }
 
+function secretEnv(name: string, developmentFallback: string) {
+  const value = process.env[name];
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return developmentFallback;
+}
+
 export function pinSecret() {
-  return process.env.PIN_SECRET || "dev-pin-secret-change-me";
+  return secretEnv("PIN_SECRET", "dev-pin-secret-change-me");
 }
 
 export function jwtSecret() {
-  return process.env.JWT_SECRET || "dev-jwt-secret-change-me";
+  return secretEnv("JWT_SECRET", "dev-jwt-secret-change-me");
 }
 
 export function photoStorageBaseUrl() {
