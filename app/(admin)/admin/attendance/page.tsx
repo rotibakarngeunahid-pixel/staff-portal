@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, Trash2, Pencil, Image, MapPin, X } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
@@ -552,7 +552,7 @@ export default function AdminAttendancePage() {
                             title="Lihat selfie"
                             onClick={() => setPhotoTarget(row)}
                           >
-                            <Image size={13} /> Foto
+                            <ImageIcon size={13} /> Foto
                           </button>
                         )}
                         {gps && (

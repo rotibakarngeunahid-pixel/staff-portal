@@ -173,6 +173,21 @@ function assertOperationalStaff(raw: any, message = "Staff tidak aktif. Pilih st
   }
 }
 
+async function assertUniqueActiveOutletName(db: Db, name: string, excludeOutletId?: string) {
+  let query = db
+    .from("outlets")
+    .select("id")
+    .eq("active", true)
+    .ilike("name", name)
+    .limit(1);
+  if (excludeOutletId) query = query.neq("id", excludeOutletId);
+  const { data, error } = await query;
+  if (error) throw error;
+  if ((data || []).length > 0) {
+    throw new HttpError("Outlet aktif dengan nama ini sudah ada. Gunakan nama lain atau edit outlet yang sudah ada.", 400, "DUPLICATE_OUTLET_NAME");
+  }
+}
+
 async function getStaffWithOutlet(db: Db, staffId: string) {
   const { data, error } = await db.from("staff").select("*, outlets(*)").eq("id", staffId).maybeSingle();
   if (error) throw error;
@@ -1844,6 +1859,7 @@ async function adminOutlets(db: Db, method: string, body: Body) {
   if (!Number.isFinite(payload.lat) || !Number.isFinite(payload.lng)) throw new HttpError("Koordinat outlet wajib valid");
 
   if (method === "POST") {
+    if (payload.active) await assertUniqueActiveOutletName(db, payload.name);
     const { data, error } = await db.from("outlets").insert(payload).select("*").single();
     if (error) throw error;
     await logAudit(db, "admin_add_outlet", "Admin", { outletId: data.id, name: data.name });
@@ -1853,6 +1869,7 @@ async function adminOutlets(db: Db, method: string, body: Body) {
   if (method === "PUT") {
     const outletId = stringBody(body, "outletId") || stringBody(body, "id");
     if (!outletId) throw new HttpError("Outlet ID wajib diisi");
+    if (payload.active) await assertUniqueActiveOutletName(db, payload.name, outletId);
     const { data, error } = await db.from("outlets").update(payload).eq("id", outletId).select("*").single();
     if (error) throw error;
     await logAudit(db, "admin_update_outlet", "Admin", { outletId });
@@ -2406,7 +2423,7 @@ async function adminEmail(db: Db, method: string, body: Body) {
       config: {
         notification_email: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
         test_notification_email:
-          process.env.TEST_NOTIFICATION_EMAIL || cfg.test_notification_email || cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+          cfg.test_notification_email || cfg.notification_email || process.env.TEST_NOTIFICATION_EMAIL || process.env.NOTIFICATION_EMAIL || ""
       },
       notificationTypes: EMAIL_NOTIFICATION_TYPES,
       logs: logsResult.logs,
@@ -2439,7 +2456,7 @@ async function adminEmail(db: Db, method: string, body: Body) {
       throw new HttpError("Jenis email test tidak valid", 400, "INVALID_EMAIL_TYPE");
     }
     const cfg = await configMap(db);
-    const to = stringBody(body, "to") || process.env.TEST_NOTIFICATION_EMAIL || cfg.test_notification_email || cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
+    const to = stringBody(body, "to") || cfg.test_notification_email || cfg.notification_email || process.env.TEST_NOTIFICATION_EMAIL || process.env.NOTIFICATION_EMAIL || "";
     if (!isValidEmailList(to)) throw new HttpError("Format email tujuan test tidak valid", 400, "INVALID_EMAIL");
 
     await sendTestEmailNotification(db, type, to);

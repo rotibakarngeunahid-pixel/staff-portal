@@ -116,7 +116,7 @@ export default function AdminEmailPage() {
 
   const validEmail = useMemo(() => isEmailList(email), [email]);
 
-  async function load() {
+  async function load(options: { preserveMessage?: boolean } = {}) {
     setLoading(true);
     try {
       const payload = await apiFetch<EmailPayload>("/api/admin/email", { role: "admin", body: { limit: 40 } });
@@ -124,6 +124,7 @@ export default function AdminEmailPage() {
       setDefaultEmail(payload.config.notification_email || "");
       setLogs(payload.logs || []);
       setLogsUnavailable(Boolean(payload.logsUnavailable));
+      if (!options.preserveMessage) setMessage("");
     } catch (err) {
       setMessage(humanError(err));
       setMsgType("err");
@@ -156,7 +157,7 @@ export default function AdminEmailPage() {
       });
       setMessage("Email tujuan test berhasil disimpan.");
       setMsgType("ok");
-      await load();
+      await load({ preserveMessage: true });
     } catch (err) {
       setMessage(humanError(err));
       setMsgType("err");
@@ -184,7 +185,7 @@ export default function AdminEmailPage() {
       });
       setMessage(payload.message || `Email test berhasil dikirim ke ${email}.`);
       setMsgType("ok");
-      await load();
+      await load({ preserveMessage: true });
     } catch (err) {
       setMessage(humanError(err));
       setMsgType("err");
@@ -206,7 +207,7 @@ export default function AdminEmailPage() {
       });
       setMessage(payload.message || `Email berhasil dikirim ulang ke ${log.recipient}.`);
       setMsgType("ok");
-      await load();
+      await load({ preserveMessage: true });
     } catch (err) {
       setMessage(humanError(err));
       setMsgType("err");
@@ -220,7 +221,7 @@ export default function AdminEmailPage() {
       title="Pengaturan Email & Test Notifikasi"
       subtitle="Kirim test email, cek status log, dan retry email gagal"
       action={
-        <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={load} disabled={loading}>
+        <button className="btn btn-soft" style={{ fontSize: 12, padding: "8px 12px" }} onClick={() => load()} disabled={loading}>
           <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
         </button>
       }

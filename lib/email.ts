@@ -34,7 +34,7 @@ export const EMAIL_NOTIFICATION_LABELS: Record<EmailNotificationType, string> = 
 };
 
 const BRAND_NAME = "Roti Bakar Ngeunah";
-const DEFAULT_FROM = "Roti Bakar Ngeunah <onboarding@resend.dev>";
+const DEFAULT_FROM = "Roti Bakar Ngeunah <noreply@rotibakarngeunah.my.id>";
 const SAMPLE_PHOTO_URL =
   "https://owner-portal.rotibakarngeunah.my.id/wp-content/uploads/2026/05/cropped-Icon-Roti-Bakar-Ngeunah.webp";
 
