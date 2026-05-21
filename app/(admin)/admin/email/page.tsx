@@ -415,7 +415,12 @@ function formatDateTime(value?: string | null) {
 function humanError(err: unknown): string {
   if (!(err instanceof Error)) return "Email gagal dikirim. Periksa konfigurasi email atau koneksi server.";
   const msg = err.message || "";
+  const lower = msg.toLowerCase();
   if (msg.includes("Format email")) return msg;
+  if (lower.includes("domain is not verified") || lower.includes("not verified"))
+    return "Email gagal dikirim karena domain pengirim belum diverifikasi di Resend. Verifikasi domain atau gunakan EMAIL_FROM dari domain yang sudah verified.";
+  if (lower.includes("only send testing emails") || lower.includes("your own email address"))
+    return "Email gagal dikirim karena akun Resend masih mode testing. Gunakan email pemilik akun Resend sebagai penerima test, atau verifikasi domain agar bisa kirim ke penerima lain.";
   if (msg.includes("RESEND") || msg.includes("API key") || msg.includes("provider")) return msg;
   if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed to fetch"))
     return "Email gagal dikirim. Periksa konfigurasi email atau koneksi server.";

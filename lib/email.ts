@@ -34,7 +34,7 @@ export const EMAIL_NOTIFICATION_LABELS: Record<EmailNotificationType, string> = 
 };
 
 const BRAND_NAME = "Roti Bakar Ngeunah";
-const DEFAULT_FROM = "Sistem Absensi <absensi@rotibakarngeunah.com>";
+const DEFAULT_FROM = "Roti Bakar Ngeunah <onboarding@resend.dev>";
 const SAMPLE_PHOTO_URL =
   "https://owner-portal.rotibakarngeunah.my.id/wp-content/uploads/2026/05/cropped-Icon-Roti-Bakar-Ngeunah.webp";
 
@@ -1044,6 +1044,12 @@ function cleanEmailError(error: unknown) {
   }
   if (lower.includes("api key") || lower.includes("resend_api_key") || lower.includes("unauthorized")) {
     return "Email gagal dikirim. Periksa konfigurasi API key email.";
+  }
+  if (lower.includes("domain is not verified") || lower.includes("not verified")) {
+    return "Email gagal dikirim karena domain pengirim belum diverifikasi di Resend. Verifikasi domain pengirim atau gunakan EMAIL_FROM dari domain yang sudah verified.";
+  }
+  if (lower.includes("only send testing emails") || lower.includes("your own email address")) {
+    return "Email gagal dikirim karena akun Resend masih mode testing. Gunakan email pemilik akun Resend sebagai penerima test, atau verifikasi domain agar bisa kirim ke penerima lain.";
   }
   return raw.slice(0, 220);
 }

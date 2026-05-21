@@ -188,6 +188,12 @@ function cleanEmailError(error: unknown) {
   if (lower.includes("api key") || lower.includes("resend_api_key") || lower.includes("unauthorized")) {
     return "Email gagal dikirim. Periksa konfigurasi API key email.";
   }
+  if (lower.includes("domain is not verified") || lower.includes("not verified")) {
+    return "Email gagal dikirim karena domain pengirim belum diverifikasi di Resend. Verifikasi domain pengirim atau gunakan EMAIL_FROM dari domain yang sudah verified.";
+  }
+  if (lower.includes("only send testing emails") || lower.includes("your own email address")) {
+    return "Email gagal dikirim karena akun Resend masih mode testing. Gunakan email pemilik akun Resend sebagai penerima test, atau verifikasi domain agar bisa kirim ke penerima lain.";
+  }
   return raw.slice(0, 220);
 }
 
@@ -2350,7 +2356,7 @@ async function adminEmail(db: Db, method: string, body: Body) {
       config: {
         notification_email: cfg.notification_email || process.env.NOTIFICATION_EMAIL || "",
         test_notification_email:
-          cfg.test_notification_email || process.env.TEST_NOTIFICATION_EMAIL || cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+          process.env.TEST_NOTIFICATION_EMAIL || cfg.test_notification_email || cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
       },
       notificationTypes: EMAIL_NOTIFICATION_TYPES,
       logs: logsResult.logs,
@@ -2383,7 +2389,7 @@ async function adminEmail(db: Db, method: string, body: Body) {
       throw new HttpError("Jenis email test tidak valid", 400, "INVALID_EMAIL_TYPE");
     }
     const cfg = await configMap(db);
-    const to = stringBody(body, "to") || cfg.test_notification_email || process.env.TEST_NOTIFICATION_EMAIL || cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
+    const to = stringBody(body, "to") || process.env.TEST_NOTIFICATION_EMAIL || cfg.test_notification_email || cfg.notification_email || process.env.NOTIFICATION_EMAIL || "";
     if (!isValidEmailList(to)) throw new HttpError("Format email tujuan test tidak valid", 400, "INVALID_EMAIL");
 
     await sendTestEmailNotification(db, type, to);

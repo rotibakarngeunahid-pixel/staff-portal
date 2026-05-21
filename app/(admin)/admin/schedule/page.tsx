@@ -6,7 +6,7 @@ import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID } from "@/lib/format";
 
-type Outlet = { id: string; name: string; shift_mode: number };
+type Outlet = { id: string; name: string; shift_mode: number; active?: boolean };
 type Staff = { id: string; name: string; outlet_id: string | null };
 type Slot = { shift: number; scheduleId: string | null; staffName: string | null; status: string };
 type Day = { date: string; slots: Slot[] };
@@ -31,10 +31,14 @@ export default function AdminSchedulePage() {
         apiFetch<{ ok: true; outlets: Outlet[] }>("/api/admin/outlets", { role: "admin" }),
         apiFetch<{ ok: true; staff: Staff[] }>("/api/admin/staff", { role: "admin" })
       ]);
-      const shiftOutlets = outletPayload.outlets.filter((outlet) => outlet.shift_mode === 2);
+      const shiftOutlets = outletPayload.outlets.filter(isActiveTwoShiftOutlet);
       setOutlets(shiftOutlets);
       setStaff(staffPayload.staff);
-      if (!outletId && shiftOutlets[0]) setOutletId(shiftOutlets[0].id);
+      const nextOutletId = shiftOutlets.some((outlet) => outlet.id === outletId)
+        ? outletId
+        : shiftOutlets[0]?.id || "";
+      if (nextOutletId !== outletId) setOutletId(nextOutletId);
+      if (!nextOutletId) setDays([]);
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
     } finally {
@@ -227,6 +231,10 @@ export default function AdminSchedulePage() {
       )}
     </AdminPage>
   );
+}
+
+function isActiveTwoShiftOutlet(outlet: Outlet): boolean {
+  return outlet.active !== false && Number(outlet.shift_mode) === 2;
 }
 
 function humanError(err: unknown): string {
