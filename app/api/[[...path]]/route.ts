@@ -1372,6 +1372,20 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
+  // Cek inventori wajib selesai sebelum laporan tutup toko bisa dikirim
+  if (type === "TUTUP" && outlet.inventory_branch_id) {
+    const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
+    if (!inventoryStatus.can_checkout) {
+      throw new HttpError(
+        inventoryStatus.message
+          ? `Laporan inventori belum selesai — ${inventoryStatus.message}\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.`
+          : "Laporan inventori belum selesai.\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.",
+        400,
+        "INVENTORY_NOT_COMPLETE"
+      );
+    }
+  }
+
   const submittedAt = new Date();
   const submissionStatus = reportSubmissionStatus(outlet, type, submittedAt);
   if (!submissionStatus.canSubmit) {
