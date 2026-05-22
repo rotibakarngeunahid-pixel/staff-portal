@@ -252,6 +252,8 @@ export default function StaffHomePage() {
   const reportBusyRef = useRef(false);
   const [reportBusyLabel, setReportBusyLabel] = useState("");
   const [reportError, setReportError] = useState("");
+  const [invCheck, setInvCheck] = useState<"idle" | "loading" | "ok" | "blocked">("idle");
+  const [invBlockMsg, setInvBlockMsg] = useState("");
   const [clockNow, setClockNow] = useState(() => new Date());
   const reportPhotosRef = useRef<Record<string, ReportPhoto>>({});
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -306,6 +308,10 @@ export default function StaffHomePage() {
     if (!endTime) return "";
     return `Absen keluar belum tersedia. Anda dapat absen keluar mulai pukul ${String(endTime).slice(0, 5)} WITA.`;
   }, [status]);
+
+  /* ─── Report window (dipakai sebelum render dan di useEffect inventori) ─── */
+  const reportTypeEarly = nextState === "report_buka" ? "BUKA" : "TUTUP";
+  const reportWindowEarly = reportSubmissionStatus(status?.outlet, reportTypeEarly, clockNow);
 
   /* ─── Load status ─── */
   const load = useCallback(async () => {
@@ -435,6 +441,40 @@ export default function StaffHomePage() {
       .catch(() => setReportItems([]))
       .finally(() => setReportItemsLoading(false));
   }, [nextState]);
+
+  /* ─── Inventory check: reset saat keluar dari state report_tutup ─── */
+  useEffect(() => {
+    if (nextState !== "report_tutup") {
+      setInvCheck("idle");
+      setInvBlockMsg("");
+    }
+  }, [nextState]);
+
+  const checkInventory = useCallback(async () => {
+    setInvCheck("loading");
+    setInvBlockMsg("");
+    try {
+      const res = await apiFetch<{ can_proceed: boolean; has_mapping: boolean; message: string }>(
+        "/api/reports/inventory-status", { role: "staff" }
+      );
+      if (!res.has_mapping || res.can_proceed) {
+        setInvCheck("ok");
+      } else {
+        setInvCheck("blocked");
+        setInvBlockMsg(res.message || "");
+      }
+    } catch {
+      setInvCheck("ok"); // fail-open: jangan blokir jika API error
+    }
+  }, []);
+
+  /* ─── Auto-check inventori saat masuk state report_tutup dan window terbuka ─── */
+  useEffect(() => {
+    if (nextState !== "report_tutup" || invCheck !== "idle") return;
+    if (!reportWindowEarly.canSubmit) return;
+    checkInventory();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextState, invCheck, reportWindowEarly.canSubmit]);
 
   function openCamera(slot: CameraSlot) { setCamera(slot); }
   function closeCamera() { setCamera(null); }
@@ -1101,7 +1141,50 @@ export default function StaffHomePage() {
                     Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} WITA dan akan tercatat sebagai laporan terlambat.
                   </div>
                 )}
-                {/* Report items — hanya tampil saat window laporan terbuka */}
+
+                {/* ─── Gate inventori (hanya untuk Laporan Tutup Toko) ─── */}
+                {nextState === "report_tutup" && invCheck === "loading" && (
+                  <div style={{ borderRadius: 14, overflow: "hidden", border: "1.5px solid #DDD6FE" }}>
+                    <div style={{ background: "#6D28D9", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 18, height: 18, border: "2.5px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                      <p style={{ fontSize: 13, fontWeight: 800, color: "#fff", margin: 0 }}>Mengecek laporan inventori...</p>
+                    </div>
+                    <div style={{ background: "#F5F3FF", padding: "10px 16px" }}>
+                      <p style={{ fontSize: 12, color: "#6D28D9", margin: 0, fontWeight: 600 }}>
+                        Sistem sedang memverifikasi apakah laporan inventori cabang ini sudah selesai.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {nextState === "report_tutup" && invCheck === "blocked" && (
+                  <div style={{ borderRadius: 14, overflow: "hidden", border: "1.5px solid #FECACA" }}>
+                    <div style={{ background: "#DC2626", padding: "14px 16px", textAlign: "center" }}>
+                      <div style={{ fontSize: 32, marginBottom: 6 }}>📦</div>
+                      <h3 style={{ fontSize: 15, fontWeight: 900, color: "#fff", margin: "0 0 4px" }}>Laporan Inventori Belum Selesai</h3>
+                      <p style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", margin: 0, lineHeight: 1.5 }}>
+                        {invBlockMsg || "Selesaikan laporan inventori cabang ini terlebih dahulu."}
+                      </p>
+                    </div>
+                    <div style={{ background: "#FEF2F2", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: "#7F1D1D", margin: 0, lineHeight: 1.6 }}>
+                        Laporan Tutup Toko <strong>tidak bisa dikirim</strong> sebelum laporan inventori selesai diisi.
+                        Buka sistem inventori, selesaikan laporan, lalu kembali ke sini dan klik tombol di bawah.
+                      </p>
+                      <button
+                        className="btn btn-soft"
+                        style={{ fontSize: 13, fontWeight: 800, borderColor: "#DC2626", color: "#DC2626" }}
+                        onClick={checkInventory}
+                      >
+                        🔄 Cek Ulang Status Inventori
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Report items — hanya tampil jika inventori sudah selesai (atau tidak ada mapping) */}
+                {(nextState !== "report_tutup" || invCheck === "ok") && (
+                  <>
                 {reportItemsLoading ? (
                   <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
                     Memuat konfigurasi...
@@ -1190,6 +1273,8 @@ export default function StaffHomePage() {
                   <Send size={18} />
                   {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}`}
                 </button>
+                  </>
+                )}
               </>
             )}
           </div>

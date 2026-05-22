@@ -482,6 +482,7 @@ async function dispatch(request: NextRequest, context: RouteContext) {
     if (request.method === "POST" && path === "/attendance/checkout") return await checkout(db, request, body);
     if (request.method === "GET" && path === "/reports/config") return await reportsConfig(db, request, body);
     if (request.method === "POST" && path === "/reports/submit") return await submitReport(db, request, body);
+    if (request.method === "GET" && path === "/reports/inventory-status") return await staffInventoryStatus(db, request);
     if (request.method === "GET" && path === "/staff/payroll") return await staffPayroll(db, request);
     if (request.method === "GET" && path === "/staff/profile") return await staffProfile(db, request);
     if (request.method === "GET" && path === "/schedule/weekly") return await staffWeeklySchedule(db, request, body);
@@ -1547,6 +1548,17 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   }
   await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
   return ok({ report, reportId: report.id, emailSent });
+}
+
+async function staffInventoryStatus(db: Db, request: NextRequest) {
+  const session = await requireSession(request, "staff");
+  const { outlet } = await getStaffWithOutlet(db, session.sub);
+  if (!outlet?.inventory_branch_id) {
+    return ok({ can_proceed: true, has_mapping: false, message: "" });
+  }
+  const date = getWorkingDate().date;
+  const result = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
+  return ok({ can_proceed: result.can_checkout, has_mapping: true, message: result.message });
 }
 
 async function staffPayroll(db: Db, request: NextRequest) {
