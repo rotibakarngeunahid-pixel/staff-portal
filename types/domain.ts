@@ -89,6 +89,8 @@ export type Attendance = {
   missing_checkout_flag?: boolean;
 };
 
+export type PhotoMode = "realtime" | "upload";
+
 export type ReportCfg = {
   id: string;
   outlet_id: string;
@@ -97,6 +99,7 @@ export type ReportCfg = {
   required: boolean;
   example_photo_url: string | null;
   sort_order: number;
+  photo_mode: PhotoMode;
 };
 
 export type Report = {

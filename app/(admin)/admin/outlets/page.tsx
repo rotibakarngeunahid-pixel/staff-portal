@@ -29,8 +29,8 @@ const empty = {
   shift_mode: "1",
   shift1_start: "09:00", shift1_end: "17:00",
   shift2_start: "17:00", shift2_end: "01:00",
-  report_buka_start: "09:00", report_buka_end: "11:00",
-  report_tutup_start: "20:00", report_tutup_end: "01:00"
+  report_buka_start: "", report_buka_end: "",
+  report_tutup_start: "", report_tutup_end: ""
 };
 type F = typeof empty;
 
@@ -146,10 +146,10 @@ export default function AdminOutletsPage() {
       shift1_end: row.shift1_end?.slice(0, 5) || "17:00",
       shift2_start: row.shift2_start?.slice(0, 5) || "17:00",
       shift2_end: row.shift2_end?.slice(0, 5) || "01:00",
-      report_buka_start: row.report_buka_start?.slice(0, 5) || "09:00",
-      report_buka_end: row.report_buka_end?.slice(0, 5) || "11:00",
-      report_tutup_start: row.report_tutup_start?.slice(0, 5) || "20:00",
-      report_tutup_end: row.report_tutup_end?.slice(0, 5) || "01:00"
+      report_buka_start: row.report_buka_start?.slice(0, 5) || "",
+      report_buka_end: row.report_buka_end?.slice(0, 5) || "",
+      report_tutup_start: row.report_tutup_start?.slice(0, 5) || "",
+      report_tutup_end: row.report_tutup_end?.slice(0, 5) || ""
     });
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -246,7 +246,7 @@ export default function AdminOutletsPage() {
               {f("report_tutup_end", "🌙 Tutup Sampai", "time")}
             </div>
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-              💡 Kosongkan jika tidak ingin membatasi waktu pengiriman laporan.
+              💡 Kosongkan semua kolom jika tidak ingin membatasi waktu pengiriman laporan. Pastikan jam window sesuai dengan jam shift outlet — misalnya outlet yang buka sore hari jangan pakai window pagi.
             </p>
           </AdminSection>
 

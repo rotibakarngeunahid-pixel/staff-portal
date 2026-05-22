@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Clock, ImageIcon, LogOut, MapPin, RefreshCw, Send, X } from "lucide-react";
+import { Camera, CheckCircle2, Clock, ImageIcon, LogOut, MapPin, RefreshCw, Send, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
 import { haversineDistance, isCheckoutTimeReached, reportSubmissionStatus, shiftEndTime } from "@/lib/business";
-import { CapturedPhoto, revokePhoto } from "@/lib/client-image";
+import { CapturedPhoto, isValidImageFile, photoFromFile, revokePhoto } from "@/lib/client-image";
+import { drawWatermark } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
 import { useSessionStore } from "@/stores/session";
@@ -60,6 +61,7 @@ type StatusPayload = {
 type ReportCfgItem = {
   id: string; label: string; required: boolean;
   example_photo_url: string | null; sort_order: number;
+  photo_mode?: "realtime" | "upload";
 };
 
 /* ─── GPS states ─── */
@@ -252,6 +254,8 @@ export default function StaffHomePage() {
   const [reportError, setReportError] = useState("");
   const [clockNow, setClockNow] = useState(() => new Date());
   const reportPhotosRef = useRef<Record<string, ReportPhoto>>({});
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadingItemRef = useRef<ReportCfgItem | null>(null);
 
   useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
@@ -654,8 +658,78 @@ export default function StaffHomePage() {
     });
   }
 
+  function openUploadForItem(item: ReportCfgItem) {
+    if (!reportWindow.canSubmit) {
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)} WITA.`);
+      return;
+    }
+    if (reportPhotoDisabled) return;
+    uploadingItemRef.current = item;
+    uploadInputRef.current?.click();
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset input agar file yang sama bisa dipilih ulang
+    e.target.value = "";
+    if (!file || !uploadingItemRef.current) return;
+    const item = uploadingItemRef.current;
+    uploadingItemRef.current = null;
+
+    if (!isValidImageFile(file)) {
+      setReportError("File tidak valid. Harap upload file foto/gambar saja (JPG, PNG, WEBP, HEIC).");
+      return;
+    }
+
+    const latestWindow = reportSubmissionStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
+    if (!latestWindow.canSubmit) {
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)} WITA.`);
+      return;
+    }
+
+    setReportBusy(true);
+    setReportBusyLabel("Memproses foto...");
+    setReportError("");
+    try {
+      const watermarkOpts = {
+        outletName: outlet?.name,
+        staffName: status?.staff?.name,
+        lat: gps.lat,
+        lng: gps.lng
+      };
+      const safe = item.label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 42);
+      const baseName = `${safe || "foto"}-${Date.now()}`;
+      const photo = await photoFromFile(file, {
+        baseName,
+        maxDimension: 1600,
+        quality: 0.8,
+        preferredType: "image/webp",
+        onDraw: (ctx, w, h) => drawWatermark(ctx, w, h, watermarkOpts)
+      });
+      saveReportPhoto(item.label, photo);
+    } catch {
+      setReportError("Gagal memproses foto. Pastikan file gambar valid lalu coba lagi.");
+    } finally {
+      setReportBusy(false);
+      setReportBusyLabel("");
+    }
+  }
+
   return (
     <>
+      {/* Hidden file input untuk mode upload foto */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept="image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
+        style={{ display: "none" }}
+        onChange={handleFileUpload}
+      />
+
       {camera && (
         <CameraCapture
           facing={camera.facing}
@@ -1042,6 +1116,7 @@ export default function StaffHomePage() {
 
                 {effectiveReportItems.map((item) => {
                   const done = Boolean(reportPhotos[item.label]);
+                  const isUploadMode = item.photo_mode === "upload";
                   return (
                     <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
                       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
@@ -1050,10 +1125,14 @@ export default function StaffHomePage() {
                             {item.label}
                             {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
                           </h3>
-                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{item.required ? "Wajib" : "Opsional"}</p>
+                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                            {item.required ? "Wajib" : "Opsional"}
+                            {" · "}
+                            {isUploadMode ? "Upload foto" : "Foto langsung"}
+                          </p>
                         </div>
                         <button
-                          onClick={() => openReportCamera(item)}
+                          onClick={() => isUploadMode ? openUploadForItem(item) : openReportCamera(item)}
                           disabled={reportPhotoDisabled}
                           style={{
                             display: "flex", alignItems: "center", gap: 6,
@@ -1065,8 +1144,8 @@ export default function StaffHomePage() {
                             opacity: reportPhotoDisabled ? 0.48 : 1
                           }}
                         >
-                          {done ? <CheckCircle2 size={14} /> : <Camera size={14} />}
-                          {done ? "Ubah" : "Foto"}
+                          {done ? <CheckCircle2 size={14} /> : isUploadMode ? <Upload size={14} /> : <Camera size={14} />}
+                          {done ? "Ubah" : isUploadMode ? "Upload" : "Foto"}
                         </button>
                       </div>
 

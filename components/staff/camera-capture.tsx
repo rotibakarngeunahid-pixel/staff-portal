@@ -46,16 +46,18 @@ function formatCoords(lat?: number | null, lng?: number | null): string {
   return `${latStr}, ${lngStr}`;
 }
 
-function drawWatermark(
+export type WatermarkOpts = {
+  outletName?: string | null;
+  staffName?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+};
+
+export function drawWatermark(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  opts?: {
-    outletName?: string | null;
-    staffName?: string | null;
-    lat?: number | null;
-    lng?: number | null;
-  }
+  opts?: WatermarkOpts
 ) {
   const padding = Math.max(14, Math.round(width * 0.018));
   const maxTextWidth = width - padding * 2;
@@ -288,42 +290,51 @@ export function CameraCapture({
 
   return (
     <div className="camera-overlay">
-      {/* Top bar */}
+      {/* Top bar — senter di kiri, judul di tengah, close di kanan */}
       <div style={{
         position: "absolute", top: 0, left: 0, right: 0, zIndex: 10,
         padding: "max(14px, env(safe-area-inset-top)) 16px 12px",
         background: "linear-gradient(rgba(0,0,0,0.6), transparent)",
         display: "flex", alignItems: "center", justifyContent: "space-between"
       }}>
-        <span style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>
-          {title || (facing === "user" ? "📸 Selfie" : "📷 Foto")}
-        </span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* Kiri: tombol senter (atau spacer agar judul tetap tengah) */}
+        <div style={{ width: 44, display: "flex", alignItems: "center", justifyContent: "flex-start" }}>
           {torchSupported && phase === "live" && (
             <button
               onClick={toggleTorch}
               aria-label={torchOn ? "Matikan senter" : "Nyalakan senter"}
               title={torchOn ? "Matikan senter" : "Nyalakan senter"}
               style={{
-                width: 34, height: 34, borderRadius: "50%", border: "none",
+                width: 44, height: 44, borderRadius: "50%", border: "none",
                 background: torchOn ? "rgba(250,204,21,0.95)" : "rgba(255,255,255,0.18)",
                 color: torchOn ? "#1f2937" : "#fff", cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center"
+                display: "flex", alignItems: "center", justifyContent: "center",
+                touchAction: "manipulation"
               }}
             >
-              {torchOn ? <FlashlightOff size={18} /> : <Flashlight size={18} />}
+              {torchOn ? <FlashlightOff size={20} /> : <Flashlight size={20} />}
             </button>
           )}
+        </div>
+
+        {/* Tengah: judul */}
+        <span style={{ color: "#fff", fontSize: 13, fontWeight: 700, textAlign: "center", flex: 1, paddingInline: 8 }}>
+          {title || (facing === "user" ? "📸 Selfie" : "📷 Foto")}
+        </span>
+
+        {/* Kanan: tombol close */}
+        <div style={{ width: 44, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
           <button
             onClick={cancel}
             aria-label="Tutup kamera"
             style={{
-              width: 34, height: 34, borderRadius: "50%", border: "none",
+              width: 44, height: 44, borderRadius: "50%", border: "none",
               background: "rgba(255,255,255,0.18)", color: "#fff", cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center"
+              display: "flex", alignItems: "center", justifyContent: "center",
+              touchAction: "manipulation"
             }}
           >
-            <X size={18} />
+            <X size={20} />
           </button>
         </div>
       </div>

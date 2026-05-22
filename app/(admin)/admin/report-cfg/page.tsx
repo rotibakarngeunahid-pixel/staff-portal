@@ -10,11 +10,14 @@ const PHOTO_UPLOAD_ENDPOINT =
   "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
 
 type Outlet = { id: string; name: string; active?: boolean };
+type PhotoMode = "realtime" | "upload";
+
 type Item = {
   id?: string;
   label: string;
   required: boolean;
   sort_order: number;
+  photo_mode: PhotoMode;
   example_photo_url?: string | null;
   example_photo?: string;
   _error?: string;
@@ -79,7 +82,11 @@ export default function AdminReportCfgPage() {
         role: "admin",
         body: { outletId: nextOutlet, type: nextType }
       });
-      setItems(payload.items.map((item) => ({ ...item, _error: "" })));
+      setItems(payload.items.map((item) => ({
+        ...item,
+        photo_mode: (item as Item).photo_mode || "realtime",
+        _error: ""
+      })));
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
     } finally {
@@ -135,7 +142,7 @@ export default function AdminReportCfgPage() {
 
   function addItem() {
     setItems((cur) => {
-      const next = [...cur, { label: "", required: true, sort_order: cur.length, _error: "Label wajib diisi" }];
+      const next = [...cur, { label: "", required: true, photo_mode: "realtime" as PhotoMode, sort_order: cur.length, _error: "Label wajib diisi" }];
       return validateItems(next);
     });
   }
@@ -380,6 +387,56 @@ export default function AdminReportCfgPage() {
                     />
                     Foto wajib diisi oleh staff
                   </label>
+
+                  {/* Metode pengambilan foto */}
+                  <div style={{ marginTop: 4 }}>
+                    <label className="label" style={{ marginBottom: 6, display: "block" }}>Metode Pengambilan Foto</label>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => update(index, { photo_mode: "realtime" })}
+                        style={{
+                          flex: "1 1 120px",
+                          padding: "9px 12px",
+                          borderRadius: 10,
+                          border: `1.5px solid ${(item.photo_mode || "realtime") === "realtime" ? "#2563EB" : "var(--border)"}`,
+                          background: (item.photo_mode || "realtime") === "realtime" ? "#EFF6FF" : "#fff",
+                          color: (item.photo_mode || "realtime") === "realtime" ? "#1D4ED8" : "var(--muted)",
+                          fontWeight: 800,
+                          fontSize: 12,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          lineHeight: 1.4
+                        }}
+                      >
+                        📷 Wajib Foto Langsung
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => update(index, { photo_mode: "upload" })}
+                        style={{
+                          flex: "1 1 120px",
+                          padding: "9px 12px",
+                          borderRadius: 10,
+                          border: `1.5px solid ${item.photo_mode === "upload" ? "#16A34A" : "var(--border)"}`,
+                          background: item.photo_mode === "upload" ? "#F0FDF4" : "#fff",
+                          color: item.photo_mode === "upload" ? "#15803D" : "var(--muted)",
+                          fontWeight: 800,
+                          fontSize: 12,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          lineHeight: 1.4
+                        }}
+                      >
+                        📁 Boleh Upload Foto
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+                      {item.photo_mode === "upload"
+                        ? "Staff boleh memilih/upload foto dari galeri perangkat. Hanya file gambar (JPG, PNG, WEBP) yang diterima."
+                        : "Staff wajib mengambil foto langsung dari kamera saat laporan dibuat. Upload dari galeri tidak diizinkan."}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Example photo */}

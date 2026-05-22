@@ -107,6 +107,10 @@ export function reportWindow(
 ) {
   const configuredStart = type === "BUKA" ? outlet?.report_buka_start : outlet?.report_tutup_start;
   const configuredEnd = type === "BUKA" ? outlet?.report_buka_end : outlet?.report_tutup_end;
+  // Jika keduanya tidak dikonfigurasi, tidak ada pembatasan waktu
+  if (!configuredStart && !configuredEnd) {
+    return { start: "", end: "", label: "Tidak dibatasi" };
+  }
   const fallback = DEFAULT_REPORT_WINDOWS[type];
   const start = configuredStart || fallback.start;
   const end = configuredEnd || fallback.end;
@@ -124,6 +128,10 @@ export function reportWindowStatus(
 ) {
   const window = reportWindow(outlet, type);
   const current = timeMakassar(now);
+  // Tidak ada window dikonfigurasi → selalu diizinkan
+  if (!window.start && !window.end) {
+    return { ...window, current, timeZone: REPORT_TIME_ZONE, allowed: true };
+  }
   return {
     ...window,
     current,
@@ -138,6 +146,11 @@ export function reportSubmissionStatus(
   now = new Date()
 ) {
   const window = reportWindowStatus(outlet, type, now);
+  // Tidak ada window dikonfigurasi → selalu bisa submit, tidak pernah terlambat
+  if (!window.start && !window.end) {
+    return { ...window, canSubmit: true, tooEarly: false, isLate: false, lateMinutes: 0 };
+  }
+
   const currentMinutes = parseTimeToMinutes(window.current);
   const startMinutes = parseTimeToMinutes(window.start);
   const endMinutes = parseTimeToMinutes(window.end);

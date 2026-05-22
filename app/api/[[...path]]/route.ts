@@ -2829,13 +2829,16 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
         const uploadedExampleUrl = item.example_photo
           ? await uploadImage(db, `reports/examples/${outletId}/${type}/${crypto.randomUUID()}.jpg`, item.example_photo)
           : "";
+        const rawMode = String(item.photo_mode || "realtime");
+        const photoMode = rawMode === "upload" ? "upload" : "realtime";
         payload.push({
           outlet_id: outletId,
           type,
           label,
           required: item.required !== false,
           example_photo_url: uploadedExampleUrl || existingExampleUrl,
-          sort_order: Number(item.sort_order ?? index)
+          sort_order: Number(item.sort_order ?? index),
+          photo_mode: photoMode
         });
       }
 
@@ -2852,6 +2855,7 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
     const label = stringBody(body, "label");
     if (label.length < 2) throw new HttpError("Label wajib diisi (minimal 2 karakter)", 400, "INVALID_LABEL");
     if (label.length > 80) throw new HttpError("Label terlalu panjang (maksimal 80 karakter)", 400, "INVALID_LABEL");
+    const singleMode = String(body.photo_mode || "realtime") === "upload" ? "upload" : "realtime";
     const { data, error } = await db
       .from("report_cfg")
       .insert({
@@ -2862,7 +2866,8 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
         example_photo_url: body.example_photo
           ? await uploadImage(db, `reports/examples/${outletId}/${type}/${crypto.randomUUID()}.jpg`, body.example_photo)
           : stringBody(body, "example_photo_url") || null,
-        sort_order: numberBody(body, "sort_order", 0)
+        sort_order: numberBody(body, "sort_order", 0),
+        photo_mode: singleMode
       })
       .select("*")
       .single();
@@ -2884,6 +2889,9 @@ async function adminReportCfg(db: Db, method: string, body: Body) {
     ["required", "sort_order", "example_photo_url"].forEach((key) => {
       if (body[key] !== undefined) updates[key] = body[key];
     });
+    if (body.photo_mode !== undefined) {
+      updates.photo_mode = String(body.photo_mode) === "upload" ? "upload" : "realtime";
+    }
     if (body.example_photo) updates.example_photo_url = await uploadImage(db, `reports/examples/${outletId}/${type}/${id}.jpg`, body.example_photo);
     const { data, error } = await db.from("report_cfg").update(updates).eq("id", id).select("*").single();
     if (error) throw error;

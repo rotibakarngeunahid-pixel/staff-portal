@@ -120,3 +120,66 @@ export async function photoFromCanvas(
 export function revokePhoto(photo?: Pick<CapturedPhoto, "previewUrl"> | null) {
   if (photo?.previewUrl) URL.revokeObjectURL(photo.previewUrl);
 }
+
+const ACCEPTED_IMAGE_MIME = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+
+/** Cek apakah file yang di-upload adalah file gambar yang valid */
+export function isValidImageFile(file: File): boolean {
+  const byMime = ACCEPTED_IMAGE_MIME.has(file.type.toLowerCase());
+  const byExt = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
+  return byMime || byExt;
+}
+
+/**
+ * Buat CapturedPhoto dari File yang di-upload pengguna.
+ * Hasilnya identik dengan foto dari kamera sehingga flow laporan tidak berubah.
+ * @param onDraw  Callback opsional untuk menggambar watermark ke canvas sebelum kompresi.
+ */
+export async function photoFromFile(
+  file: File,
+  opts: {
+    baseName: string;
+    maxDimension?: number;
+    quality?: number;
+    preferredType?: ImageFormat;
+    onDraw?: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
+  }
+): Promise<CapturedPhoto> {
+  return new Promise<CapturedPhoto>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = async () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || 1;
+      canvas.height = img.naturalHeight || 1;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("Gagal memproses foto")); return; }
+      ctx.drawImage(img, 0, 0);
+      if (opts.onDraw) opts.onDraw(ctx, canvas.width, canvas.height);
+      try {
+        const photo = await photoFromCanvas(canvas, {
+          baseName: opts.baseName,
+          maxDimension: opts.maxDimension,
+          quality: opts.quality,
+          preferredType: opts.preferredType,
+        });
+        resolve(photo);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Gagal membaca file gambar. Pastikan file tidak rusak."));
+    };
+    img.src = objectUrl;
+  });
+}
