@@ -21,6 +21,7 @@ type Outlet = {
   report_buka_end: string | null;
   report_tutup_start: string | null;
   report_tutup_end: string | null;
+  inventory_branch_id: string | null;
   active: boolean;
 };
 
@@ -30,7 +31,8 @@ const empty = {
   shift1_start: "09:00", shift1_end: "17:00",
   shift2_start: "17:00", shift2_end: "01:00",
   report_buka_start: "", report_buka_end: "",
-  report_tutup_start: "", report_tutup_end: ""
+  report_tutup_start: "", report_tutup_end: "",
+  inventory_branch_id: ""
 };
 type F = typeof empty;
 
@@ -149,7 +151,8 @@ export default function AdminOutletsPage() {
       report_buka_start: row.report_buka_start?.slice(0, 5) || "",
       report_buka_end: row.report_buka_end?.slice(0, 5) || "",
       report_tutup_start: row.report_tutup_start?.slice(0, 5) || "",
-      report_tutup_end: row.report_tutup_end?.slice(0, 5) || ""
+      report_tutup_end: row.report_tutup_end?.slice(0, 5) || "",
+      inventory_branch_id: row.inventory_branch_id || ""
     });
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -250,6 +253,23 @@ export default function AdminOutletsPage() {
             </p>
           </AdminSection>
 
+          <AdminSection title="Integrasi Inventori" subtitle="Hubungkan outlet ini ke sistem inventori eksternal">
+            <div>
+              <label className="label">ID Cabang di Sistem Inventori</label>
+              <input
+                className="field"
+                type="text"
+                placeholder="Kosongkan jika tidak menggunakan integrasi inventori"
+                value={form.inventory_branch_id}
+                onChange={(e) => setForm((prev) => ({ ...prev, inventory_branch_id: e.target.value }))}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+              💡 Jika diisi, sistem akan mengecek ke API inventori saat staff hendak absen keluar — absen keluar akan diblokir sampai laporan inventori selesai.<br />
+              Hubungi pengelola sistem inventori untuk mendapatkan ID cabang yang sesuai. Pastikan <code>INVENTORY_API_KEY</code> sudah diset di environment variable server.
+            </p>
+          </AdminSection>
+
           <div style={{ display: "flex", gap: 10 }}>
             <button type="submit" className="btn btn-primary">{editing ? "Update Outlet" : "Simpan Outlet"}</button>
             <button type="button" className="btn btn-soft" onClick={() => { setEditing(null); setForm(empty); setShowForm(false); }}>Batal</button>
@@ -315,6 +335,11 @@ export default function AdminOutletsPage() {
                     )}
                     {outlet.report_buka_start ? <span>🌅 Buka: {outlet.report_buka_start?.slice(0, 5)}–{outlet.report_buka_end?.slice(0, 5)}</span> : null}
                     {outlet.report_tutup_start ? <span>🌙 Tutup: {outlet.report_tutup_start?.slice(0, 5)}–{outlet.report_tutup_end?.slice(0, 5)}</span> : null}
+                    {outlet.inventory_branch_id ? (
+                      <span style={{ color: "var(--success)", fontWeight: 600 }}>📦 Inventori: {outlet.inventory_branch_id}</span>
+                    ) : (
+                      <span style={{ color: "var(--muted-light)" }}>📦 Inventori: tidak terhubung</span>
+                    )}
                     {outlet.location_url ? (
                       <a href={outlet.location_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
                         <MapPin size={12} /> Lihat di Maps

@@ -27,6 +27,7 @@ export type Outlet = {
   report_tutup_start: string | null;
   report_tutup_end: string | null;
   active: boolean;
+  inventory_branch_id: string | null;
   created_at?: string;
 };
 

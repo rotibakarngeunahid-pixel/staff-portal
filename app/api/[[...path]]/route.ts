@@ -850,6 +850,45 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   });
 }
 
+const INVENTORY_API_URL = "https://script.google.com/macros/s/AKfycbxEqwArPOXtQbAOoMSWoYRiUAUHZK3cCRecxxH39_SKpixUEy90WL20q5HqGf6hgFi4/exec";
+
+async function checkInventoryCheckoutStatus(branchId: string, date: string): Promise<{ can_checkout: boolean; message: string }> {
+  const apiKey = process.env.INVENTORY_API_KEY;
+  if (!apiKey) {
+    console.warn("[inventory] INVENTORY_API_KEY tidak dikonfigurasi — melewati pengecekan inventori");
+    return { can_checkout: true, message: "" };
+  }
+  const params = new URLSearchParams({
+    action: "api.v1.integration.checkout-status",
+    api_key: apiKey,
+    branch_id: branchId,
+    date
+  });
+  try {
+    const res = await fetch(`${INVENTORY_API_URL}?${params.toString()}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) {
+      console.error(`[inventory] API error HTTP ${res.status} — melewati pengecekan`);
+      return { can_checkout: true, message: "" };
+    }
+    const json = await res.json() as { success?: boolean; can_checkout_attendance?: boolean; message?: string };
+    if (json.success === false) {
+      console.error("[inventory] API mengembalikan success=false:", json.message);
+      return { can_checkout: true, message: "" };
+    }
+    return {
+      can_checkout: json.can_checkout_attendance !== false,
+      message: json.message || ""
+    };
+  } catch (err) {
+    console.error("[inventory] Gagal menghubungi sistem inventori — melewati pengecekan:", err instanceof Error ? err.message : err);
+    return { can_checkout: true, message: "" };
+  }
+}
+
 async function checkin(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request, "staff");
 
@@ -1230,6 +1269,14 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const hasTutup = (reports || []).some((report) => report.type === "TUTUP");
   if ((shift === 0 || shift === 1) && !hasBuka) throw new HttpError("Laporan Buka Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_BUKA");
   if ((shift === 0 || shift === 2) && !hasTutup) throw new HttpError("Laporan Tutup Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_TUTUP");
+
+  // Cek status inventori: jika outlet punya inventory_branch_id, validasi ke sistem inventori eksternal
+  if (outlet.inventory_branch_id) {
+    const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
+    if (!inventoryStatus.can_checkout) {
+      throw new HttpError(inventoryStatus.message || "Laporan inventori belum selesai. Selesaikan laporan inventori sebelum absen keluar.", 400, "INVENTORY_NOT_COMPLETE");
+    }
+  }
 
   const selfieUrl = await uploadImage(db, `selfies/checkout/${staff.id}/${date}_${shift}.jpg`, body.selfie || body.photo);
   if (!selfieUrl) throw new HttpError("Selfie absen pulang wajib diupload");
@@ -2075,6 +2122,7 @@ async function adminOutlets(db: Db, method: string, body: Body) {
     report_buka_end: stringBody(body, "report_buka_end") || null,
     report_tutup_start: stringBody(body, "report_tutup_start") || null,
     report_tutup_end: stringBody(body, "report_tutup_end") || null,
+    inventory_branch_id: stringBody(body, "inventory_branch_id") || null,
     active: body.active === undefined ? true : body.active === true || body.active === "true"
   };
   if (!payload.name) throw new HttpError("Nama outlet wajib diisi");
