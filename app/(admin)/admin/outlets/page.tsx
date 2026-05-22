@@ -36,6 +36,8 @@ const empty = {
 };
 type F = typeof empty;
 
+type InventoryBranch = { branch_id: string; branch_name: string };
+
 export default function AdminOutletsPage() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [form, setForm] = useState(empty);
@@ -44,6 +46,8 @@ export default function AdminOutletsPage() {
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [inventoryBranches, setInventoryBranches] = useState<InventoryBranch[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -59,6 +63,19 @@ export default function AdminOutletsPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  async function loadInventoryBranches() {
+    if (inventoryBranches.length > 0) return; // sudah di-cache, skip fetch ulang
+    setBranchesLoading(true);
+    try {
+      const payload = await apiFetch<{ branches: InventoryBranch[] }>("/api/admin/inventory-branches", { role: "admin" });
+      setInventoryBranches(payload.branches || []);
+    } catch {
+      // gagal fetch tidak perlu blokir form, input tetap bisa pakai dropdown kosong
+    } finally {
+      setBranchesLoading(false);
+    }
+  }
 
   async function deactivate(outletId: string, name: string) {
     if (!window.confirm(`Nonaktifkan outlet "${name}"?\n\nOutlet tidak akan muncul dalam daftar, tapi data histori tetap tersimpan.`)) return;
@@ -155,6 +172,7 @@ export default function AdminOutletsPage() {
       inventory_branch_id: row.inventory_branch_id || ""
     });
     setShowForm(true);
+    loadInventoryBranches();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -166,7 +184,7 @@ export default function AdminOutletsPage() {
       subtitle="Geofence, shift, dan jendela laporan"
       action={
         !showForm ? (
-          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => { setEditing(null); setForm(empty); setShowForm(true); }}>
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => { setEditing(null); setForm(empty); setShowForm(true); loadInventoryBranches(); }}>
             <Plus size={15} /> Tambah Outlet
           </button>
         ) : null
@@ -255,18 +273,30 @@ export default function AdminOutletsPage() {
 
           <AdminSection title="Integrasi Inventori" subtitle="Hubungkan outlet ini ke sistem inventori eksternal">
             <div>
-              <label className="label">ID Cabang di Sistem Inventori</label>
-              <input
-                className="field"
-                type="text"
-                placeholder="Kosongkan jika tidak menggunakan integrasi inventori"
-                value={form.inventory_branch_id}
-                onChange={(e) => setForm((prev) => ({ ...prev, inventory_branch_id: e.target.value }))}
-              />
+              <label className="label">Cabang di Sistem Inventori</label>
+              {branchesLoading ? (
+                <div style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, color: "var(--muted)" }}>
+                  Memuat daftar cabang inventori...
+                </div>
+              ) : (
+                <select
+                  className="field"
+                  value={form.inventory_branch_id}
+                  onChange={(e) => setForm((prev) => ({ ...prev, inventory_branch_id: e.target.value }))}
+                >
+                  <option value="">— Tidak terhubung ke inventori —</option>
+                  {inventoryBranches.map((b) => (
+                    <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>
+                  ))}
+                  {inventoryBranches.length === 0 && (
+                    <option disabled>Tidak ada cabang ditemukan (cek INVENTORY_API_KEY)</option>
+                  )}
+                </select>
+              )}
             </div>
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-              💡 Jika diisi, sistem akan mengecek ke API inventori saat staff hendak absen keluar — absen keluar akan diblokir sampai laporan inventori selesai.<br />
-              Hubungi pengelola sistem inventori untuk mendapatkan ID cabang yang sesuai. Pastikan <code>INVENTORY_API_KEY</code> sudah diset di environment variable server.
+              💡 Pilih cabang inventori yang sesuai dengan outlet ini. Jika dipilih, staff tidak bisa absen keluar sebelum laporan inventori cabang tersebut selesai.<br />
+              Daftar cabang diambil langsung dari sistem inventori saat halaman dibuka.
             </p>
           </AdminSection>
 

@@ -1896,6 +1896,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/staff" && method === "GET" && body.deletePreview === "1") return adminStaffDeletePreview(db, body);
   if (path === "/admin/staff") return adminStaff(db, method, body);
   if (path === "/admin/outlets") return adminOutlets(db, method, body);
+  if (path === "/admin/inventory-branches" && method === "GET") return adminInventoryBranches();
   if (path === "/admin/attendance/bulk" && method === "POST") return adminAttendanceBulk(db, body);
   if (path === "/admin/attendance-import/preview" && method === "POST") return adminAttendanceImportPreview(db, body);
   if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
@@ -2147,6 +2148,28 @@ async function adminOutlets(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method outlet tidak valid", 405);
+}
+
+async function adminInventoryBranches() {
+  const apiKey = process.env.INVENTORY_API_KEY;
+  if (!apiKey) return ok({ branches: [] });
+  const params = new URLSearchParams({
+    action: "api.v1.integration.branches",
+    api_key: apiKey
+  });
+  try {
+    const res = await fetch(`${INVENTORY_API_URL}?${params.toString()}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json() as { success?: boolean; branches?: { branch_id: string; branch_name: string }[] };
+    return ok({ branches: json.branches || [] });
+  } catch (err) {
+    console.error("[inventory] Gagal ambil daftar cabang:", err instanceof Error ? err.message : err);
+    return ok({ branches: [] });
+  }
 }
 
 async function adminAttendance(db: Db, method: string, body: Body) {
