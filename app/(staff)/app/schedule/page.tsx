@@ -26,6 +26,7 @@ type Slot = {
   status: string;
   isMe: boolean;
   isDayoff: boolean;
+  hasPendingLeave?: boolean;
 };
 
 type Leave = {
@@ -33,7 +34,15 @@ type Leave = {
   staff_name: string;
   status: string;
   reason: string | null;
+  admin_note?: string | null;
   isMe: boolean;
+};
+
+type MyLeave = {
+  id: string;
+  status: string;
+  reason: string | null;
+  admin_note?: string | null;
 };
 
 type Day = {
@@ -42,6 +51,7 @@ type Day = {
   assignments: Assignment[];
   myAssignment: Assignment | null;
   myDayoff: { id: string; reason: string | null } | null;
+  myLeave: MyLeave | null;
   leaves: Leave[];
 };
 
@@ -83,6 +93,131 @@ function StatusBadge({ status, isMe, shiftType }: { status: string; isMe: boolea
   );
 }
 
+/** Banner full-width untuk leave yang sudah approved */
+function ApprovedLeaveBanner({ leave, dayoff }: { leave: MyLeave | null; dayoff: { id: string; reason: string | null } | null }) {
+  const reason = leave?.reason || dayoff?.reason;
+  return (
+    <div style={{
+      padding: "14px 16px",
+      background: "rgba(220,38,38,0.06)",
+      borderTop: "1px solid var(--danger-border)"
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 22 }}>🏖️</span>
+        <div>
+          <p style={{ fontSize: 14, fontWeight: 900, color: "var(--danger)", marginBottom: 2 }}>
+            Libur — Disetujui
+          </p>
+          <p style={{ fontSize: 12, color: "var(--muted)" }}>
+            {leave
+              ? "Permintaan liburmu untuk hari ini sudah disetujui."
+              : "Kamu terdaftar libur untuk hari ini."}
+          </p>
+          {reason && (
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, fontStyle: "italic" }}>
+              Alasan: {reason}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Banner menonjol untuk leave yang masih pending */
+function PendingLeaveBanner({
+  leave,
+  originalShift,
+  isActionable,
+  busy,
+  onCancel
+}: {
+  leave: Leave;
+  originalShift: ShiftType | null;
+  isActionable: boolean;
+  busy: string;
+  onCancel: (id: string) => void;
+}) {
+  return (
+    <div style={{
+      padding: "14px 16px",
+      background: "rgba(234,179,8,0.07)",
+      borderTop: "1px solid var(--warning-border)"
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span style={{ fontSize: 20, marginTop: 1 }}>📋</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <p style={{ fontSize: 14, fontWeight: 900, color: "var(--warning)" }}>
+              Request Libur
+            </p>
+            <span style={{
+              fontSize: 10, fontWeight: 800, letterSpacing: "0.4px",
+              background: "var(--warning-bg)", color: "var(--warning)",
+              border: "1.5px solid var(--warning-border)", borderRadius: 6,
+              padding: "2px 8px", textTransform: "uppercase"
+            }}>
+              Menunggu Persetujuan
+            </span>
+          </div>
+          {leave.reason && (
+            <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4, fontStyle: "italic" }}>
+              Alasan: {leave.reason}
+            </p>
+          )}
+          {originalShift && (
+            <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+              Shift awal: <strong>{shiftLabel(originalShift)}</strong>
+            </p>
+          )}
+          <p style={{ fontSize: 11, color: "var(--muted)" }}>
+            ⏳ Menunggu keputusan admin. Jika disetujui, kamu tidak perlu absen di hari ini.
+          </p>
+        </div>
+        {isActionable && (
+          <button
+            className="btn btn-soft"
+            style={{ fontSize: 11, padding: "6px 12px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)", flexShrink: 0 }}
+            onClick={() => onCancel(leave.id)}
+            disabled={Boolean(busy)}
+          >
+            Batalkan
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Banner untuk leave yang ditolak admin */
+function RejectedLeaveBanner({ leave }: { leave: Leave }) {
+  return (
+    <div style={{
+      padding: "10px 14px",
+      background: "rgba(100,116,139,0.06)",
+      borderTop: "1px solid var(--border)",
+      display: "flex", alignItems: "flex-start", gap: 8
+    }}>
+      <span style={{ fontSize: 16, marginTop: 1 }}>❌</span>
+      <div>
+        <p style={{ fontSize: 12, fontWeight: 800, color: "var(--muted)", marginBottom: 2 }}>
+          Request Libur Ditolak
+        </p>
+        {(leave as any).admin_note && (
+          <p style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
+            Alasan admin: {(leave as any).admin_note}
+          </p>
+        )}
+        {!((leave as any).admin_note) && (
+          <p style={{ fontSize: 11, color: "var(--muted)" }}>
+            Jadwal shift kamu tetap berlaku. Hubungi admin jika ada pertanyaan.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function StaffSchedulePage() {
   const [weekStart, setWeekStart] = useState(isoToday());
   const [data, setData] = useState<SchedulePayload | null>(null);
@@ -115,7 +250,6 @@ export default function StaffSchedulePage() {
     return date.toISOString().slice(0, 10);
   }, [weekStart]);
 
-  // Pilih shift menggunakan tabel staff_shift_assignments baru
   async function selectShift(date: string, shiftType: ShiftType) {
     setBusy(`Mengambil ${shiftLabel(shiftType)}...`);
     setError("");
@@ -128,7 +262,6 @@ export default function StaffSchedulePage() {
     }
   }
 
-  // Batalkan assignment dari tabel baru
   async function cancelAssignment(assignmentId: string) {
     setBusy("Membatalkan shift...");
     setError("");
@@ -145,7 +278,6 @@ export default function StaffSchedulePage() {
     }
   }
 
-  // Backward compat: cancel slot lama
   async function cancelOldShift(scheduleId: string) {
     setBusy("Membatalkan shift...");
     setError("");
@@ -320,11 +452,38 @@ export default function StaffSchedulePage() {
               const today = isoToday();
               const isToday = day.date === today;
               const isPast = day.date < today;
-              // Staff hanya bisa beraksi untuk tanggal BESOK atau lebih jauh (H-1 cutoff)
               const isActionable = day.date > today;
               const hasMyAssignment = Boolean(day.myAssignment);
               const isMyDayoff = Boolean(day.myDayoff);
-              const myPendingLeave = day.leaves.find((l) => l.isMe && l.status === "pending");
+
+              // ── Prioritas status leave ──────────────────────────────────────
+              // 1. Approved leave (dari leave_requests → myLeave)
+              // 2. Pending leave (menunggu persetujuan)
+              // 3. Rejected leave (sudah ditolak admin)
+              // 4. Normal shift
+              const myLeave = day.myLeave;
+              const isLeaveApproved = myLeave?.status === "approved";
+              const isLeavePending = myLeave?.status === "pending";
+              const isLeaveRejected = myLeave?.status === "rejected";
+
+              // Untuk pending leave: cari dari array leaves (sudah di-map dengan isMe)
+              const myPendingLeaveFromList = day.leaves.find((l) => l.isMe && l.status === "pending");
+              const myRejectedLeaveFromList = day.leaves.find((l) => l.isMe && (l.status === "rejected"));
+
+              // Shift awal (sebelum leave) untuk ditampilkan di pending banner
+              const myOriginalShiftType = day.myAssignment?.shift_type || null;
+
+              // Apakah hari ini libur (dayoff atau leave approved)
+              const isEffectiveDayoff = isMyDayoff || isLeaveApproved;
+
+              // Opacity card: dayoff / approved leave → sedikit pudar
+              const cardOpacity = isPast ? 0.65 : isEffectiveDayoff ? 0.85 : 1;
+
+              // Warna border card
+              let cardBorder: string | undefined;
+              if (isToday) cardBorder = "2px solid var(--primary)";
+              else if (isLeavePending) cardBorder = "2px solid var(--warning-border)";
+              else if (isLeaveApproved || isEffectiveDayoff) cardBorder = "2px solid var(--danger-border)";
 
               return (
                 <div
@@ -332,20 +491,24 @@ export default function StaffSchedulePage() {
                   className="panel"
                   style={{
                     padding: 0, overflow: "hidden",
-                    border: isToday ? "2px solid var(--primary)" : undefined,
-                    opacity: isPast ? 0.65 : isMyDayoff ? 0.75 : 1
+                    border: cardBorder,
+                    opacity: cardOpacity
                   }}
                 >
-                  {/* Header hari */}
+                  {/* ── Header hari ─────────────────────────────────────── */}
                   <div style={{
                     padding: "12px 16px",
                     background: isToday
                       ? "linear-gradient(135deg, rgba(192,57,43,0.08), rgba(192,57,43,0.04))"
+                      : isLeavePending
+                      ? "rgba(234,179,8,0.06)"
+                      : isEffectiveDayoff
+                      ? "rgba(220,38,38,0.05)"
                       : "var(--surface-soft)",
                     borderBottom: "1px solid var(--border)",
                     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8
                   }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <h2 style={{
                         fontSize: 15, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)",
                         color: isToday ? "var(--primary)" : "var(--ink)"
@@ -353,16 +516,33 @@ export default function StaffSchedulePage() {
                         {formatDateWithDayID(day.date)}
                       </h2>
                       {isToday && (
-                        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.5px", background: "var(--primary)", color: "#fff", borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 800, letterSpacing: "0.5px",
+                          background: "var(--primary)", color: "#fff",
+                          borderRadius: 6, padding: "2px 7px", textTransform: "uppercase"
+                        }}>
                           Hari ini
                         </span>
                       )}
-                      {isMyDayoff && (
+                      {/* Badge status leave di header */}
+                      {isLeaveApproved && (
+                        <span className="status-pill status-danger" style={{ fontSize: 9 }}>Libur Disetujui</span>
+                      )}
+                      {isLeavePending && !isLeaveApproved && (
+                        <span className="status-pill status-warn" style={{ fontSize: 9 }}>Request Libur</span>
+                      )}
+                      {isLeaveRejected && !isLeavePending && !isLeaveApproved && (
+                        <span className="status-pill" style={{ fontSize: 9, background: "#F1F5F9", color: "var(--muted)", border: "1px solid var(--border)" }}>
+                          Libur Ditolak
+                        </span>
+                      )}
+                      {isMyDayoff && !isLeaveApproved && (
                         <span className="status-pill status-danger" style={{ fontSize: 9 }}>Libur</span>
                       )}
                     </div>
-                    {/* Tombol ajukan libur hanya untuk tanggal yang bisa diaksi */}
-                    {isActionable && !isMyDayoff && !myPendingLeave && (
+
+                    {/* Tombol ajukan libur — hanya jika bisa diaksi dan belum ada leave aktif */}
+                    {isActionable && !isEffectiveDayoff && !isMyDayoff && !isLeavePending && !isLeaveApproved && (
                       <button
                         className="btn btn-soft"
                         style={{ fontSize: 11, padding: "6px 12px", minHeight: 0 }}
@@ -375,29 +555,46 @@ export default function StaffSchedulePage() {
                     )}
                   </div>
 
-                  {/* Notice H-1 untuk hari ini dan masa lalu */}
-                  {(isToday || isPast) && !isMyDayoff && (
+                  {/* ── Notice H-1 (hari ini atau sudah lewat, bukan libur) ── */}
+                  {(isToday || isPast) && !isEffectiveDayoff && !isMyDayoff && (
                     <div style={{
                       padding: "7px 14px",
                       background: "rgba(100,116,139,0.06)",
                       borderBottom: "1px solid var(--border)",
                       fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6
                     }}>
-                      🔒 {isToday ? "Sudah melewati batas H-1 — untuk perubahan mendadak, hubungi admin." : "Tanggal sudah lewat."}
+                      🔒 {isToday
+                        ? "Sudah melewati batas H-1 — untuk perubahan mendadak, hubungi admin."
+                        : "Tanggal sudah lewat."}
                     </div>
                   )}
 
-                  {/* Dayoff banner */}
-                  {isMyDayoff && (
-                    <div style={{ padding: "10px 14px", background: "rgba(220,38,38,0.05)", borderBottom: "1px solid var(--border)" }}>
-                      <p style={{ fontSize: 12, fontWeight: 700, color: "var(--danger)" }}>
-                        🏖️ Hari ini kamu libur{day.myDayoff?.reason ? ` — ${day.myDayoff.reason}` : ""}
-                      </p>
-                    </div>
+                  {/* ── Approved leave atau dayoff banner ───────────────── */}
+                  {(isLeaveApproved || isMyDayoff) && (
+                    <ApprovedLeaveBanner
+                      leave={isLeaveApproved ? myLeave : null}
+                      dayoff={day.myDayoff}
+                    />
                   )}
 
-                  {/* Slots */}
-                  {!isMyDayoff && (
+                  {/* ── Pending leave banner (menonjol) ─────────────────── */}
+                  {isLeavePending && myPendingLeaveFromList && (
+                    <PendingLeaveBanner
+                      leave={myPendingLeaveFromList}
+                      originalShift={myOriginalShiftType}
+                      isActionable={isActionable}
+                      busy={busy}
+                      onCancel={cancelLeaveRequest}
+                    />
+                  )}
+
+                  {/* ── Rejected leave notice ────────────────────────────── */}
+                  {isLeaveRejected && !isLeavePending && !isLeaveApproved && myRejectedLeaveFromList && (
+                    <RejectedLeaveBanner leave={myRejectedLeaveFromList} />
+                  )}
+
+                  {/* ── Slot & shift section (hanya jika bukan libur approved/dayoff) ── */}
+                  {!isEffectiveDayoff && !isMyDayoff && (
                     <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                       {day.slots.map((slot) => {
                         const isOpen = slot.status === "open" || (!slot.assignmentId && !slot.scheduleId && slot.status !== "off" && slot.status !== "single" && slot.status !== "dayoff");
@@ -426,17 +623,23 @@ export default function StaffSchedulePage() {
                               <p style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>
                                 {slot.shift === 0 ? "Full Shift" : `Shift ${slot.shift}`}
                               </p>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                                 <StatusBadge status={slot.status} isMe={slot.isMe} shiftType={slot.shiftType} />
                                 {(slot.status === "confirmed" || slot.status === "claimed" || slot.status === "auto_cover") && slot.staffName && !slot.isMe && (
                                   <span style={{ fontSize: 10, color: "var(--muted)" }}>{slot.staffName}</span>
+                                )}
+                                {/* Indikator jika ada pending leave untuk slot ini */}
+                                {slot.isMe && isLeavePending && (
+                                  <span style={{ fontSize: 10, color: "var(--warning)", fontWeight: 700 }}>
+                                    ⚠️ Ada request libur pending
+                                  </span>
                                 )}
                               </div>
                             </div>
 
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                              {/* Tombol ambil shift hanya jika isActionable */}
-                              {isActionable && isOpen && !hasMyAssignment && (
+                              {/* Tombol ambil shift hanya jika isActionable dan tidak ada pending/approved leave */}
+                              {isActionable && isOpen && !hasMyAssignment && !isLeavePending && !isLeaveApproved && (
                                 <>
                                   {slot.shift === 1 && (
                                     <button
@@ -472,7 +675,8 @@ export default function StaffSchedulePage() {
                               )}
 
                               {/* Tombol ambil Full Shift untuk outlet 2 shift */}
-                              {isActionable && slot.shift === 1 && isOpen && !hasMyAssignment && day.slots.every((s) => s.status === "open" || (!s.assignmentId && !s.scheduleId)) && (
+                              {isActionable && slot.shift === 1 && isOpen && !hasMyAssignment && !isLeavePending && !isLeaveApproved &&
+                                day.slots.every((s) => s.status === "open" || (!s.assignmentId && !s.scheduleId)) && (
                                 <button
                                   className="btn btn-soft"
                                   style={{ fontSize: 11, padding: "7px 12px", minHeight: 0, fontWeight: 800 }}
@@ -484,7 +688,7 @@ export default function StaffSchedulePage() {
                               )}
 
                               {/* Tombol batalkan */}
-                              {canCancel && (
+                              {canCancel && !isLeavePending && (
                                 <button
                                   className="btn btn-soft"
                                   style={{ fontSize: 11, padding: "7px 12px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
@@ -502,8 +706,8 @@ export default function StaffSchedulePage() {
                         );
                       })}
 
-                      {/* Jadwal saya hari ini */}
-                      {day.myAssignment && (
+                      {/* Jadwal saya — hanya tampil jika tidak ada approved leave */}
+                      {day.myAssignment && !isLeaveApproved && (
                         <div style={{
                           padding: "8px 12px",
                           background: "rgba(22,163,74,0.08)",
@@ -517,7 +721,15 @@ export default function StaffSchedulePage() {
                               Jadwal Saya: {shiftLabel(day.myAssignment.shift_type)}
                             </p>
                             <p style={{ fontSize: 10, color: "var(--muted)" }}>
-                              Status: {day.myAssignment.status === "confirmed" ? "Terkonfirmasi" : day.myAssignment.status === "auto_cover" ? "Auto Cover" : day.myAssignment.status}
+                              Status:{" "}
+                              {day.myAssignment.status === "confirmed" ? "Terkonfirmasi"
+                                : day.myAssignment.status === "auto_cover" ? "Auto Cover"
+                                : day.myAssignment.status}
+                              {isLeavePending && (
+                                <span style={{ color: "var(--warning)", marginLeft: 6 }}>
+                                  · Request libur sedang menunggu persetujuan
+                                </span>
+                              )}
                             </p>
                           </div>
                         </div>
@@ -525,32 +737,28 @@ export default function StaffSchedulePage() {
                     </div>
                   )}
 
-                  {/* Permintaan libur */}
-                  {day.leaves.length > 0 && (
-                    <div style={{ padding: "8px 14px 12px" }}>
-                      {day.leaves.map((leave) => (
-                        <div key={leave.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <CalendarCheck size={13} style={{ color: "var(--warning)", flexShrink: 0 }} />
-                          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--warning)", flex: 1 }}>
-                            {leave.isMe ? "Permintaan liburmu" : `Libur: ${leave.staff_name}`}
-                            {leave.status === "approved" && <span style={{ marginLeft: 4, color: "var(--success)" }}>(disetujui)</span>}
-                            {leave.status === "pending" && leave.isMe && <span style={{ marginLeft: 4, fontWeight: 400, color: "var(--muted)" }}>(menunggu persetujuan)</span>}
-                          </p>
-                          {/* Tombol batalkan hanya untuk permintaan milik sendiri yang masih pending dan masih H-1 */}
-                          {leave.isMe && leave.status === "pending" && isActionable && (
-                            <button
-                              className="btn btn-soft"
-                              style={{ fontSize: 10, padding: "4px 10px", minHeight: 0, color: "var(--danger)", borderColor: "var(--danger-border)" }}
-                              onClick={() => cancelLeaveRequest(leave.id)}
-                              disabled={Boolean(busy)}
-                            >
-                              Batalkan
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {/* ── Info leaves dari staff lain (bukan milik sendiri, bukan cancelled) ── */}
+                  {(() => {
+                    const otherLeaves = day.leaves.filter(
+                      (l) => !l.isMe && (l.status === "approved" || l.status === "pending")
+                    );
+                    if (!otherLeaves.length) return null;
+                    return (
+                      <div style={{ padding: "6px 14px 10px", borderTop: "1px solid var(--border)" }}>
+                        {otherLeaves.map((leave) => (
+                          <div key={leave.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                            <CalendarCheck size={12} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                            <p style={{ fontSize: 11, color: "var(--muted)" }}>
+                              {leave.staff_name} — Libur
+                              {leave.status === "pending" && (
+                                <span style={{ marginLeft: 4, fontStyle: "italic" }}>(menunggu)</span>
+                              )}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}

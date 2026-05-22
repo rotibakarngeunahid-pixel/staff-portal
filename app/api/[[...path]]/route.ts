@@ -1649,9 +1649,26 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
     const myAssignment = staffId ? dayAssignments.find((a: any) => a.staff_id === staffId) : null;
     const myDayoff = staffId ? (staffDayoffs || []).find((d: any) => d.date === date && d.staff_id === staffId) : null;
 
+    // Cari leave request milik staff untuk tanggal ini (pending/approved/rejected — BUKAN cancelled)
+    // Priority: approved > pending > rejected
+    const myLeaveRaw = staffId
+      ? (leaves || [])
+          .filter((l: any) => l.date === date && l.staff_id === staffId && l.status !== "cancelled")
+          .sort((a: any, b: any) => {
+            const order = { approved: 0, pending: 1, rejected: 2 };
+            return (order[a.status as keyof typeof order] ?? 9) - (order[b.status as keyof typeof order] ?? 9);
+          })[0] ?? null
+      : null;
+
+    // Leave request aktif yang mempengaruhi status slot (hanya approved yang mengubah ke "dayoff")
+    const isLeaveApproved = myLeaveRaw?.status === "approved";
+    // Leave pending: ada request menunggu, perlu ditampilkan prominent tapi slot belum terblokir
+    const isLeavePending = myLeaveRaw?.status === "pending";
+
     const slots = shiftNumbers.map((shift) => {
       if (shift === 0) {
         // Single-shift outlet: tampilkan assignment jika ada
+        // Jika leave approved → override status ke "dayoff" (sama dengan staff_dayoff)
         const ass = myAssignment || dayAssignments[0] || null;
         return {
           shift,
@@ -1660,9 +1677,10 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
           staffId: ass?.staff_id || null,
           staffName: ass?.staff_name || null,
           shiftType: ass?.shift_type || "FULL_SHIFT",
-          status: myDayoff ? "dayoff" : ass ? ass.status : "single",
+          status: myDayoff ? "dayoff" : isLeaveApproved ? "dayoff" : ass ? ass.status : "single",
           isMe: Boolean(staffId && ass?.staff_id === staffId),
-          isDayoff: Boolean(myDayoff)
+          isDayoff: Boolean(myDayoff || isLeaveApproved),
+          hasPendingLeave: isLeavePending
         };
       }
       // 2-shift outlet
@@ -1679,9 +1697,10 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
         staffId: ass?.staff_id || rec?.staff_id || null,
         staffName: ass?.staff_name || rec?.staff_name || null,
         shiftType: ass?.shift_type || (shift === 1 ? "SHIFT_1" : "SHIFT_2"),
-        status: myDayoff ? "dayoff" : off ? "off" : ass ? ass.status : rec?.status || "open",
+        status: myDayoff ? "dayoff" : isLeaveApproved ? "dayoff" : off ? "off" : ass ? ass.status : rec?.status || "open",
         isMe: Boolean(staffId && (ass?.staff_id === staffId || rec?.staff_id === staffId)),
-        isDayoff: Boolean(myDayoff)
+        isDayoff: Boolean(myDayoff || isLeaveApproved),
+        hasPendingLeave: isLeavePending
       };
     });
 
@@ -1689,8 +1708,12 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
       date,
       slots,
       assignments: dayAssignments,
-      myAssignment: myAssignment || null,
+      // Sembunyikan myAssignment dari response jika leave sudah approved
+      // (agar frontend tidak menampilkan "Jadwal Saya" di bawah banner "Libur")
+      myAssignment: isLeaveApproved ? null : (myAssignment || null),
       myDayoff: myDayoff || null,
+      // Sertakan myLeave agar frontend bisa menampilkan status leave secara informatif
+      myLeave: myLeaveRaw || null,
       leaves: (leaves || [])
         .filter((leave: any) => leave.date === date && leave.status !== "cancelled")
         .map((leave: any) => ({ ...leave, isMe: Boolean(staffId && leave.staff_id === staffId) }))
@@ -1825,12 +1848,15 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
     .upsert(
       {
         outlet_id: outlet.id,
+        outlet_name: outlet.name,
         staff_id: staff.id,
         staff_name: staff.name,
         date,
         status: leaveStatus,
         reason: stringBody(body, "reason") || null,
-        cancelled_at: null
+        admin_note: null,
+        cancelled_at: null,
+        rejected_at: null
       },
       { onConflict: "staff_id,date" }
     )
@@ -2715,7 +2741,11 @@ async function adminSchedule(db: Db, method: string, body: Body) {
 
 async function adminLeave(db: Db, method: string, body: Body) {
   if (method === "GET") {
-    let query = db.from("leave_requests").select("*").order("date", { ascending: false });
+    // Join dengan outlets agar admin bisa lihat nama outlet tanpa query tambahan
+    let query = db
+      .from("leave_requests")
+      .select("*, outlets(name)")
+      .order("created_at", { ascending: false });
     if (body.staffId) query = query.eq("staff_id", body.staffId);
     if (body.outletId) query = query.eq("outlet_id", body.outletId);
     if (body.status) query = query.eq("status", body.status);
@@ -2723,23 +2753,60 @@ async function adminLeave(db: Db, method: string, body: Body) {
     if (body.dateTo) query = query.lte("date", body.dateTo);
     const { data, error } = await query.limit(500);
     if (error) throw error;
-    return ok({ leaves: data || [] });
+    // Flatten nama outlet dari join agar frontend tidak perlu nested access
+    const leaves = (data || []).map((l: any) => ({
+      id: l.id,
+      outlet_id: l.outlet_id,
+      outlet_name: l.outlets?.name || l.outlet_name || "—",
+      staff_id: l.staff_id,
+      staff_name: l.staff_name,
+      date: l.date,
+      status: l.status,
+      reason: l.reason || null,
+      admin_note: l.admin_note || null,
+      created_at: l.created_at,
+      cancelled_at: l.cancelled_at || null,
+      rejected_at: l.rejected_at || null
+    }));
+    return ok({ leaves });
   }
 
   if (method === "PUT" || method === "POST") {
     const leaveId = stringBody(body, "leaveId") || stringBody(body, "id");
     const status = stringBody(body, "status", "approved");
     if (!leaveId) throw new HttpError("Leave ID wajib diisi");
-    if (!["approved", "cancelled", "pending"].includes(status)) throw new HttpError("Status cuti tidak valid");
-    const { data: leave, error: leaveError } = await db.from("leave_requests").select("*").eq("id", leaveId).single();
+    if (!["approved", "cancelled", "pending", "rejected"].includes(status)) {
+      throw new HttpError("Status cuti tidak valid");
+    }
+
+    const { data: leave, error: leaveError } = await db
+      .from("leave_requests")
+      .select("*")
+      .eq("id", leaveId)
+      .single();
     if (leaveError) throw leaveError;
+
+    const now = new Date();
+    const adminNote = stringBody(body, "note") || null;
+
+    // Bangun payload update berdasarkan status baru
+    const updatePayload: Body = {
+      status,
+      admin_note: adminNote,
+      // Reset kolom timestamp yang tidak relevan
+      cancelled_at: status === "cancelled" ? now.toISOString() : null,
+      rejected_at: status === "rejected" ? now.toISOString() : null
+    };
+
     const { data, error } = await db
       .from("leave_requests")
-      .update({ status, cancelled_at: status === "cancelled" ? new Date().toISOString() : null })
+      .update(updatePayload)
       .eq("id", leaveId)
       .select("*")
       .single();
     if (error) throw error;
+
+    // Jika disetujui: batalkan shift & assignment yang konflik
     if (status === "approved") {
       await db
         .from("shift_schedule")
@@ -2747,7 +2814,7 @@ async function adminLeave(db: Db, method: string, body: Body) {
           staff_id: null,
           staff_name: null,
           status: "open",
-          cancelled_at: new Date().toISOString(),
+          cancelled_at: now.toISOString(),
           cancel_reason: "Cuti disetujui admin"
         })
         .eq("staff_id", leave.staff_id)
@@ -2756,17 +2823,20 @@ async function adminLeave(db: Db, method: string, body: Body) {
         .from("staff_shift_assignments")
         .update({
           status: "cancelled",
-          cancelled_at: new Date().toISOString(),
+          cancelled_at: now.toISOString(),
           cancel_reason: "Cuti disetujui admin",
-          updated_at: new Date().toISOString()
+          updated_at: now.toISOString()
         })
         .eq("staff_id", leave.staff_id)
         .eq("date", leave.date)
         .in("status", ["confirmed", "admin_override", "auto_cover"]);
     }
-    await logAudit(db, "admin_update_leave", "Admin", { leaveId, status });
+
+    await logAudit(db, "admin_update_leave", "Admin", { leaveId, status, adminNote });
+
+    // Kirim email notifikasi ke staff untuk keputusan approved / rejected / cancelled
     let emailSent = false;
-    if (status === "approved" || status === "cancelled") {
+    if (status === "approved" || status === "rejected" || status === "cancelled") {
       const [{ data: outletRow }, cfg] = await Promise.all([
         db.from("outlets").select("name").eq("id", leave.outlet_id).maybeSingle(),
         configMap(db)
@@ -2780,11 +2850,12 @@ async function adminLeave(db: Db, method: string, body: Body) {
           outletName: outletRow?.name || "Outlet",
           leaveDate: leave.date,
           approved: status === "approved",
-          adminNote: stringBody(body, "note") || null,
+          adminNote,
           to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
         })
       );
     }
+
     return ok({ leave: data, emailSent });
   }
 
