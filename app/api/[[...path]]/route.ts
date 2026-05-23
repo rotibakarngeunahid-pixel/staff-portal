@@ -257,7 +257,7 @@ function formatCurrencyForEmail(value: unknown) {
 
 function reportDeadlineLabel(outlet: Outlet, type: "BUKA" | "TUTUP") {
   const end = type === "BUKA" ? outlet.report_buka_end : outlet.report_tutup_end;
-  return end ? `Maksimal ${String(end).slice(0, 5)} WITA` : null;
+  return end ? `Maksimal ${String(end).slice(0, 5)}` : null;
 }
 
 function reportPhotoItems(items: SavedReportItem[]) {
@@ -931,7 +931,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       const startLabel = startTime ? String(startTime).slice(0, 5) : "?";
       const windowLabel = windowOpensAt ?? "1 jam sebelum jadwal";
       throw new HttpError(
-        `Absen belum bisa dilakukan. Jadwal ${shiftLabel} dimulai pukul ${startLabel} WIB. Absen baru bisa dilakukan mulai pukul ${windowLabel} WIB.`,
+        `Absen belum bisa dilakukan. Jadwal ${shiftLabel} dimulai pukul ${startLabel}. Absen baru bisa dilakukan mulai pukul ${windowLabel}.`,
         400,
         "TOO_EARLY"
       );
@@ -1232,7 +1232,7 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if (endTime && !isCheckoutTimeReached(endTime, now)) {
     const formattedEnd = String(endTime).slice(0, 5);
     throw new HttpError(
-      `Absen keluar belum tersedia. Shift selesai pukul ${formattedEnd} WITA. Silakan tunggu hingga waktu shift selesai.`,
+      `Absen keluar belum tersedia. Shift selesai pukul ${formattedEnd}. Silakan tunggu hingga waktu shift selesai.`,
       400,
       "CHECKOUT_TOO_EARLY"
     );
@@ -1391,7 +1391,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   const submissionStatus = reportSubmissionStatus(outlet, type, submittedAt);
   if (!submissionStatus.canSubmit) {
     throw new HttpError(
-      `Laporan ${type} belum bisa dikirim. Tersedia mulai pukul ${submissionStatus.start.slice(0, 5)} WITA.`,
+      `Laporan ${type} belum bisa dikirim. Tersedia mulai pukul ${submissionStatus.start.slice(0, 5)}.`,
       400,
       "REPORT_TOO_EARLY"
     );

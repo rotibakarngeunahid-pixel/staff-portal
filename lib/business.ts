@@ -4,7 +4,7 @@ export const APP_TIME_ZONE = "Asia/Jakarta";
 export const REPORT_TIME_ZONE = "Asia/Makassar";
 
 // Jam kerja baru dimulai setelah jam ini. Sebelumnya dianggap masih hari kerja sebelumnya.
-// Contoh: 00:01–02:59 WIB masih dianggap hari kerja tanggal sebelumnya.
+// Contoh: 00:01–02:59 masih dianggap hari kerja tanggal sebelumnya.
 export const WORKING_DAY_CUTOFF_HOUR = 3;
 export const DEFAULT_REPORT_WINDOWS = {
   BUKA: { start: "09:00", end: "11:00" },
@@ -63,8 +63,8 @@ export function addDays(dateString: string, days: number) {
 }
 
 /**
- * Mengembalikan tanggal kerja efektif berdasarkan cutoff jam 03:00 WIB.
- * Waktu 00:00–02:59 WIB masih dianggap bagian dari hari kerja sebelumnya.
+ * Mengembalikan tanggal kerja efektif berdasarkan cutoff jam 03:00.
+ * Waktu 00:00–02:59 masih dianggap bagian dari hari kerja sebelumnya.
  */
 export function getWorkingDate(now = new Date()) {
   const hour = hourJakarta(now);
@@ -127,15 +127,15 @@ export function reportWindowStatus(
   now = new Date()
 ) {
   const window = reportWindow(outlet, type);
-  const current = timeMakassar(now);
+  const current = timeJakarta(now);
   // Tidak ada window dikonfigurasi → selalu diizinkan
   if (!window.start && !window.end) {
-    return { ...window, current, timeZone: REPORT_TIME_ZONE, allowed: true };
+    return { ...window, current, timeZone: APP_TIME_ZONE, allowed: true };
   }
   return {
     ...window,
     current,
-    timeZone: REPORT_TIME_ZONE,
+    timeZone: APP_TIME_ZONE,
     allowed: isTimeWithinWindow(current, window.start, window.end)
   };
 }
@@ -288,7 +288,6 @@ export function formatDateRangeStart(date?: string | null) {
 
 /**
  * Cek apakah staff sudah boleh absen keluar berdasarkan jam selesai shift.
- * Menggunakan timezone WITA (Asia/Makassar).
  * Shift yang selesai setelah tengah malam (mis. 01:00) ditangani secara khusus.
  */
 export function isCheckoutTimeReached(
@@ -296,11 +295,11 @@ export function isCheckoutTimeReached(
   now = new Date()
 ): boolean {
   if (!shiftEnd) return true; // Tidak ada konfigurasi jam selesai → selalu boleh
-  const currentWita = timeMakassar(now);
-  const currentMin = parseTimeToMinutes(currentWita);
+  const currentTime = timeJakarta(now);
+  const currentMin = parseTimeToMinutes(currentTime);
   const endMin = parseTimeToMinutes(shiftEnd);
   if (currentMin === null || endMin === null) return true;
-  // Jika jam selesai shift ada setelah tengah malam (00:00 s.d. 02:59 WITA)
+  // Jika jam selesai shift ada setelah tengah malam (00:00 s.d. 02:59)
   if (endMin < WORKING_DAY_CUTOFF_HOUR * 60) {
     return currentMin < WORKING_DAY_CUTOFF_HOUR * 60 && currentMin >= endMin;
   }

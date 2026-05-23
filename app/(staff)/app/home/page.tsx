@@ -150,10 +150,10 @@ function RealtimeGuide({
     if (isFullShift) {
       message = `Anda bertugas Full Shift hari ini. Urutan tugas: Absen Masuk → Laporan Buka Toko → Laporan Tutup Toko → Absen Keluar.`;
     } else if (shiftType === "SHIFT_1") {
-      const endMsg = status.outlet?.shift1_end ? ` Shift selesai pukul ${status.outlet.shift1_end.slice(0,5)} WITA.` : "";
+      const endMsg = status.outlet?.shift1_end ? ` Shift selesai pukul ${status.outlet.shift1_end.slice(0,5)}.` : "";
       message = `Anda bertugas Shift 1.${endMsg} Setelah absen masuk, isi Laporan Buka Toko, lalu absen keluar.`;
     } else if (shiftType === "SHIFT_2") {
-      const endMsg = status.outlet?.shift2_end ? ` Shift selesai pukul ${status.outlet.shift2_end.slice(0,5)} WITA.` : "";
+      const endMsg = status.outlet?.shift2_end ? ` Shift selesai pukul ${status.outlet.shift2_end.slice(0,5)}.` : "";
       message = `Anda bertugas Shift 2.${endMsg} Setelah absen masuk, isi Laporan Tutup Toko, lalu absen keluar.`;
     } else {
       message = "Silakan absen masuk terlebih dahulu untuk memulai shift.";
@@ -164,7 +164,7 @@ function RealtimeGuide({
     bg = "#EFF6FF";
     border = "#BFDBFE";
     if (!reportWindow.canSubmit) {
-      message = `Laporan Buka Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
+      message = `Laporan Buka Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)}.`;
       icon = "⏰";
       color = "#D97706";
       bg = "#FFFBEB";
@@ -178,7 +178,7 @@ function RealtimeGuide({
     bg = "#F5F3FF";
     border = "#DDD6FE";
     if (!reportWindow.canSubmit) {
-      message = `Laporan Tutup Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)} WITA.`;
+      message = `Laporan Tutup Toko belum bisa diisi. Tersedia mulai pukul ${reportWindow.start.slice(0,5)}.`;
       icon = "⏰";
       color = "#D97706";
       bg = "#FFFBEB";
@@ -306,7 +306,7 @@ export default function StaffHomePage() {
       shift
     );
     if (!endTime) return "";
-    return `Absen keluar belum tersedia. Anda dapat absen keluar mulai pukul ${String(endTime).slice(0, 5)} WITA.`;
+    return `Absen keluar belum tersedia. Anda dapat absen keluar mulai pukul ${String(endTime).slice(0, 5)}.`;
   }, [status]);
 
   /* ─── Report window (dipakai sebelum render dan di useEffect inventori) ─── */
@@ -527,7 +527,7 @@ export default function StaffHomePage() {
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
     const windowState = reportSubmissionStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
     if (!windowState.canSubmit) {
-      setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${windowState.start.slice(0, 5)} WITA.`);
+      setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${windowState.start.slice(0, 5)}.`);
       return;
     }
     const missingRequired = effectiveReportItems.filter((item) => item.required && !reportPhotos[item.label]);
@@ -645,7 +645,7 @@ export default function StaffHomePage() {
   const checkinWindowOpensAt = status?.checkinTooEarly?.windowOpensAt ?? null;
   const checkinDisabled = Boolean(busy) || !gpsReady || tooEarlyForCheckin;
   const checkinLabel = tooEarlyForCheckin
-    ? `Belum Waktunya (mulai ${checkinWindowOpensAt ?? "1 jam sebelum shift"} WIB)`
+    ? `Belum Waktunya (mulai ${checkinWindowOpensAt ?? "1 jam sebelum shift"})`
     : ({
         unsupported:       "GPS tidak didukung",
         permission_denied: "Izin Lokasi Ditolak",
@@ -672,7 +672,7 @@ export default function StaffHomePage() {
 
   function openReportCamera(item: ReportCfgItem) {
     if (!reportWindow.canSubmit) {
-      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)} WITA.`);
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)}.`);
       return;
     }
     if (reportPhotoDisabled) return;
@@ -690,7 +690,7 @@ export default function StaffHomePage() {
         const latestWindow = reportSubmissionStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
         if (!latestWindow.canSubmit) {
           revokePhoto(photo);
-          setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)} WITA.`);
+          setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)}.`);
           return;
         }
         saveReportPhoto(item.label, photo);
@@ -700,7 +700,7 @@ export default function StaffHomePage() {
 
   function openUploadForItem(item: ReportCfgItem) {
     if (!reportWindow.canSubmit) {
-      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)} WITA.`);
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${reportWindow.start.slice(0, 5)}.`);
       return;
     }
     if (reportPhotoDisabled) return;
@@ -723,7 +723,7 @@ export default function StaffHomePage() {
 
     const latestWindow = reportSubmissionStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
     if (!latestWindow.canSubmit) {
-      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)} WITA.`);
+      setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)}.`);
       return;
     }
 
@@ -921,7 +921,7 @@ export default function StaffHomePage() {
             {/* Banner: absen terlalu awal */}
             {!loading && tooEarlyForCheckin && nextState === "checkin" && (
               <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "#92400E" }}>
-                ⏰ Terlalu awal untuk absen masuk. Jadwal shift kamu dimulai lebih siang — absen baru bisa dilakukan mulai pukul <strong>{checkinWindowOpensAt ?? "1 jam sebelum shift"} WIB</strong>.
+                ⏰ Terlalu awal untuk absen masuk. Jadwal shift kamu dimulai lebih siang — absen baru bisa dilakukan mulai pukul <strong>{checkinWindowOpensAt ?? "1 jam sebelum shift"}</strong>.
               </div>
             )}
 
@@ -1125,8 +1125,8 @@ export default function StaffHomePage() {
                 </h3>
                 <p style={{ fontSize: 13, color: "#78350F", lineHeight: 1.6, marginBottom: 8 }}>
                   Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} dapat diisi mulai pukul{" "}
-                  <strong style={{ color: "#92400E" }}>{reportWindow.start.slice(0, 5)} WITA</strong> hingga{" "}
-                  <strong style={{ color: "#92400E" }}>{reportWindow.end.slice(0, 5)} WITA</strong>.
+                  <strong style={{ color: "#92400E" }}>{reportWindow.start.slice(0, 5)}</strong> hingga{" "}
+                  <strong style={{ color: "#92400E" }}>{reportWindow.end.slice(0, 5)}</strong>.
                 </p>
                 <p style={{ fontSize: 12, color: "#B45309", marginTop: 4 }}>
                   {reportType === "BUKA"
@@ -1138,7 +1138,7 @@ export default function StaffHomePage() {
               <>
                 {reportWindow.isLate && (
                   <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
-                    Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} WITA dan akan tercatat sebagai laporan terlambat.
+                    Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} dan akan tercatat sebagai laporan terlambat.
                   </div>
                 )}
 
