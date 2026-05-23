@@ -42,6 +42,11 @@ export function todayJakarta(date = new Date()) {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
+export function todayMakassar(date = new Date()) {
+  const p = localParts(date, REPORT_TIME_ZONE);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
 export function timeJakarta(date = new Date()) {
   const p = localParts(date);
   return `${p.hour}:${p.minute}`;
@@ -56,10 +61,14 @@ export function hourJakarta(date = new Date()) {
   return Number(localParts(date).hour);
 }
 
+export function hourMakassar(date = new Date()) {
+  return Number(localParts(date, REPORT_TIME_ZONE).hour);
+}
+
 export function addDays(dateString: string, days: number) {
-  const date = new Date(`${dateString}T00:00:00+07:00`);
+  const date = new Date(`${dateString}T00:00:00+08:00`);
   date.setUTCDate(date.getUTCDate() + days);
-  return todayJakarta(date);
+  return todayMakassar(date);
 }
 
 /**
@@ -67,11 +76,11 @@ export function addDays(dateString: string, days: number) {
  * Waktu 00:00–02:59 masih dianggap bagian dari hari kerja sebelumnya.
  */
 export function getWorkingDate(now = new Date()) {
-  const hour = hourJakarta(now);
+  const hour = hourMakassar(now);
   if (hour < WORKING_DAY_CUTOFF_HOUR) {
-    return { date: addDays(todayJakarta(now), -1), usePrevDay: true };
+    return { date: addDays(todayMakassar(now), -1), usePrevDay: true };
   }
-  return { date: todayJakarta(now), usePrevDay: false };
+  return { date: todayMakassar(now), usePrevDay: false };
 }
 
 /** @deprecated Gunakan getWorkingDate() */
@@ -127,15 +136,15 @@ export function reportWindowStatus(
   now = new Date()
 ) {
   const window = reportWindow(outlet, type);
-  const current = timeJakarta(now);
+  const current = timeMakassar(now);
   // Tidak ada window dikonfigurasi → selalu diizinkan
   if (!window.start && !window.end) {
-    return { ...window, current, timeZone: APP_TIME_ZONE, allowed: true };
+    return { ...window, current, timeZone: REPORT_TIME_ZONE, allowed: true };
   }
   return {
     ...window,
     current,
-    timeZone: APP_TIME_ZONE,
+    timeZone: REPORT_TIME_ZONE,
     allowed: isTimeWithinWindow(current, window.start, window.end)
   };
 }
@@ -191,11 +200,11 @@ export function reportSubmissionStatus(
 
 export function detectShift(outlet: Outlet, now = new Date()): 0 | 1 | 2 {
   if (Number(outlet.shift_mode) === 1) return 0;
-  const current = parseTimeToMinutes(timeJakarta(now)) ?? 0;
+  const current = parseTimeToMinutes(timeMakassar(now)) ?? 0;
   const shift2Start = parseTimeToMinutes(outlet.shift2_start);
   if (shift2Start !== null && current >= shift2Start) return 2;
   // Sebelum cutoff dianggap masih bagian dari shift 2 hari sebelumnya
-  if (hourJakarta(now) < WORKING_DAY_CUTOFF_HOUR) return 2;
+  if (hourMakassar(now) < WORKING_DAY_CUTOFF_HOUR) return 2;
   return 1;
 }
 
@@ -217,8 +226,8 @@ export function isCheckinTooEarly(
   const startMin = parseTimeToMinutes(startTime);
   if (startMin === null) return { tooEarly: false, windowOpensAt: null };
 
-  const nowMin = parseTimeToMinutes(timeJakarta(now)) ?? 0;
-  const nowHour = hourJakarta(now);
+  const nowMin = parseTimeToMinutes(timeMakassar(now)) ?? 0;
+  const nowHour = hourMakassar(now);
 
   // Hitung menit pembuka window (earlyWindowMinutes sebelum shift mulai)
   const windowOpensMin = startMin - earlyWindowMinutes;
@@ -283,7 +292,7 @@ export function sanitizePathSegment(value: string) {
 }
 
 export function formatDateRangeStart(date?: string | null) {
-  return date || todayJakarta();
+  return date || todayMakassar();
 }
 
 /**
@@ -295,8 +304,8 @@ export function isCheckoutTimeReached(
   now = new Date()
 ): boolean {
   if (!shiftEnd) return true; // Tidak ada konfigurasi jam selesai → selalu boleh
-  const currentTime = timeJakarta(now);
-  const currentMin = parseTimeToMinutes(currentTime);
+  const currentWita = timeMakassar(now);
+  const currentMin = parseTimeToMinutes(currentWita);
   const endMin = parseTimeToMinutes(shiftEnd);
   if (currentMin === null || endMin === null) return true;
   // Jika jam selesai shift ada setelah tengah malam (00:00 s.d. 02:59)
