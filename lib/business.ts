@@ -298,6 +298,11 @@ export function formatDateRangeStart(date?: string | null) {
 /**
  * Cek apakah staff sudah boleh absen keluar berdasarkan jam selesai shift.
  * Shift yang selesai setelah tengah malam (mis. 01:00) ditangani secara khusus.
+ *
+ * Kasus lintas tengah malam:
+ *   - Shift selesai malam (>= 03:00), jam sekarang dini hari (< 03:00) → sudah lewat tengah malam
+ *     → pasti sudah melewati jam selesai shift (contoh: shift2_end 23:00, checkout jam 00:15)
+ *   - Shift selesai dini hari (< 03:00), jam sekarang dini hari → cek langsung currentMin >= endMin
  */
 export function isCheckoutTimeReached(
   shiftEnd: string | null | undefined,
@@ -308,10 +313,22 @@ export function isCheckoutTimeReached(
   const currentMin = parseTimeToMinutes(currentWita);
   const endMin = parseTimeToMinutes(shiftEnd);
   if (currentMin === null || endMin === null) return true;
-  // Jika jam selesai shift ada setelah tengah malam (00:00 s.d. 02:59)
-  if (endMin < WORKING_DAY_CUTOFF_HOUR * 60) {
-    return currentMin < WORKING_DAY_CUTOFF_HOUR * 60 && currentMin >= endMin;
+
+  const cutoffMin = WORKING_DAY_CUTOFF_HOUR * 60;
+
+  // Kasus 1: Shift selesai dini hari (00:00–02:59), misal shift2_end = "01:00"
+  if (endMin < cutoffMin) {
+    return currentMin < cutoffMin && currentMin >= endMin;
   }
+
+  // Kasus 2: Shift selesai malam (>= 03:00), tapi jam sekarang sudah dini hari (< cutoff 03:00)
+  // Artinya sudah melewati tengah malam → pasti sudah melewati jam selesai shift malam hari
+  // Contoh: shift2_end = "23:00", jam sekarang = "00:15" → sudah boleh absen keluar
+  if (currentMin < cutoffMin) {
+    return true;
+  }
+
+  // Kasus 3: Jam selesai malam, jam sekarang masih di hari yang sama (>= 03:00) → cek langsung
   return currentMin >= endMin;
 }
 
