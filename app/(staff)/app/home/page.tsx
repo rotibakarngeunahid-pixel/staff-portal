@@ -11,6 +11,7 @@ import { drawWatermark } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
 import { useSessionStore } from "@/stores/session";
+import { saveDraft, loadDraft, clearDraft } from "@/lib/report-draft";
 
 /* ─── Types ─── */
 type Attendance = {
@@ -259,6 +260,11 @@ export default function StaffHomePage() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadingItemRef = useRef<ReportCfgItem | null>(null);
 
+  /* ─── Draft auto-save ─── */
+  const [draftSavedVisible, setDraftSavedVisible] = useState(false);
+  const draftSaveTimerRef = useRef<number | null>(null);
+  const draftHideTimerRef = useRef<number | null>(null);
+
   useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
     return () => {
@@ -266,6 +272,34 @@ export default function StaffHomePage() {
       reportPhotosRef.current = {};
     };
   }, []);
+
+  /* ─── Auto-save draft saat foto berubah (debounce 400 ms) ─── */
+  useEffect(() => {
+    // Hanya simpan jika sedang dalam state laporan dan ada minimal 1 foto
+    if (!isReportState) return;
+    if (Object.keys(reportPhotos).length === 0) return;
+
+    const type = reportType as "BUKA" | "TUTUP";
+    const date = status?.date;
+    const shift = status?.shift;
+    if (!date || shift === undefined) return;
+
+    if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = window.setTimeout(async () => {
+      await saveDraft(type, reportPhotos, date, shift);
+      setDraftSavedVisible(true);
+      if (draftHideTimerRef.current !== null) window.clearTimeout(draftHideTimerRef.current);
+      draftHideTimerRef.current = window.setTimeout(() => setDraftSavedVisible(false), 4000);
+    }, 400);
+
+    return () => {
+      if (draftSaveTimerRef.current !== null) {
+        window.clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportPhotos]);
 
   /* ─── Derived ─── */
   const reportTypes = useMemo(() => new Set((status?.reports || []).map((r) => r.type)), [status]);
@@ -436,10 +470,27 @@ export default function StaffHomePage() {
     setReportItemsLoading(true);
     clearReportPhotos();
     setReportError("");
+
+    // Pulihkan draft jika ada dan masih valid untuk shift hari ini
+    // (status selalu tersedia saat nextState menjadi report karena nextState diturunkan dari status)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const s = status;
+    if (s?.date && s?.shift !== undefined) {
+      const draft = loadDraft(type, s.date, s.shift);
+      if (draft && Object.keys(draft).length > 0) {
+        setReportPhotos(draft);
+        reportPhotosRef.current = draft;
+        setDraftSavedVisible(true);
+        if (draftHideTimerRef.current !== null) window.clearTimeout(draftHideTimerRef.current);
+        draftHideTimerRef.current = window.setTimeout(() => setDraftSavedVisible(false), 5000);
+      }
+    }
+
     apiFetch<{ ok: true; items: ReportCfgItem[] }>("/api/reports/config", { role: "staff", body: { type } })
       .then((p) => setReportItems(p.items))
       .catch(() => setReportItems([]))
       .finally(() => setReportItemsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nextState]);
 
   /* ─── Inventory check: reset saat keluar dari state report_tutup ─── */
@@ -602,6 +653,8 @@ export default function StaffHomePage() {
       });
 
       clearReportPhotos();
+      clearDraft(type); // hapus draft setelah laporan berhasil dikirim
+      setDraftSavedVisible(false);
       setReportBusyLabel("Memuat ulang status...");
       await load();
     } catch (err) {
@@ -1089,6 +1142,20 @@ export default function StaffHomePage() {
                 </p>
               </div>
             </div>
+
+            {/* Indikator draft tersimpan */}
+            {draftSavedVisible && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 6,
+                background: "#F0FDF4", border: "1px solid #BBF7D0",
+                borderRadius: 8, padding: "6px 12px",
+                fontSize: 11, fontWeight: 700, color: "#16A34A",
+                alignSelf: "flex-start"
+              }}>
+                <CheckCircle2 size={12} />
+                Draft tersimpan
+              </div>
+            )}
 
             {/* GPS bar (compact) */}
             <div className="gps-bar" style={{ padding: "10px 14px" }}>
