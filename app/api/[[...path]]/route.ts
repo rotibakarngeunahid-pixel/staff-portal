@@ -339,6 +339,10 @@ function checkoutGpsFromFlags(flags?: string | null) {
   };
 }
 
+function isClosingShift(shift: 0 | 1 | 2, flags?: string | null) {
+  return shift === 0 || shift === 2 || String(flags || "").includes("FULL_SHIFT_2X");
+}
+
 function workMinutes(checkinTime?: string | null, checkoutTime?: string | null) {
   if (!checkinTime || !checkoutTime) return null;
   const checkinMs = new Date(checkinTime).getTime();
@@ -1271,8 +1275,8 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if ((shift === 0 || shift === 1) && !hasBuka) throw new HttpError("Laporan Buka Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_BUKA");
   if ((shift === 0 || shift === 2) && !hasTutup) throw new HttpError("Laporan Tutup Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_TUTUP");
 
-  // Cek status inventori: jika outlet punya inventory_branch_id, validasi ke sistem inventori eksternal
-  if (outlet.inventory_branch_id) {
+  // Inventori hanya mengunci alur tutup toko: Shift 2 atau Full Shift.
+  if (outlet.inventory_branch_id && isClosingShift(shift, attendance.flags)) {
     const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
     if (!inventoryStatus.can_checkout) {
       throw new HttpError(inventoryStatus.message || "Laporan inventori belum selesai. Selesaikan laporan inventori sebelum absen keluar.", 400, "INVENTORY_NOT_COMPLETE");
