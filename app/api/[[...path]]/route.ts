@@ -51,6 +51,10 @@ type Db = ReturnType<typeof supabaseAdmin>;
 type Body = Record<string, any>;
 type RouteContext = { params: Promise<{ path?: string[] }> };
 type SavedReportItem = { label: string; required: boolean; photo_url: string; submitted: boolean };
+type ShiftTypeValue = "SHIFT_1" | "SHIFT_2" | "FULL_SHIFT";
+
+const ACTIVE_ASSIGNMENT_STATUSES = ["confirmed", "admin_override", "auto_cover", "locked", "completed"] as const;
+const MUTABLE_ASSIGNMENT_STATUSES = ["confirmed", "admin_override", "auto_cover"] as const;
 
 class HttpError extends Error {
   status: number;
@@ -244,6 +248,64 @@ async function notifySafely(db: Db, auditAction: string, userName: string, send:
 function shiftLabel(shift: 0 | 1 | 2) {
   if (shift === 0) return "Full Shift";
   return `Shift ${shift}`;
+}
+
+function shiftTypeFromShift(shift: 0 | 1 | 2): ShiftTypeValue {
+  if (shift === 1) return "SHIFT_1";
+  if (shift === 2) return "SHIFT_2";
+  return "FULL_SHIFT";
+}
+
+function shiftFromShiftType(shiftType?: string | null): 0 | 1 | 2 | null {
+  if (shiftType === "SHIFT_1") return 1;
+  if (shiftType === "SHIFT_2") return 2;
+  if (shiftType === "FULL_SHIFT") return 0;
+  return null;
+}
+
+function isMutableAssignment(row: Body) {
+  return (MUTABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(String(row.status || ""));
+}
+
+async function resolveStaffShiftAssignment(db: Db, staffId: string, outletId: string, date: string) {
+  const { data: assignments, error: assignmentError } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("staff_id", staffId)
+    .eq("outlet_id", outletId)
+    .eq("date", date)
+    .in("status", [...ACTIVE_ASSIGNMENT_STATUSES])
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  if (assignmentError) throw assignmentError;
+  const assignment = (assignments || [])[0];
+  if (assignment) return { ...assignment, source_table: "staff_shift_assignments" };
+
+  // Legacy fallback: admin schedule used to write only shift_schedule.
+  // Keep respecting those rows so check-in does not fall back to time-based shift detection.
+  const { data: legacyRows, error: legacyError } = await db
+    .from("shift_schedule")
+    .select("*")
+    .eq("staff_id", staffId)
+    .eq("outlet_id", outletId)
+    .eq("date", date)
+    .eq("status", "claimed")
+    .order("requested_at", { ascending: false })
+    .limit(1);
+  if (legacyError) throw legacyError;
+  const legacy = (legacyRows || [])[0];
+  if (!legacy) return null;
+  return {
+    id: legacy.id,
+    outlet_id: legacy.outlet_id,
+    staff_id: legacy.staff_id,
+    staff_name: legacy.staff_name,
+    date: legacy.date,
+    shift_type: Number(legacy.shift) === 2 ? "SHIFT_2" : "SHIFT_1",
+    status: "confirmed",
+    source: "legacy_shift_schedule",
+    source_table: "shift_schedule"
+  };
 }
 
 function formatCurrencyForEmail(value: unknown) {
@@ -671,19 +733,12 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
 
   // PRD §8.5 — resolve jadwal lebih awal agar shift bisa dikoreksi sebelum query attendance
   // Staff Shift 2 yang datang lebih awal bisa salah dideteksi sebagai Shift 1 jika tidak dikoreksi di sini
-  const { data: assignment } = await db
-    .from("staff_shift_assignments")
-    .select("*")
-    .eq("staff_id", staff.id)
-    .eq("date", effective)
-    .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
-    .maybeSingle();
+  const assignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, effective);
 
   // Override effectiveShift berdasarkan assignment (lebih akurat dari deteksi berbasis jam)
   if (assignment && !isFullShift) {
-    const assignedShiftType = (assignment as any).shift_type;
-    if (assignedShiftType === "SHIFT_1") effectiveShift = 1;
-    else if (assignedShiftType === "SHIFT_2") effectiveShift = 2;
+    const assignedShift = shiftFromShiftType((assignment as any).shift_type);
+    if (assignedShift === 1 || assignedShift === 2) effectiveShift = assignedShift;
   }
 
   // Cek apakah staff sudah checkin hari ini (tanpa filter shift)
@@ -911,17 +966,9 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   // Override shift berdasarkan assignment jika ada (mencegah deteksi shift salah saat datang lebih awal)
   // Contoh: staff punya assignment SHIFT_2 tapi absen sebelum shift2_start → shift tetap 2 bukan 1
   if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
-    const { data: existingAssignment } = await db
-      .from("staff_shift_assignments")
-      .select("shift_type")
-      .eq("staff_id", staff.id)
-      .eq("date", date)
-      .in("status", ["confirmed", "admin_override", "auto_cover"])
-      .maybeSingle();
+    const existingAssignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, date);
     if (existingAssignment) {
-      const assignedShiftNum = (existingAssignment as any).shift_type === "SHIFT_1" ? 1
-        : (existingAssignment as any).shift_type === "SHIFT_2" ? 2
-        : shift;
+      const assignedShiftNum = shiftFromShiftType((existingAssignment as any).shift_type) || shift;
       if (assignedShiftNum !== shift) shift = assignedShiftNum as 1 | 2;
     }
   }
@@ -1689,10 +1736,14 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
       }
       // 2-shift outlet
       const off = (dayoffs || []).some((item: any) => item.date === date && item.shift === shift);
-      const rec = (schedules || []).find((item: any) => item.date === date && item.shift === shift);
+      const recRaw = (schedules || []).find((item: any) => item.date === date && item.shift === shift);
       // Cari assignment yang cocok untuk shift ini
       const targetShiftType = shift === 1 ? ["SHIFT_1", "FULL_SHIFT"] : ["SHIFT_2", "FULL_SHIFT"];
       const ass = dayAssignments.find((a: any) => targetShiftType.includes(a.shift_type));
+      const legacyConflictsWithAssignment = recRaw?.staff_id
+        ? dayAssignments.some((a: any) => a.staff_id === recRaw.staff_id)
+        : false;
+      const rec = ass || legacyConflictsWithAssignment ? null : recRaw;
 
       return {
         shift,
@@ -2629,6 +2680,143 @@ async function adminPayroll(db: Db, method: string, body: Body) {
   throw new HttpError("Method payroll tidak valid", 405);
 }
 
+async function activeAssignmentsForShift(db: Db, outletId: string, date: string, shift: 1 | 2) {
+  const { data, error } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("outlet_id", outletId)
+    .eq("date", date)
+    .in("status", [...ACTIVE_ASSIGNMENT_STATUSES])
+    .in("shift_type", [shiftTypeFromShift(shift), "FULL_SHIFT"]);
+  if (error) throw error;
+  return data || [];
+}
+
+async function cancelMutableAssignments(db: Db, assignments: Body[], reason: string) {
+  const ids = assignments.filter(isMutableAssignment).map((row) => String(row.id || "")).filter(Boolean);
+  if (ids.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from("staff_shift_assignments")
+    .update({
+      status: "cancelled",
+      cancelled_at: now,
+      cancel_reason: reason,
+      updated_at: now
+    })
+    .in("id", ids);
+  if (error) throw error;
+}
+
+async function cancelAdminAssignmentsForShift(db: Db, outletId: string, date: string, shift: 1 | 2, reason: string) {
+  const assignments = await activeAssignmentsForShift(db, outletId, date, shift);
+  const locked = assignments.find((row: Body) => !isMutableAssignment(row));
+  if (locked) {
+    throw new HttpError(
+      "Jadwal shift ini sudah dikunci karena staff sudah absen masuk. Koreksi lewat menu Absensi.",
+      400,
+      "SCHEDULE_LOCKED"
+    );
+  }
+  await cancelMutableAssignments(db, assignments as Body[], reason);
+}
+
+async function syncAdminShiftAssignment(db: Db, params: {
+  outletId: string;
+  date: string;
+  shift: 1 | 2;
+  staffId: string;
+  staffName: string;
+}) {
+  const { outletId, date, shift, staffId, staffName } = params;
+  const targetShiftType = shiftTypeFromShift(shift);
+  const now = new Date().toISOString();
+
+  const { data: checkedIn, error: checkedInError } = await db
+    .from("attendance")
+    .select("id,shift")
+    .eq("staff_id", staffId)
+    .eq("date", date)
+    .not("checkin_time", "is", null)
+    .limit(1);
+  if (checkedInError) throw checkedInError;
+  if ((checkedIn || []).length > 0) {
+    throw new HttpError(
+      "Staff sudah absen masuk pada tanggal ini. Koreksi shift lewat menu Absensi agar gaji ikut dihitung ulang.",
+      400,
+      "SCHEDULE_LOCKED"
+    );
+  }
+
+  const { data: staffAssignments, error: staffAssignmentError } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("staff_id", staffId)
+    .eq("date", date)
+    .in("status", [...ACTIVE_ASSIGNMENT_STATUSES])
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  if (staffAssignmentError) throw staffAssignmentError;
+  const existingStaffAssignment = (staffAssignments || [])[0] as Body | undefined;
+  if (existingStaffAssignment && !isMutableAssignment(existingStaffAssignment)) {
+    throw new HttpError(
+      "Jadwal staff ini sudah dikunci karena sudah absen masuk. Koreksi lewat menu Absensi.",
+      400,
+      "SCHEDULE_LOCKED"
+    );
+  }
+
+  const slotAssignments = await activeAssignmentsForShift(db, outletId, date, shift);
+  const lockedSlot = (slotAssignments as Body[]).find((row) => row.staff_id !== staffId && !isMutableAssignment(row));
+  if (lockedSlot) {
+    throw new HttpError(
+      "Shift ini sudah dikunci oleh absensi staff lain. Koreksi lewat menu Absensi.",
+      400,
+      "SCHEDULE_LOCKED"
+    );
+  }
+  await cancelMutableAssignments(
+    db,
+    (slotAssignments as Body[]).filter((row) => row.staff_id !== staffId),
+    "Ditimpa assignment admin"
+  );
+
+  const payload: Body = {
+    outlet_id: outletId,
+    staff_id: staffId,
+    staff_name: staffName,
+    date,
+    shift_type: targetShiftType,
+    status: "admin_override",
+    source: "admin",
+    requested_at: now,
+    confirmed_at: now,
+    cancelled_at: null,
+    cancel_reason: null,
+    updated_at: now,
+    created_by: "Admin"
+  };
+
+  if (existingStaffAssignment) {
+    const { data, error } = await db
+      .from("staff_shift_assignments")
+      .update(payload)
+      .eq("id", existingStaffAssignment.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await db
+    .from("staff_shift_assignments")
+    .insert(payload)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 async function adminSchedule(db: Db, method: string, body: Body) {
   if (method === "GET") {
     const outletId = stringBody(body, "outletId");
@@ -2672,6 +2860,7 @@ async function adminSchedule(db: Db, method: string, body: Body) {
           "BOTH_SHIFTS_OFF"
         );
       }
+      await cancelAdminAssignmentsForShift(db, outletId, date, shift, "Shift ditandai libur admin");
 
       const { data, error } = await db
         .from("shift_schedule")
@@ -2705,6 +2894,12 @@ async function adminSchedule(db: Db, method: string, body: Body) {
       assertOperationalStaff(staff, "Jadwal hanya bisa di-assign ke staff aktif.");
       staffName = staff.name;
     }
+    let assignment: Body | null = null;
+    if (staffId && staffName) {
+      assignment = await syncAdminShiftAssignment(db, { outletId, date, shift, staffId, staffName });
+    } else {
+      await cancelAdminAssignmentsForShift(db, outletId, date, shift, stringBody(body, "cancel_reason", "Dibatalkan admin"));
+    }
     const status = staffId ? "claimed" : "open";
     const { data, error } = await db
       .from("shift_schedule")
@@ -2728,7 +2923,7 @@ async function adminSchedule(db: Db, method: string, body: Body) {
     if (error) throw error;
     await db.from("shift_dayoff").delete().eq("outlet_id", outletId).eq("date", date).eq("shift", shift);
     await logAudit(db, "admin_override_schedule", "Admin", { outletId, date, shift, staffId });
-    return ok({ schedule: data });
+    return ok({ schedule: data, assignment });
   }
 
   if (method === "DELETE") {

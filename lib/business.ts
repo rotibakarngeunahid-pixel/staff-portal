@@ -95,7 +95,10 @@ export function parseTimeToMinutes(time?: string | null) {
 
 export function dateTimeUtc(date: string, time?: string | null) {
   const safeTime = time && /^\d{1,2}:\d{2}/.test(time) ? time.slice(0, 5) : "00:00";
-  return new Date(`${date}T${safeTime}:00+07:00`);
+  // Semua jam yang disimpan di database (shift start/end, dsb) menggunakan WITA (UTC+8 = Asia/Makassar).
+  // Gunakan +08:00 agar kalkulasi keterlambatan tepat. Sebelumnya pakai +07:00 (WIB) sehingga
+  // shiftStart dihitung 1 jam lebih lambat dari seharusnya, menyebabkan keterlambatan tidak terdeteksi.
+  return new Date(`${date}T${safeTime}:00+08:00`);
 }
 
 export function isTimeWithinWindow(current: string, start?: string | null, end?: string | null) {
