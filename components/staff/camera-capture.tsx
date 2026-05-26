@@ -20,6 +20,51 @@ interface CameraCaptureProps {
 }
 
 type Phase = "starting" | "live" | "processing" | "preview" | "error";
+type CameraErrorKind = "permission" | "not-found" | "unsupported" | "unknown";
+type CameraPermissionState = PermissionState | "unknown";
+
+function getDomErrorName(error: unknown) {
+  if (error && typeof error === "object" && "name" in error) {
+    return String((error as { name?: unknown }).name || "");
+  }
+  return "";
+}
+
+function getCameraErrorKind(error: unknown): CameraErrorKind {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return "unsupported";
+  const name = getDomErrorName(error);
+  if (name === "NotAllowedError" || name === "PermissionDeniedError" || name === "SecurityError") {
+    return "permission";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") return "not-found";
+  return "unknown";
+}
+
+async function getCameraPermissionState(): Promise<CameraPermissionState> {
+  if (typeof navigator === "undefined" || !navigator.permissions?.query) return "unknown";
+  try {
+    const status = await navigator.permissions.query({ name: "camera" as PermissionName });
+    return status.state;
+  } catch {
+    return "unknown";
+  }
+}
+
+function getCameraErrorMessage(kind: CameraErrorKind, permissionState: CameraPermissionState) {
+  if (kind === "permission") {
+    if (permissionState === "denied") {
+      return "Izin kamera masih diblokir browser.\nBuka pengaturan situs, ubah Kamera menjadi Izinkan, lalu tekan tombol di bawah.";
+    }
+    return "Browser belum memberi akses kamera.\nTekan Izinkan Kamera untuk menampilkan permintaan izin lagi.";
+  }
+  if (kind === "not-found") {
+    return "Kamera tidak ditemukan.\nPastikan perangkat memiliki kamera dan tidak sedang dipakai aplikasi lain.";
+  }
+  if (kind === "unsupported") {
+    return "Browser ini tidak mendukung akses kamera.\nBuka aplikasi dengan browser modern dan pastikan memakai HTTPS.";
+  }
+  return "Kamera tidak dapat diakses.\nPastikan izin kamera sudah diberikan di browser.";
+}
 
 function formatWatermarkTime(date: Date) {
   const dayDate = new Intl.DateTimeFormat("id-ID", {
@@ -145,6 +190,8 @@ export function CameraCapture({
   const [phase, setPhase] = useState<Phase>("starting");
   const [preview, setPreview] = useState<CapturedPhoto | null>(null);
   const [errMsg, setErrMsg] = useState("");
+  const [errKind, setErrKind] = useState<CameraErrorKind>("unknown");
+  const [permissionState, setPermissionState] = useState<CameraPermissionState>("unknown");
   const [torchInfo, setTorchInfo] = useState("");
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
@@ -163,13 +210,16 @@ export function CameraCapture({
   }, []);
 
   async function startCamera() {
+    stopCamera();
     setPhase("starting");
     setErrMsg("");
+    setErrKind("unknown");
     setTorchInfo("");
     setConfirming(false);
     setTorchOn(false);
     setTorchSupported(false);
     try {
+      setPermissionState(await getCameraPermissionState());
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: facing },
@@ -190,8 +240,12 @@ export function CameraCapture({
           videoRef.current?.play().then(() => setPhase("live")).catch(() => setPhase("live"));
         };
       }
-    } catch {
-      setErrMsg("Kamera tidak dapat diakses.\nPastikan izin kamera sudah diberikan di browser.");
+    } catch (err) {
+      const kind = getCameraErrorKind(err);
+      const nextPermissionState = await getCameraPermissionState();
+      setErrKind(kind);
+      setPermissionState(nextPermissionState);
+      setErrMsg(getCameraErrorMessage(kind, nextPermissionState));
       setPhase("error");
     }
   }
@@ -287,6 +341,11 @@ export function CameraCapture({
   }
 
   const isMirrored = facing === "user";
+  const isPermissionError = errKind === "permission";
+  const retryLabel = isPermissionError ? "Izinkan Kamera" : "Coba Lagi";
+  const permissionHelp = permissionState === "denied"
+    ? "Jika prompt izin tidak muncul, buka ikon gembok atau pengaturan situs di browser, ubah Kamera ke Izinkan, lalu tekan tombol ini lagi."
+    : "Pilih Izinkan saat browser menampilkan permintaan akses kamera.";
 
   return (
     <div className="camera-overlay">
@@ -384,8 +443,16 @@ export function CameraCapture({
             <p style={{ color: "#fff", fontSize: 14, fontWeight: 600, textAlign: "center", lineHeight: 1.6, whiteSpace: "pre-line" }}>
               {errMsg}
             </p>
+            {isPermissionError && (
+              <p style={{
+                color: "rgba(255,255,255,0.72)", fontSize: 12, fontWeight: 600,
+                textAlign: "center", lineHeight: 1.6, margin: "-6px 0 0", maxWidth: 320
+              }}>
+                {permissionHelp}
+              </p>
+            )}
             <button className="camera-ghost-btn" onClick={startCamera}>
-              Coba Lagi
+              {retryLabel}
             </button>
           </div>
         )}
