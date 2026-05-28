@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   Banknote,
@@ -9,9 +10,13 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock,
+  ExternalLink,
   FileText,
+  ImageIcon,
+  Maximize2,
   Sparkles,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 import { formatDateID, formatDateWithDayID, rupiah } from "@/lib/format";
 import { shiftLabel, type PayrollPaymentStatus } from "@/lib/payroll";
@@ -167,13 +172,119 @@ export function PayrollWorkDaySummary({ summary }: { summary: PayrollSummaryView
   );
 }
 
+export type PaymentProofItem = {
+  id: string;
+  paid_at: string;
+  amount: number;
+  proof_url: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+};
+
+function ProofImageModal({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="payroll-proof-modal-backdrop" onClick={onClose} role="presentation">
+      <div className="payroll-proof-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <button type="button" className="payroll-proof-modal-close" onClick={onClose} aria-label="Tutup">
+          <X size={18} />
+        </button>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt="Bukti pembayaran" />
+      </div>
+    </div>
+  );
+}
+
+/** Panel bukti di atas halaman — pratinjau + tab tanpa scroll ke riwayat */
+export function PayrollProofPanel({ payments }: { payments: PaymentProofItem[] }) {
+  const withProof = payments.filter((p) => p.proof_url);
+  const [activeId, setActiveId] = useState("");
+  const [modalUrl, setModalUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const list = payments.filter((p) => p.proof_url);
+    if (!list.length) return;
+    setActiveId((prev) => (list.some((p) => p.id === prev) ? prev : list[0].id));
+  }, [payments]);
+
+  if (!withProof.length) return null;
+
+  const active = withProof.find((p) => p.id === activeId) ?? withProof[0];
+
+  return (
+    <section className="payroll-proof-panel">
+      <div className="payroll-proof-panel-head">
+        <div className="title">
+          <ImageIcon size={16} strokeWidth={2.5} />
+          Bukti Pembayaran
+        </div>
+        <span className="status-pill status-ok" style={{ fontSize: 10 }}>{withProof.length} bukti</span>
+      </div>
+
+      {withProof.length > 1 && (
+        <div className="payroll-proof-tabs">
+          {withProof.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`payroll-proof-tab ${p.id === active.id ? "active" : ""}`}
+              onClick={() => setActiveId(p.id)}
+            >
+              <p className="date">{formatDateID(p.paid_at.slice(0, 10))}</p>
+              <p className="amt">{rupiah(p.amount)}</p>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="payroll-proof-preview">
+        {active.date_from && active.date_to && (
+          <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+            <CalendarCheck size={12} />
+            Periode shift: {formatDateID(active.date_from)}
+            {active.date_from !== active.date_to ? ` – ${formatDateID(active.date_to)}` : ""}
+            <span style={{ marginLeft: "auto", fontWeight: 800, color: "var(--success)" }}>{rupiah(active.amount)}</span>
+          </p>
+        )}
+        <div className="payroll-proof-image-wrap">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={active.proof_url!} alt={`Bukti transfer ${formatDateID(active.paid_at.slice(0, 10))}`} />
+        </div>
+        <div className="payroll-proof-actions">
+          <button type="button" className="btn-proof btn-proof-primary" onClick={() => setModalUrl(active.proof_url!)}>
+            <Maximize2 size={14} />
+            Perbesar
+          </button>
+          <a href={active.proof_url!} target="_blank" rel="noreferrer" className="btn-proof btn-proof-soft">
+            <ExternalLink size={14} />
+            Buka tab baru
+          </a>
+        </div>
+      </div>
+
+      {modalUrl && <ProofImageModal url={modalUrl} onClose={() => setModalUrl(null)} />}
+    </section>
+  );
+}
+
 export function PayrollPaymentCard({
   paidAt,
   amount,
   dateFrom,
   dateTo,
   note,
-  proofUrl
+  proofUrl,
+  compact
 }: {
   paidAt: string;
   amount: number;
@@ -181,7 +292,10 @@ export function PayrollPaymentCard({
   dateTo: string | null;
   note: string | null;
   proofUrl: string | null;
+  compact?: boolean;
 }) {
+  const [showPreview, setShowPreview] = useState(false);
+  const [modalUrl, setModalUrl] = useState<string | null>(null);
   const cleanNote = note
     ?.replace(/\[LEBIH_BAYAR:\d+\]/g, "")
     .replace(/\[MODE:\w+\]/g, "")
@@ -201,7 +315,7 @@ export function PayrollPaymentCard({
               {dateFrom !== dateTo ? ` – ${formatDateID(dateTo)}` : ""}
             </p>
           )}
-          {cleanNote ? (
+          {!compact && cleanNote ? (
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, display: "flex", gap: 5, alignItems: "flex-start" }}>
               <FileText size={12} style={{ flexShrink: 0, marginTop: 1 }} />
               {cleanNote}
@@ -211,10 +325,36 @@ export function PayrollPaymentCard({
         <span className="payroll-payment-amount">{rupiah(amount)}</span>
       </div>
       {proofUrl && (
-        <a href={proofUrl} target="_blank" rel="noreferrer" className="payroll-proof-link">
-          🧾 Lihat bukti pembayaran
-        </a>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="payroll-proof-link"
+              style={{ border: "none", cursor: "pointer", flex: 1 }}
+              onClick={() => setShowPreview((v) => !v)}
+            >
+              <ImageIcon size={13} />
+              {showPreview ? "Sembunyikan bukti" : "Lihat bukti di sini"}
+            </button>
+            <button
+              type="button"
+              className="payroll-proof-link"
+              style={{ border: "none", cursor: "pointer" }}
+              onClick={() => setModalUrl(proofUrl)}
+            >
+              <Maximize2 size={13} />
+              Perbesar
+            </button>
+          </div>
+          {showPreview && (
+            <div className="payroll-proof-image-wrap" style={{ maxHeight: 200 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={proofUrl} alt="Bukti pembayaran" />
+            </div>
+          )}
+        </div>
       )}
+      {modalUrl && <ProofImageModal url={modalUrl} onClose={() => setModalUrl(null)} />}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { StaffPage } from "@/components/staff/staff-page";
 import {
   PayrollHero,
   PayrollPaymentCard,
+  PayrollProofPanel,
   PayrollSectionHeader,
   PayrollWorkDaySummary,
   type PayrollSummaryView
@@ -153,6 +154,7 @@ export default function StaffPayrollPage() {
       ) : summary ? (
         <div className="payroll-stack">
           <PayrollHero summary={summary} />
+          {data?.payments?.length ? <PayrollProofPanel payments={data.payments} /> : null}
           <PayrollWorkDaySummary summary={summary} />
         </div>
       ) : null}
@@ -238,6 +240,11 @@ export default function StaffPayrollPage() {
 
       <section>
         <PayrollSectionHeader icon={Receipt} title="Riwayat Pembayaran" />
+        {!loading && (data?.payments || []).some((p) => p.proof_url) && (
+          <p className="payroll-hint" style={{ marginTop: -4, marginBottom: 10 }}>
+            Bukti transfer juga tersedia di bagian atas halaman tanpa perlu scroll.
+          </p>
+        )}
         {loading ? (
           <div style={{ height: 80, borderRadius: 16, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
         ) : (data?.payments || []).length === 0 ? (
@@ -253,6 +260,7 @@ export default function StaffPayrollPage() {
                 dateTo={payment.date_to}
                 note={payment.note}
                 proofUrl={payment.proof_url}
+                compact
               />
             ))}
           </div>

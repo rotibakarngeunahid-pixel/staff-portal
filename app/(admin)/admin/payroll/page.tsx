@@ -9,6 +9,7 @@ import {
   PayrollHero,
   PayrollModeTabs,
   PayrollPaymentCard,
+  PayrollProofPanel,
   PayrollPreviewPanel,
   PayrollShiftPanel,
   type PayrollSummaryView
@@ -243,6 +244,7 @@ export default function AdminPayrollPage() {
               totalPaid={summary.totalPaid}
               balance={summary.balance}
             />
+            {payments.some((p) => p.proof_url) && <PayrollProofPanel payments={payments} />}
           </div>
         ) : (
           <p className="payroll-empty">Pilih staff untuk melihat ringkasan gaji</p>
@@ -352,7 +354,10 @@ export default function AdminPayrollPage() {
       </AdminSection>
 
       {!loading && payments.length > 0 && (
-        <AdminSection title={`Riwayat Pembayaran (${payments.length})`} subtitle="Transfer yang sudah diproses untuk staff ini">
+        <AdminSection
+          title={`Riwayat Pembayaran (${payments.length})`}
+          subtitle="Bukti transfer utama ada di panel hijau di atas — bagian ini untuk detail lengkap"
+        >
           <div className="payroll-stack">
             {payments.map((payment) => (
               <PayrollPaymentCard
@@ -363,6 +368,7 @@ export default function AdminPayrollPage() {
                 dateTo={payment.date_to}
                 note={payment.note}
                 proofUrl={payment.proof_url}
+                compact
               />
             ))}
           </div>
