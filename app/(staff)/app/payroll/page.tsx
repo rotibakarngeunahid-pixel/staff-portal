@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
+import { shiftLabel, type PayrollPaymentStatus } from "@/lib/payroll";
 
 type AttendanceRow = {
   id: string;
@@ -20,9 +21,21 @@ type AttendanceRow = {
   flags: string | null;
 };
 
+type PayrollSummary = {
+  totalEarned: number;
+  totalPaid: number;
+  balance: number;
+  status: PayrollPaymentStatus;
+  statusLabel: string;
+  paidShiftCount: number;
+  unpaidShiftCount: number;
+  paidShifts: Array<{ id: string; date: string; shift: number; final_salary: number }>;
+  unpaidShifts: Array<{ id: string; date: string; shift: number; final_salary: number }>;
+};
+
 type PayrollPayload = {
   ok: true;
-  summary: { totalEarned: number; totalPaid: number; balance: number };
+  summary: PayrollSummary;
   attendance: AttendanceRow[];
   payments: Array<{
     id: string;
@@ -35,6 +48,12 @@ type PayrollPayload = {
   }>;
   outlet: { shift1_start: string | null; shift2_start: string | null } | null;
   config: { lateToleranceMinutes: number; deductionPerMinute: number };
+};
+
+const STATUS_STYLE: Record<PayrollPaymentStatus, { bg: string; color: string; border: string }> = {
+  lunas: { bg: "var(--success-bg)", color: "var(--success)", border: "var(--success-border)" },
+  sebagian: { bg: "var(--warning-bg)", color: "var(--warning)", border: "var(--warning-border)" },
+  belum_lunas: { bg: "rgba(192,57,43,.06)", color: "var(--primary)", border: "rgba(192,57,43,.2)" }
 };
 
 function formatTime(isoString: string | null | undefined): string {
@@ -61,7 +80,7 @@ function LateDetail({
   if (!row.late_minutes || row.late_minutes <= 0) return null;
 
   const dateLabel = formatDateWithDayID(row.date);
-  const shiftLabel = row.shift === 0 ? "Full Shift" : `Shift ${row.shift}`;
+  const shiftLbl = row.shift === 0 ? "Full Shift" : `Shift ${row.shift}`;
   const jadwalMasuk = shiftStartLabel(row, outlet);
   const actualMasuk = formatTime(row.checkin_time);
   const lateMin = row.late_minutes;
@@ -78,7 +97,7 @@ function LateDetail({
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: "#78350F", lineHeight: 1.6 }}>
         <p>
-          Pada tanggal <strong>{dateLabel}</strong> ({shiftLabel}), Anda terlambat{" "}
+          Pada tanggal <strong>{dateLabel}</strong> ({shiftLbl}), Anda terlambat{" "}
           <strong>{lateMin} menit</strong>.
         </p>
         {jadwalMasuk && (
@@ -100,6 +119,40 @@ function LateDetail({
           {lateMin} menit × {rupiah(deductPer)} = {rupiah(totalPotongan)}
         </p>
       </div>
+    </div>
+  );
+}
+
+function ShiftDateList({
+  title,
+  shifts,
+  variant
+}: {
+  title: string;
+  shifts: PayrollSummary["paidShifts"];
+  variant: "paid" | "unpaid";
+}) {
+  if (!shifts.length) return null;
+  const isPaid = variant === "paid";
+  return (
+    <div style={{
+      background: "#fff",
+      border: `1px solid ${isPaid ? "var(--success-border)" : "var(--warning-border)"}`,
+      borderRadius: 12, padding: "12px 14px", marginBottom: 8
+    }}>
+      <p style={{
+        fontSize: 12, fontWeight: 800, marginBottom: 8,
+        color: isPaid ? "var(--success)" : "var(--warning)"
+      }}>
+        {title} ({shifts.length})
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
+        {shifts.map((row) => (
+          <li key={row.id}>
+            {formatDateWithDayID(row.date)} · {shiftLabel(row.shift)} · {rupiah(row.final_salary)}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -127,9 +180,12 @@ export default function StaffPayrollPage() {
 
   useEffect(() => { load(); }, []);
 
+  const summary = data?.summary;
+  const status = summary?.status || "belum_lunas";
+  const statusStyle = STATUS_STYLE[status];
+
   return (
-    <StaffPage title="Info Gaji" subtitle="Ringkasan gaji dan pembayaran">
-      {/* Refresh button */}
+    <StaffPage title="Info Gaji" subtitle="Ringkasan gaji, status pembayaran, dan rincian per shift">
       <button
         className="btn btn-soft"
         style={{ fontSize: 12, padding: "9px 14px", alignSelf: "flex-start" }}
@@ -140,7 +196,6 @@ export default function StaffPayrollPage() {
         {loading ? "Memuat..." : "Refresh"}
       </button>
 
-      {/* Error */}
       {error ? (
         <div style={{
           background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
@@ -150,7 +205,6 @@ export default function StaffPayrollPage() {
         </div>
       ) : null}
 
-      {/* Summary cards */}
       {loading ? (
         <div className="pay-grid">
           {[1, 2, 3].map((i) => (
@@ -161,25 +215,50 @@ export default function StaffPayrollPage() {
           ))}
         </div>
       ) : (
-        <div className="pay-grid">
-          <div className="pay-card-full">
-            <p className="pay-label">Total Gaji Diperoleh</p>
-            <p className="pay-val">{rupiah(data?.summary.totalEarned || 0)}</p>
+        <>
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            padding: "10px 16px", borderRadius: 12, marginBottom: 4,
+            background: statusStyle.bg, border: `1px solid ${statusStyle.border}`,
+            fontSize: 14, fontWeight: 900, color: statusStyle.color
+          }}>
+            Status Pembayaran: {summary?.statusLabel || "Belum Lunas"}
           </div>
-          <div className="pay-card">
-            <p className="pay-label">Sudah Dibayar</p>
-            <p className="pay-val" style={{ color: "var(--success)" }}>{rupiah(data?.summary.totalPaid || 0)}</p>
+
+          <div className="pay-grid">
+            <div className="pay-card-full">
+              <p className="pay-label">Total Gaji</p>
+              <p className="pay-val">{rupiah(summary?.totalEarned || 0)}</p>
+            </div>
+            <div className="pay-card">
+              <p className="pay-label">Sudah Dibayar</p>
+              <p className="pay-val" style={{ color: "var(--success)" }}>{rupiah(summary?.totalPaid || 0)}</p>
+            </div>
+            <div className="pay-card">
+              <p className="pay-label">Sisa Gaji</p>
+              <p className="pay-val" style={{ color: summary?.balance ? "var(--primary)" : "var(--muted-light)" }}>
+                {rupiah(summary?.balance || 0)}
+              </p>
+            </div>
           </div>
-          <div className="pay-card">
-            <p className="pay-label">Belum Dibayar</p>
-            <p className="pay-val" style={{ color: data?.summary.balance ? "var(--primary)" : "var(--muted-light)" }}>
-              {rupiah(data?.summary.balance || 0)}
-            </p>
-          </div>
-        </div>
+
+          {!loading && summary && (summary.paidShifts.length > 0 || summary.unpaidShifts.length > 0) && (
+            <div style={{ marginTop: 4, marginBottom: 8 }}>
+              <h2 style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Ringkasan Hari Kerja</h2>
+              <ShiftDateList title="Sudah dibayar" shifts={summary.paidShifts} variant="paid" />
+              <ShiftDateList title="Belum dibayar" shifts={summary.unpaidShifts} variant="unpaid" />
+              <p style={{ fontSize: 11, color: "var(--muted-light)", lineHeight: 1.5, padding: "0 4px" }}>
+                {summary.status === "sebagian"
+                  ? "Sebagian gaji sudah ditransfer. Shift di bawah \"Sudah dibayar\" sudah lunas; sisanya menunggu pembayaran berikutnya."
+                  : summary.status === "lunas"
+                    ? "Seluruh gaji shift Anda sudah dibayar."
+                    : "Belum ada pembayaran yang dicatat. Gaji akan diperbarui setelah admin memproses transfer."}
+              </p>
+            </div>
+          )}
+        </>
       )}
 
-      {/* Attendance history */}
       <div>
         <h2 style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginTop: 4 }}>Rincian Shift</h2>
 
@@ -207,13 +286,12 @@ export default function StaffPayrollPage() {
                 key={row.id}
                 style={{
                   background: "#fff",
-                  border: `1px solid ${row.paid_status ? "var(--border)" : "var(--warning-border)"}`,
+                  border: `1px solid ${row.paid_status ? "var(--success-border)" : "var(--warning-border)"}`,
                   borderRadius: 14,
                   padding: "12px 14px",
                   boxShadow: "var(--shadow-xs)"
                 }}
               >
-                {/* Row 1: date + shift + status */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)" }}>
@@ -229,21 +307,18 @@ export default function StaffPayrollPage() {
                   </div>
                   <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}
                     style={{ flexShrink: 0, fontSize: 11 }}>
-                    {row.paid_status ? "Dibayar" : "Belum dibayar"}
+                    {row.paid_status ? "Lunas" : "Belum dibayar"}
                   </span>
                 </div>
 
-                {/* Row 2: jam masuk - jam pulang */}
                 <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
                   🕐 {hhmm(row.checkin_time) || "—"} → {hhmm(row.checkout_time) || "Belum pulang"}
                 </p>
 
-                {/* Row 3: detail keterlambatan (jika terlambat) */}
                 {row.late_minutes > 0 && data && (
                   <LateDetail row={row} outlet={data.outlet} config={data.config} />
                 )}
 
-                {/* Row 4: ringkasan potongan (compact) */}
                 {row.deduction > 0 && (
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -257,7 +332,6 @@ export default function StaffPayrollPage() {
                   </div>
                 )}
 
-                {/* Row 5: full shift bonus */}
                 {String(row.flags || "").includes("FULL_SHIFT_2X") && (
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -269,16 +343,18 @@ export default function StaffPayrollPage() {
                   </div>
                 )}
 
-                {/* Row 6: final salary */}
                 <div style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  background: "var(--success-bg)", borderRadius: 8, padding: "7px 10px",
-                  border: "1px solid var(--success-border)"
+                  background: row.paid_status ? "var(--success-bg)" : "var(--warning-bg)",
+                  borderRadius: 8, padding: "7px 10px",
+                  border: `1px solid ${row.paid_status ? "var(--success-border)" : "var(--warning-border)"}`
                 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--success)" }}>Gaji shift ini</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: row.paid_status ? "var(--success)" : "var(--warning)" }}>
+                    Gaji shift ini
+                  </span>
                   <span style={{
                     fontFamily: "var(--font-nunito,sans-serif)", fontSize: 15, fontWeight: 900,
-                    color: row.final_salary > 0 ? "var(--success)" : "var(--muted)"
+                    color: row.final_salary > 0 ? (row.paid_status ? "var(--success)" : "var(--warning)") : "var(--muted)"
                   }}>
                     {rupiah(row.final_salary)}
                   </span>
@@ -289,7 +365,6 @@ export default function StaffPayrollPage() {
         )}
       </div>
 
-      {/* Payments history */}
       <div>
         <h2 style={{ fontSize: 14, fontWeight: 900, marginBottom: 10, marginTop: 4 }}>Riwayat Pembayaran</h2>
 
@@ -316,12 +391,13 @@ export default function StaffPayrollPage() {
                     </p>
                     {payment.date_from && payment.date_to && (
                       <p style={{ fontSize: 11, color: "var(--muted)" }}>
-                        Periode: {formatDateID(payment.date_from)} – {formatDateID(payment.date_to)}
+                        Shift: {formatDateID(payment.date_from)}
+                        {payment.date_from !== payment.date_to ? ` – ${formatDateID(payment.date_to)}` : ""}
                       </p>
                     )}
                     {payment.note && (
                       <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                        {payment.note.replace(/\[LEBIH_BAYAR:\d+\]/g, "").trim() || null}
+                        {payment.note.replace(/\[LEBIH_BAYAR:\d+\]/g, "").replace(/\[MODE:\w+\]/g, "").trim() || null}
                       </p>
                     )}
                   </div>

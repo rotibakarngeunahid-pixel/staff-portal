@@ -40,6 +40,12 @@ import {
   previewAttendanceImport
 } from "@/lib/attendance-import";
 import { photoStorageBaseUrl } from "@/lib/env";
+import {
+  allocatePaymentByAmount,
+  allocatePaymentByDates,
+  buildPayrollSummary,
+  compareAttendanceChronological
+} from "@/lib/payroll";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { uploadImage } from "@/lib/storage";
 import type { ConfigMap, Outlet, SessionPayload, Staff } from "@/types/domain";
@@ -1632,13 +1638,12 @@ async function staffPayroll(db: Db, request: NextRequest) {
   if (payError) throw payError;
 
   const rows = attendance || [];
-  const totalEarned = rows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
-  const totalPaid = (payments || []).reduce((sum, row) => sum + normalizeCurrency(row.amount), 0);
+  const summary = buildPayrollSummary(rows, payments || []);
 
   return ok({
     attendance: rows,
     payments: payments || [],
-    summary: { totalEarned, totalPaid, balance: totalEarned - totalPaid },
+    summary,
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
       shift2_start: outlet.shift2_start || null
@@ -2603,78 +2608,161 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     const payroll = (staff || []).map((member) => {
       const rows = (attendance || []).filter((row) => row.staff_id === member.id);
       const pays = (payments || []).filter((row) => row.staff_id === member.id);
-      const totalEarned = rows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
-      const totalPaid = pays.reduce((sum, row) => sum + normalizeCurrency(row.amount), 0);
-      return { ...member, attendance: rows, payments: pays, totalEarned, totalPaid, balance: totalEarned - totalPaid };
+      const summary = buildPayrollSummary(rows, pays);
+      return {
+        ...member,
+        attendance: rows,
+        payments: pays,
+        totalEarned: summary.totalEarned,
+        totalPaid: summary.totalPaid,
+        balance: summary.balance,
+        summary
+      };
     });
     return ok({ payroll });
   }
 
   if (method === "POST") {
+    const preview = Boolean(body.preview);
     const staffId = stringBody(body, "staffId");
-    const dateFrom = stringBody(body, "dateFrom");
-    const dateTo = stringBody(body, "dateTo");
-    const amount = numberBody(body, "amount");
-    if (!staffId || !dateFrom || !dateTo || amount <= 0) {
-      throw new HttpError("Staff, range tanggal, dan jumlah bayar wajib diisi");
-    }
+    const mode = stringBody(body, "mode") || "amount";
+    if (!staffId) throw new HttpError("Staff wajib dipilih");
+
     const { data: staff, error: staffError } = await db.from("staff").select("id,name").eq("id", staffId).single();
     if (staffError) throw staffError;
-    const { data: rows, error: rowsError } = await db
-      .from("attendance")
-      .select("*")
-      .eq("staff_id", staffId)
-      .gte("date", dateFrom)
-      .lte("date", dateTo)
-      .eq("paid_status", false);
-    if (rowsError) throw rowsError;
-    const earned = (rows || []).reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
 
-    // Cegah double payment untuk range tanggal dan staff yang sama
-    const { data: existingPayment } = await db
-      .from("payments")
-      .select("id")
+    const { data: unpaidRows, error: rowsError } = await db
+      .from("attendance")
+      .select("id,date,shift,final_salary,paid_status")
       .eq("staff_id", staffId)
-      .eq("date_from", dateFrom)
-      .eq("date_to", dateTo)
-      .maybeSingle();
-    if (existingPayment) {
-      throw new HttpError(
-        "Pembayaran untuk staff dan periode ini sudah pernah diproses sebelumnya. Cek riwayat pembayaran untuk memastikan.",
-        409,
-        "DUPLICATE_PAYMENT"
-      );
+      .eq("paid_status", false)
+      .order("date", { ascending: true })
+      .order("shift", { ascending: true });
+    if (rowsError) throw rowsError;
+
+    const unpaid = (unpaidRows || []).map((row) => ({
+      id: String(row.id),
+      date: String(row.date),
+      shift: Number(row.shift || 0),
+      final_salary: normalizeCurrency(row.final_salary),
+      paid_status: false
+    }));
+
+    let allocation;
+    let payAmount = 0;
+
+    if (mode === "dates") {
+      const attendanceIds = Array.isArray(body.attendanceIds)
+        ? body.attendanceIds.map((id) => String(id)).filter(Boolean)
+        : [];
+      if (!attendanceIds.length) {
+        throw new HttpError("Pilih minimal satu tanggal kerja yang akan dibayar");
+      }
+      allocation = allocatePaymentByDates(unpaid, attendanceIds);
+      if (allocation.missingIds.length) {
+        throw new HttpError(
+          "Beberapa shift tidak ditemukan atau sudah dibayar. Muat ulang halaman lalu coba lagi.",
+          400,
+          "INVALID_ATTENDANCE_IDS"
+        );
+      }
+      if (!allocation.covered.length) {
+        throw new HttpError("Tidak ada shift yang dapat dibayar");
+      }
+      payAmount = allocation.totalCovered;
+    } else if (mode === "amount") {
+      payAmount = numberBody(body, "amount");
+      if (payAmount <= 0) throw new HttpError("Nominal pembayaran wajib diisi dan lebih dari 0");
+      allocation = allocatePaymentByAmount(unpaid, payAmount);
+      if (!allocation.covered.length) {
+        throw new HttpError(
+          "Nominal tidak cukup untuk menutup gaji 1 shift. Periksa daftar shift belum dibayar.",
+          400,
+          "INSUFFICIENT_AMOUNT"
+        );
+      }
+    } else {
+      throw new HttpError("Mode pembayaran tidak valid. Gunakan 'amount' atau 'dates'.");
+    }
+
+    const covered = allocation.covered.sort(compareAttendanceChronological);
+    const dateFrom = covered[0]?.date || null;
+    const dateTo = covered[covered.length - 1]?.date || null;
+
+    if (preview) {
+      return ok({
+        preview: true,
+        mode,
+        amount: payAmount,
+        allocation: {
+          covered: covered.map((row) => ({
+            id: row.id,
+            date: row.date,
+            shift: row.shift,
+            final_salary: normalizeCurrency(row.final_salary)
+          })),
+          totalCovered: allocation.totalCovered,
+          overpayment: allocation.overpayment,
+          remainingUnpaidSalary: allocation.remainingUnpaidSalary,
+          paidShiftCount: allocation.paidShiftCount,
+          unpaidShiftCount: allocation.unpaidShiftCount
+        }
+      });
     }
 
     const proofId = crypto.randomUUID();
     const proofUrl = body.proof ? await uploadImage(db, `payments/proof/${proofId}.jpg`, body.proof) : "";
-    const overpayment = Math.max(0, amount - earned);
-    const note = [stringBody(body, "note"), overpayment ? `[LEBIH_BAYAR:${overpayment}]` : ""].filter(Boolean).join(" ");
+    const overpayment = allocation.overpayment;
+    const modeTag = mode === "dates" ? "[MODE:tanggal]" : "[MODE:nominal]";
+    const noteParts = [
+      stringBody(body, "note"),
+      modeTag,
+      overpayment ? `[LEBIH_BAYAR:${overpayment}]` : ""
+    ].filter(Boolean);
+    const note = noteParts.join(" ").trim() || null;
+
     const { data: payment, error } = await db
       .from("payments")
       .insert({
         id: proofId,
         staff_id: staffId,
         staff_name: staff.name,
-        amount,
+        amount: payAmount,
         date_from: dateFrom,
         date_to: dateTo,
         proof_url: proofUrl || null,
-        note: note || null
+        note
       })
       .select("*")
       .single();
     if (error) throw error;
-    if ((rows || []).length) {
-      const ids = rows.map((row) => row.id);
-      const { error: updateError } = await db
-        .from("attendance")
-        .update({ paid_status: true, payment_id: payment.id })
-        .in("id", ids);
-      if (updateError) throw updateError;
-    }
-    await logAudit(db, "admin_process_payment", "Admin", { staffId, amount, dateFrom, dateTo, overpayment });
-    return ok({ payment, earned, overpayment });
+
+    const ids = covered.map((row) => row.id);
+    const { error: updateError } = await db
+      .from("attendance")
+      .update({ paid_status: true, payment_id: payment.id })
+      .in("id", ids);
+    if (updateError) throw updateError;
+
+    await logAudit(db, "admin_process_payment", "Admin", {
+      staffId,
+      mode,
+      amount: payAmount,
+      dateFrom,
+      dateTo,
+      overpayment,
+      shiftCount: ids.length
+    });
+
+    return ok({
+      payment,
+      earned: allocation.totalCovered,
+      overpayment,
+      allocation: {
+        coveredShiftCount: allocation.paidShiftCount,
+        remainingUnpaidSalary: allocation.remainingUnpaidSalary
+      }
+    });
   }
 
   throw new HttpError("Method payroll tidak valid", 405);
