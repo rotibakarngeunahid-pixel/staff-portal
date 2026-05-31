@@ -16,6 +16,7 @@ import {
   MapPinned,
   Settings,
   Store,
+  TrendingUp,
   UsersRound
 } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
@@ -30,6 +31,7 @@ const items = [
   { href: "/admin/schedule", label: "Jadwal", icon: CalendarDays },
   { href: "/admin/leave", label: "Libur", icon: CalendarMinus },
   { href: "/admin/payroll", label: "Payroll", icon: BadgeDollarSign },
+  { href: "/admin/payroll-projection", label: "Proyeksi Gaji", icon: TrendingUp },
   { href: "/admin/reports", label: "Laporan", icon: FileImage },
   { href: "/admin/report-cfg", label: "Konfig Laporan", icon: MapPinned },
   { href: "/admin/email", label: "Test Email", icon: MailCheck },

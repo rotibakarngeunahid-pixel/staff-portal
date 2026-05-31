@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { AdminPage } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
@@ -22,6 +23,15 @@ type DashboardPayload = {
   }>;
 };
 
+type ProjectionSummary = {
+  formedSalary: number;
+  projectedNormal: number;
+  estimatedCashNeed: number;
+  averageConfidence: number;
+  staffCount: number;
+  insufficientDataCount: number;
+};
+
 const METRICS = [
   { key: "hadir", label: "Hadir", emoji: "👥", color: "#2980B9", bg: "#EBF5FB" },
   { key: "outlets", label: "Outlet Aktif", emoji: "🏪", color: "#8E44AD", bg: "#F5EEF8" },
@@ -32,6 +42,7 @@ const METRICS = [
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [projection, setProjection] = useState<ProjectionSummary | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -39,9 +50,13 @@ export default function AdminDashboardPage() {
     setLoading(true);
     setError("");
     try {
-      setData(await apiFetch<DashboardPayload>("/api/admin/dashboard", { role: "admin" }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat dashboard");
+      const [dashRes, projRes] = await Promise.allSettled([
+        apiFetch<DashboardPayload>("/api/admin/dashboard", { role: "admin" }),
+        apiFetch<{ ok: true; summary: ProjectionSummary }>("/api/admin/payroll-projection", { role: "admin" })
+      ]);
+      if (dashRes.status === "fulfilled") setData(dashRes.value);
+      else setError(dashRes.reason instanceof Error ? dashRes.reason.message : "Gagal memuat dashboard");
+      if (projRes.status === "fulfilled") setProjection(projRes.value.summary);
     } finally {
       setLoading(false);
     }
@@ -98,6 +113,40 @@ export default function AdminDashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Payroll projection widget */}
+      {(loading || projection) && (
+        <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, marginBottom: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ fontSize: 13, fontWeight: 800 }}>Proyeksi Gaji Berikutnya</h2>
+            <Link href="/admin/payroll-projection" style={{ fontSize: 12, fontWeight: 700, color: "var(--primary)", textDecoration: "none", display: "flex", alignItems: "center", gap: 4 }}>
+              Detail <ArrowRight size={13} />
+            </Link>
+          </div>
+          <div style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            {loading ? (
+              [...Array(3)].map((_, i) => (
+                <div key={i} style={{ height: 60, borderRadius: 10, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
+              ))
+            ) : projection ? (
+              <>
+                <div style={{ background: "#F2F3F4", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#7F8C8D" }}>{rupiah(projection.formedSalary)}</div>
+                  <div style={{ fontSize: 10, color: "#95A5A6", fontWeight: 700, marginTop: 2, textTransform: "uppercase" }}>Sudah Terbentuk</div>
+                </div>
+                <div style={{ background: "#E8F8F0", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#27AE60" }}>{rupiah(projection.projectedNormal)}</div>
+                  <div style={{ fontSize: 10, color: "#27AE60", fontWeight: 700, marginTop: 2, textTransform: "uppercase" }}>Proyeksi Normal</div>
+                </div>
+                <div style={{ background: "#EBF5FB", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#2980B9" }}>{rupiah(projection.estimatedCashNeed)}</div>
+                  <div style={{ fontSize: 10, color: "#2980B9", fontWeight: 700, marginTop: 2, textTransform: "uppercase" }}>Cash Perlu Disiapkan</div>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* Attendance table */}
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>

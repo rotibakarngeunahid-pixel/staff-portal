@@ -49,6 +49,15 @@ import {
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { uploadImage } from "@/lib/storage";
 import type { ConfigMap, Outlet, SessionPayload, Staff } from "@/types/domain";
+import {
+  addDateDays,
+  buildHistoricalPeriods,
+  buildProjectionDetail,
+  calculatePayrollProjection,
+  makeInsufficientDataProjection,
+  resolvePayrollPeriod,
+  summarizeAttendancePeriod
+} from "@/lib/payroll-projection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -2014,6 +2023,8 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
   if (path === "/admin/attendance") return adminAttendance(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
+  if (path === "/admin/payroll-projection" && method === "GET") return adminPayrollProjection(db, body);
+  if (path === "/admin/payroll-projection/detail" && method === "GET") return adminPayrollProjectionDetail(db, body);
   if (path === "/admin/schedule") return adminSchedule(db, method, body);
   if (path === "/admin/leave") return adminLeave(db, method, body);
   if (path === "/admin/reports" && method === "GET") return adminReports(db, body);
@@ -3908,4 +3919,281 @@ async function computeAutoCoverage(db: Db, outletId: string, date: string, exclu
     availableCount: available.length,
     message: "Lebih dari satu staff tersedia, assignment pilih manual"
   };
+}
+
+// ─── Admin Payroll Projection ──────────────────────────────────────────────
+
+async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: string, filterOutletId?: string, includeInactive = false) {
+  let staffQuery = db
+    .from("staff")
+    .select("id,name,outlet_id,salary_per_shift,active,deleted_at,outlets(id,name)")
+    .is("deleted_at", null)
+    .order("name", { ascending: true });
+  if (!includeInactive) staffQuery = staffQuery.eq("active", true);
+  if (filterOutletId) staffQuery = staffQuery.eq("outlet_id", filterOutletId);
+  if (filterStaffId) staffQuery = staffQuery.eq("id", filterStaffId);
+
+  const { data: allStaff, error: staffError } = await staffQuery;
+  if (staffError) throw staffError;
+  if (!allStaff?.length) return { allStaff: [], projections: [] };
+
+  // History range: 7+ months back to cover up to 6 historical periods
+  const rangeStart = addDateDays(asOfDate, -220);
+  const rangeEnd = addDateDays(asOfDate, 40);
+
+  const [
+    { data: allAttendance, error: attError },
+    { data: allPayments, error: payError },
+    { data: allDayoffs, error: dayoffError },
+    { data: allLeaves, error: leaveError },
+    { data: allAssignments, error: assError }
+  ] = await Promise.all([
+    db.from("attendance")
+      .select("staff_id,date,checkin_time,status,final_salary,paid_status,flags")
+      .gte("date", rangeStart)
+      .lte("date", asOfDate)
+      .in("staff_id", allStaff.map((s: any) => s.id)),
+    db.from("payments")
+      .select("staff_id,amount,date_from,date_to")
+      .gte("date_to", rangeStart)
+      .in("staff_id", allStaff.map((s: any) => s.id)),
+    db.from("staff_dayoff")
+      .select("staff_id,date,status")
+      .eq("status", "active")
+      .gte("date", rangeStart)
+      .lte("date", rangeEnd)
+      .in("staff_id", allStaff.map((s: any) => s.id)),
+    db.from("leave_requests")
+      .select("staff_id,date,status")
+      .in("status", ["approved", "pending"])
+      .gte("date", rangeStart)
+      .lte("date", rangeEnd)
+      .in("staff_id", allStaff.map((s: any) => s.id)),
+    db.from("staff_shift_assignments")
+      .select("staff_id,date,shift_type,status")
+      .in("status", ["confirmed", "admin_override", "auto_cover", "locked"])
+      .gt("date", asOfDate)
+      .lte("date", rangeEnd)
+      .in("staff_id", allStaff.map((s: any) => s.id))
+  ]);
+
+  if (attError) throw attError;
+  if (payError) throw payError;
+  if (dayoffError) throw dayoffError;
+  if (leaveError) throw leaveError;
+  if (assError) throw assError;
+
+  const projections = allStaff.map((staff: any) => {
+    const staffAtt = (allAttendance || []).filter((r: any) => r.staff_id === staff.id);
+    const firstAttendanceDate = staffAtt.length > 0
+      ? staffAtt.reduce((min: string, r: any) => r.date < min ? r.date : min, staffAtt[0].date as string)
+      : null;
+
+    if (!firstAttendanceDate) {
+      return makeInsufficientDataProjection(
+        staff.id,
+        staff.name,
+        staff.outlet_id ?? null,
+        (staff.outlets as any)?.name ?? null
+      );
+    }
+
+    const paydayDay = parseInt(firstAttendanceDate.split("-")[2], 10);
+    const period = resolvePayrollPeriod(paydayDay, asOfDate);
+    const historicalPeriods = buildHistoricalPeriods(paydayDay, period.periodStart, 6);
+
+    const staffDayoffs = (allDayoffs || []).filter((d: any) => d.staff_id === staff.id);
+    const staffLeaves = (allLeaves || []).filter((l: any) => l.staff_id === staff.id);
+
+    const blockedDatesPast = new Set<string>();
+    const blockedDaysFuture = new Set<string>();
+    for (const d of staffDayoffs) {
+      if (d.date <= asOfDate) blockedDatesPast.add(d.date);
+      else blockedDaysFuture.add(d.date);
+    }
+    for (const l of staffLeaves) {
+      if (l.status === "approved") {
+        if (l.date <= asOfDate) blockedDatesPast.add(l.date);
+        else blockedDaysFuture.add(l.date);
+      }
+    }
+
+    const pendingLeaveCount = staffLeaves.filter(
+      (l: any) => l.status === "pending" && l.date > asOfDate && l.date <= period.periodEnd
+    ).length;
+
+    const historySummaries = historicalPeriods.map(hp => ({
+      ...summarizeAttendancePeriod(staffAtt, hp.start, hp.end),
+      start: hp.start,
+      end: hp.end
+    }));
+
+    const futureAssignments = (allAssignments || []).filter((a: any) => a.staff_id === staff.id);
+    const payments = (allPayments || []).filter((p: any) => p.staff_id === staff.id);
+
+    return calculatePayrollProjection({
+      staffId: staff.id,
+      staffName: staff.name,
+      outletId: staff.outlet_id ?? null,
+      outletName: (staff.outlets as any)?.name ?? null,
+      salaryPerShift: Number(staff.salary_per_shift) || 0,
+      firstAttendanceDate,
+      paydayDay,
+      asOfDate,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      nextPayday: period.nextPayday,
+      currentAttendance: staffAtt,
+      historySummaries,
+      blockedDatesPast,
+      blockedDaysFuture,
+      pendingLeaveCount,
+      futureAssignments,
+      payments
+    });
+  });
+
+  return { allStaff, projections };
+}
+
+async function adminPayrollProjection(db: Db, body: Body) {
+  const asOfDate = stringBody(body, "asOfDate") || todayJakarta();
+  const filterOutletId = stringBody(body, "outletId") || undefined;
+  const filterStaffId = stringBody(body, "staffId") || undefined;
+  const includeInactive = body.includeInactive === "true" || body.includeInactive === true;
+
+  const { projections } = await buildProjectionData(db, asOfDate, filterStaffId, filterOutletId, Boolean(includeInactive));
+
+  const valid = projections.filter((p: any) => p.status !== "insufficient_data");
+  const fieldSum = (field: string) => valid.reduce((s: number, p: any) => s + (p[field] ?? 0), 0);
+
+  const summary = {
+    formedSalary: fieldSum("formedSalary"),
+    projectedLow: fieldSum("projectedLow"),
+    projectedNormal: fieldSum("projectedNormal"),
+    projectedHigh: fieldSum("projectedHigh"),
+    estimatedCashNeed: fieldSum("cashNeedNormal"),
+    averageConfidence: valid.length > 0
+      ? Math.round(valid.reduce((s: number, p: any) => s + p.confidenceScore, 0) / valid.length)
+      : 0,
+    staffCount: projections.length,
+    insufficientDataCount: projections.filter((p: any) => p.status === "insufficient_data").length
+  };
+
+  return ok({ asOfDate, summary, projections });
+}
+
+async function adminPayrollProjectionDetail(db: Db, body: Body) {
+  const staffId = stringBody(body, "staffId");
+  if (!staffId) throw new HttpError("staffId wajib diisi", 400, "MISSING_STAFF_ID");
+  const asOfDate = stringBody(body, "asOfDate") || todayJakarta();
+
+  const { projections } = await buildProjectionData(db, asOfDate, staffId);
+  const projection = projections[0];
+
+  if (!projection) throw new HttpError("Staff tidak ditemukan atau tidak aktif", 404, "STAFF_NOT_FOUND");
+
+  if (projection.status === "insufficient_data") {
+    return ok({
+      ok: true,
+      projection,
+      currentPeriod: null,
+      history: null,
+      prediction: null
+    });
+  }
+
+  // Rebuild full detail with history summaries for detail view
+  const rangeStart = addDateDays(asOfDate, -220);
+  const rangeEnd = addDateDays(asOfDate, 40);
+
+  const { data: staffRow, error: staffErr } = await db
+    .from("staff")
+    .select("id,name,outlet_id,salary_per_shift,outlets(id,name)")
+    .eq("id", staffId)
+    .maybeSingle();
+  if (staffErr) throw staffErr;
+  if (!staffRow) throw new HttpError("Staff tidak ditemukan", 404, "STAFF_NOT_FOUND");
+
+  const [
+    { data: attRows },
+    { data: dayoffRows },
+    { data: leaveRows },
+    { data: assignmentRows },
+    { data: paymentRows }
+  ] = await Promise.all([
+    db.from("attendance").select("staff_id,date,checkin_time,status,final_salary,paid_status,flags")
+      .eq("staff_id", staffId).gte("date", rangeStart).lte("date", asOfDate),
+    db.from("staff_dayoff").select("staff_id,date,status").eq("staff_id", staffId).eq("status", "active")
+      .gte("date", rangeStart).lte("date", rangeEnd),
+    db.from("leave_requests").select("staff_id,date,status").eq("staff_id", staffId)
+      .in("status", ["approved", "pending"]).gte("date", rangeStart).lte("date", rangeEnd),
+    db.from("staff_shift_assignments").select("staff_id,date,shift_type,status").eq("staff_id", staffId)
+      .in("status", ["confirmed", "admin_override", "auto_cover", "locked"])
+      .gt("date", asOfDate).lte("date", rangeEnd),
+    db.from("payments").select("staff_id,amount,date_from,date_to").eq("staff_id", staffId)
+      .gte("date_to", rangeStart)
+  ]);
+
+  const staffAtt = attRows || [];
+  const firstAttendanceDate = staffAtt.length > 0
+    ? staffAtt.reduce((min: string, r: any) => r.date < min ? r.date : min, staffAtt[0].date as string)
+    : null;
+
+  if (!firstAttendanceDate) {
+    return ok({ ok: true, projection, currentPeriod: null, history: null, prediction: null });
+  }
+
+  const paydayDay = parseInt(firstAttendanceDate.split("-")[2], 10);
+  const period = resolvePayrollPeriod(paydayDay, asOfDate);
+  const historicalPeriods = buildHistoricalPeriods(paydayDay, period.periodStart, 6);
+
+  const blockedDatesPast = new Set<string>();
+  const blockedDaysFuture = new Set<string>();
+  for (const d of (dayoffRows || [])) {
+    if (d.date <= asOfDate) blockedDatesPast.add(d.date);
+    else blockedDaysFuture.add(d.date);
+  }
+  for (const l of (leaveRows || [])) {
+    if (l.status === "approved") {
+      if (l.date <= asOfDate) blockedDatesPast.add(l.date);
+      else blockedDaysFuture.add(l.date);
+    }
+  }
+
+  const pendingLeaveCount = (leaveRows || []).filter(
+    (l: any) => l.status === "pending" && l.date > asOfDate && l.date <= period.periodEnd
+  ).length;
+
+  const historySummaries = historicalPeriods.map(hp => ({
+    ...summarizeAttendancePeriod(staffAtt, hp.start, hp.end),
+    start: hp.start,
+    end: hp.end
+  }));
+
+  const projectionInput = {
+    staffId: staffRow.id,
+    staffName: staffRow.name,
+    outletId: staffRow.outlet_id ?? null,
+    outletName: (staffRow.outlets as any)?.name ?? null,
+    salaryPerShift: Number(staffRow.salary_per_shift) || 0,
+    firstAttendanceDate,
+    paydayDay,
+    asOfDate,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    nextPayday: period.nextPayday,
+    currentAttendance: staffAtt,
+    historySummaries,
+    blockedDatesPast,
+    blockedDaysFuture,
+    pendingLeaveCount,
+    futureAssignments: assignmentRows || [],
+    payments: paymentRows || []
+  };
+
+  const detailedProjection = calculatePayrollProjection(projectionInput);
+  const detail = buildProjectionDetail(detailedProjection, projectionInput, historySummaries);
+
+  return ok(detail);
 }
