@@ -128,7 +128,8 @@ export function PayslipDocument({
   const font = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
 
   // Shift-table column widths (must sum ≤ 516 = 540-24 side-pad)
-  const C = { date: 130, shift: 78, time: 120, sal: 188 }; // total = 516 ✓
+  // fr units — grid distributes whatever actual space is left after borders + padding
+  const GRID = "130fr 78fr 120fr 188fr";
 
   return (
     <div
@@ -300,7 +301,7 @@ export function PayslipDocument({
           {/* Table header */}
           <div style={{
             display: "grid",
-            gridTemplateColumns: `${C.date}px ${C.shift}px ${C.time}px ${C.sal}px`,
+            gridTemplateColumns: GRID,
             background: "#FEF0E8",
             padding: "7px 12px",
             borderBottom: "1.5px solid #EDD5C5",
@@ -325,7 +326,7 @@ export function PayslipDocument({
             return (
               <div key={row.id} style={{
                 display: "grid",
-                gridTemplateColumns: `${C.date}px ${C.shift}px ${C.time}px ${C.sal}px`,
+                gridTemplateColumns: GRID,
                 padding: "6px 12px",
                 background: i % 2 === 0 ? "#fff" : "#FFFAF6",
                 borderBottom: i < shifts.length - 1 ? "1px solid #F2E8E0" : "none",
