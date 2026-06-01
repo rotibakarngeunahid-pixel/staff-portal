@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { AdminPage } from "@/components/admin/admin-page";
@@ -18,7 +18,7 @@ export default function AdminPayslipPage({ params }: { params: Promise<{ payment
     params.then((p) => setPaymentId(p.paymentId));
   }, [params]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!paymentId) return;
     setLoading(true);
     setError("");
@@ -33,9 +33,9 @@ export default function AdminPayslipPage({ params }: { params: Promise<{ payment
     } finally {
       setLoading(false);
     }
-  }
+  }, [paymentId]);
 
-  useEffect(() => { if (paymentId) load(); }, [paymentId]);
+  useEffect(() => { if (paymentId) load(); }, [paymentId, load]);
 
   return (
     <AdminPage
