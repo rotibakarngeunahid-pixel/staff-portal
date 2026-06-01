@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, RefreshCw, Receipt, Sparkles } from "lucide-react";
+import { Clock, ExternalLink, RefreshCw, Receipt, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { StaffPage } from "@/components/staff/staff-page";
 import {
   PayrollHero,
@@ -252,16 +253,32 @@ export default function StaffPayrollPage() {
         ) : (
           <div className="payroll-stack">
             {(data?.payments || []).map((payment) => (
-              <PayrollPaymentCard
-                key={payment.id}
-                paidAt={payment.paid_at}
-                amount={payment.amount}
-                dateFrom={payment.date_from}
-                dateTo={payment.date_to}
-                note={payment.note}
-                proofUrl={payment.proof_url}
-                compact
-              />
+              <div key={payment.id}>
+                <PayrollPaymentCard
+                  paidAt={payment.paid_at}
+                  amount={payment.amount}
+                  dateFrom={payment.date_from}
+                  dateTo={payment.date_to}
+                  note={payment.note}
+                  proofUrl={payment.proof_url}
+                  compact
+                />
+                <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+                  <Link
+                    href={`/app/payslip/${payment.id}`}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "7px 14px", borderRadius: 10,
+                      background: "linear-gradient(135deg,#F0681A,#F6B800)",
+                      color: "#fff", fontSize: 12, fontWeight: 800,
+                      textDecoration: "none", letterSpacing: 0.3
+                    }}
+                  >
+                    <ExternalLink size={13} />
+                    Lihat Slip Gaji
+                  </Link>
+                </div>
+              </div>
             ))}
           </div>
         )}

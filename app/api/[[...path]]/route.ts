@@ -574,6 +574,8 @@ async function dispatch(request: NextRequest, context: RouteContext) {
     if (request.method === "POST" && path === "/schedule/leave") return await requestLeave(db, request, body);
     if (request.method === "DELETE" && path === "/schedule/leave") return await cancelLeave(db, request, body);
 
+    if (request.method === "GET" && path === "/payslip") return await getPayslip(db, request, body);
+
     if (path.startsWith("/admin/")) {
       await requireSession(request, "admin");
       return await adminDispatch(db, request.method, path, body);
@@ -4196,4 +4198,101 @@ async function adminPayrollProjectionDetail(db: Db, body: Body) {
   const detail = buildProjectionDetail(detailedProjection, projectionInput, historySummaries);
 
   return ok(detail);
+}
+
+async function getPayslip(db: Db, request: NextRequest, body: Body) {
+  const token = tokenFromRequest(request);
+  if (!token) throw new HttpError("Sesi tidak ditemukan, silakan login ulang", 401, "NO_SESSION");
+
+  let session: Awaited<ReturnType<typeof verifySessionToken>>;
+  try {
+    session = await verifySessionToken(token);
+  } catch {
+    throw new HttpError("Sesi sudah kedaluwarsa, silakan login ulang", 401, "SESSION_EXPIRED");
+  }
+
+  const paymentId = stringBody(body, "paymentId");
+  if (!paymentId) throw new HttpError("paymentId wajib diisi", 400);
+
+  const { data: payment, error: payError } = await db
+    .from("payments")
+    .select("*")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (payError) throw payError;
+  if (!payment) throw new HttpError("Slip gaji tidak ditemukan", 404, "PAYSLIP_NOT_FOUND");
+
+  if (session.role === "staff" && payment.staff_id !== session.sub) {
+    throw new HttpError("Akses ditolak", 403, "FORBIDDEN");
+  }
+
+  const [
+    { data: staffRow, error: staffError },
+    { data: shifts, error: shiftsError },
+    { data: allPayments, error: allPayError }
+  ] = await Promise.all([
+    db.from("staff").select("id,name,salary_per_shift,outlet_id,phone,outlets(id,name,shift1_start,shift1_end,shift2_start,shift2_end)").eq("id", payment.staff_id).maybeSingle(),
+    db.from("attendance").select("id,date,shift,checkin_time,checkout_time,late_minutes,deduction,final_salary,flags,status").eq("payment_id", paymentId).order("date", { ascending: true }).order("shift", { ascending: true }),
+    db.from("payments").select("id,amount,paid_at").eq("staff_id", payment.staff_id).order("paid_at", { ascending: true })
+  ]);
+  if (staffError) throw staffError;
+  if (shiftsError) throw shiftsError;
+  if (allPayError) throw allPayError;
+
+  const { data: allAtt, error: allAttError } = await db
+    .from("attendance")
+    .select("id,final_salary,paid_status")
+    .eq("staff_id", payment.staff_id);
+  if (allAttError) throw allAttError;
+
+  const totalEarned = (allAtt || []).reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
+  const totalPaid = (allPayments || []).reduce((s: number, r: any) => s + normalizeCurrency(r.amount), 0);
+  const balance = Math.max(0, totalEarned - totalPaid);
+
+  const outlet = (staffRow as any)?.outlets ?? null;
+
+  return ok({
+    payment: {
+      id: payment.id,
+      paid_at: payment.paid_at,
+      amount: normalizeCurrency(payment.amount),
+      note: payment.note || null,
+      date_from: payment.date_from || null,
+      date_to: payment.date_to || null,
+      proof_url: payment.proof_url || null
+    },
+    staff: {
+      name: payment.staff_name || staffRow?.name || "",
+      salary_per_shift: normalizeCurrency((staffRow as any)?.salary_per_shift ?? 0),
+      phone: (staffRow as any)?.phone || null
+    },
+    outlet: outlet ? {
+      name: outlet.name,
+      shift1_start: outlet.shift1_start || null,
+      shift1_end: outlet.shift1_end || null,
+      shift2_start: outlet.shift2_start || null,
+      shift2_end: outlet.shift2_end || null
+    } : null,
+    shifts: (shifts || []).map((r: any) => ({
+      id: String(r.id),
+      date: String(r.date),
+      shift: Number(r.shift ?? 0),
+      checkin_time: r.checkin_time || null,
+      checkout_time: r.checkout_time || null,
+      late_minutes: Number(r.late_minutes ?? 0),
+      deduction: normalizeCurrency(r.deduction),
+      final_salary: normalizeCurrency(r.final_salary),
+      flags: r.flags || null,
+      status: r.status || null
+    })),
+    summary: {
+      totalEarned,
+      totalPaid,
+      balance,
+      thisPaymentAmount: normalizeCurrency(payment.amount),
+      coveredShiftCount: (shifts || []).length,
+      paymentNumber: (allPayments || []).findIndex((p: any) => p.id === paymentId) + 1,
+      totalPayments: (allPayments || []).length
+    }
+  });
 }

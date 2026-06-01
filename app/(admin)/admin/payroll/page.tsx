@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ImageIcon, Loader2, RefreshCw, Save, Users } from "lucide-react";
+import { ExternalLink, ImageIcon, Loader2, RefreshCw, Save, Users } from "lucide-react";
+import Link from "next/link";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import {
   PayrollAdminSummaryCards,
@@ -360,16 +361,32 @@ export default function AdminPayrollPage() {
         >
           <div className="payroll-stack">
             {payments.map((payment) => (
-              <PayrollPaymentCard
-                key={payment.id}
-                paidAt={payment.paid_at}
-                amount={payment.amount}
-                dateFrom={payment.date_from}
-                dateTo={payment.date_to}
-                note={payment.note}
-                proofUrl={payment.proof_url}
-                compact
-              />
+              <div key={payment.id}>
+                <PayrollPaymentCard
+                  paidAt={payment.paid_at}
+                  amount={payment.amount}
+                  dateFrom={payment.date_from}
+                  dateTo={payment.date_to}
+                  note={payment.note}
+                  proofUrl={payment.proof_url}
+                  compact
+                />
+                <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
+                  <Link
+                    href={`/admin/payslip/${payment.id}`}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "7px 14px", borderRadius: 10,
+                      background: "linear-gradient(135deg,#F0681A,#F6B800)",
+                      color: "#fff", fontSize: 12, fontWeight: 800,
+                      textDecoration: "none", letterSpacing: 0.3
+                    }}
+                  >
+                    <ExternalLink size={13} />
+                    Slip Gaji
+                  </Link>
+                </div>
+              </div>
             ))}
           </div>
         </AdminSection>
