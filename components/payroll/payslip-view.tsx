@@ -1,10 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileImage, FileText, Printer } from "lucide-react";
 import { formatDateID, formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
 
-// ─── types ───────────────────────────────────────────────────────────────────
+// ─── constants ────────────────────────────────────────────────────────────────
+
+// Cloudinary logo — served with CORS headers (Access-Control-Allow-Origin: *)
+// We pre-fetch as base64 so html2canvas can render it without any CORS issue.
+const LOGO_URL =
+  "https://res.cloudinary.com/dckzmg6c3/image/upload/f_png,q_auto,w_120/v1777572835/Untitled-2_tgjm4u.png";
+
+// ─── types ────────────────────────────────────────────────────────────────────
 
 export type PayslipShift = {
   id: string;
@@ -52,56 +59,76 @@ export type PayslipData = {
   };
 };
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── logo helpers ─────────────────────────────────────────────────────────────
+
+/** Fetch any URL and return a base64 data-URI. Returns null on failure. */
+async function toBase64(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, { cache: "force-cache" });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback SVG logo (coloured bread icon on white circle) */
+function SvgLogo({ size = 40 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none">
+      <path d="M6 30C7 18 14 14 24 14C34 14 41 18 42 30" fill="#C8202B" />
+      <rect x="5" y="27" width="38" height="16" rx="8" fill="#F0681A" />
+      <line x1="12" y1="33" x2="36" y2="33" stroke="#FFF8F2" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="5 4" />
+      <line x1="12" y1="38" x2="30" y2="38" stroke="#FFF8F2" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="5 4" opacity="0.55" />
+    </svg>
+  );
+}
+
+// ─── misc helpers ─────────────────────────────────────────────────────────────
 
 function shiftName(s: number) { return s === 0 ? "Full Shift" : `Shift ${s}`; }
 
-function slipNumber(id: string, n: number) {
+function slipNo(id: string, n: number) {
   return `RBN-${String(n).padStart(3, "0")}-${id.replace(/-/g, "").toUpperCase().slice(0, 8)}`;
 }
 
-function periodLabel(from: string | null, to: string | null) {
+function period(from: string | null, to: string | null) {
   if (!from && !to) return "—";
   if (!to || from === to) return formatDateID(from);
   return `${formatDateID(from)} – ${formatDateID(to)}`;
 }
 
-function noteClean(note: string | null) {
+function cleanNote(note: string | null) {
   return note
     ?.replace(/\[MODE:(?:nominal|tanggal)\]/g, "")
     .replace(/\[LEBIH_BAYAR:\d+\]/g, "")
     .trim() || null;
 }
 
-// ─── Inline brand logo — coloured on white, zero CORS ────────────────────────
-// Red/orange toast icon so it's always visible on white background.
-function RbnLogo({ size = 38 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* crust arch */}
-      <path d="M6 30 C7 18 14 14 24 14 C34 14 41 18 42 30" fill="#C8202B" />
-      {/* toast body */}
-      <rect x="5" y="27" width="38" height="16" rx="8" fill="#F0681A" />
-      {/* grill lines */}
-      <line x1="12" y1="33" x2="36" y2="33" stroke="#FFF8F2" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="5 4" />
-      <line x1="12" y1="38" x2="30" y2="38" stroke="#FFF8F2" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="5 4" opacity="0.5" />
-    </svg>
-  );
-}
+// ─── Document component ───────────────────────────────────────────────────────
+// Fixed width 540 px → html2canvas @2× → 1080 px wide output.
+// All text containers use solid backgrounds + explicit colours for reliable
+// html2canvas rendering. No CSS gradients on boxes that contain text.
 
-// ─── PayslipDocument — 540 px wide (→ 1080 px @2×) ──────────────────────────
-// Compact layout: each shift row ≈ 24 px → 26 shifts ≈ 624 px.
-// Full slip for 26 shifts ≈ 1050 px DOM → 2100 px @2×.
-// The download logic auto-fits everything into exactly 1080×1920 px output.
-
-export function PayslipDocument({ data }: { data: PayslipData }) {
+export function PayslipDocument({
+  data,
+  logoSrc,           // base64 data-URI or null → falls back to SVG
+}: {
+  data: PayslipData;
+  logoSrc: string | null;
+}) {
   const { payment, staff, outlet, shifts, summary } = data;
-  const cleanNote = noteClean(payment.note);
+  const note = cleanNote(payment.note);
   const font = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
-  const W = 540;
 
-  // ── Shift table column widths
-  const COL = { date: 138, shift: 80, time: 130, salary: "1fr" };
+  // Shift-table column widths (must sum ≤ 516 = 540-24 side-pad)
+  const C = { date: 130, shift: 78, time: 120, sal: 188 }; // total = 516 ✓
 
   return (
     <div
@@ -109,154 +136,218 @@ export function PayslipDocument({ data }: { data: PayslipData }) {
       style={{
         fontFamily: font,
         background: "#FFF8F2",
-        width: W,
+        width: 540,
         borderRadius: 18,
         overflow: "hidden",
         border: "2px solid #EDD5C5",
+        boxSizing: "border-box",
       }}
     >
-      {/* ── top band ── */}
+      {/* ── top rainbow band ── */}
       <div style={{ height: 6, background: "linear-gradient(90deg,#C8202B,#F0681A,#F6B800)" }} />
 
-      {/* ── Header (solid red — safe for html2canvas text rendering) ── */}
+      {/* ── Header — solid red so text is guaranteed white-on-red ── */}
       <div style={{ background: "#C8202B", padding: "18px 22px 14px" }}>
 
-        {/* Brand row */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        {/* Logo row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+
           {/* Logo circle */}
           <div style={{
-            width: 48, height: 48, borderRadius: "50%",
+            width: 52, height: 52, borderRadius: "50%",
             background: "#FFFFFF",
             display: "flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0,
-            boxShadow: "0 0 0 2px rgba(255,255,255,0.4)",
+            flexShrink: 0, overflow: "hidden",
+            boxShadow: "0 0 0 3px rgba(255,255,255,0.35)",
           }}>
-            <RbnLogo size={36} />
+            {logoSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={logoSrc}
+                alt="Logo"
+                width={44}
+                height={44}
+                style={{ width: 44, height: 44, objectFit: "contain", borderRadius: "50%", display: "block" }}
+              />
+            ) : (
+              <SvgLogo size={38} />
+            )}
           </div>
-          <div>
-            <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: "rgba(255,255,255,0.75)", marginBottom: 2 }}>
+
+          {/* Brand + title */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: 3,
+              textTransform: "uppercase", color: "rgba(255,255,255,0.78)",
+              marginBottom: 3, whiteSpace: "nowrap",
+            }}>
               Roti Bakar Ngeunah
             </p>
-            <p style={{ fontSize: 22, fontWeight: 900, color: "#FFFFFF", letterSpacing: -0.3, lineHeight: 1.05 }}>
+            <p style={{
+              fontSize: 24, fontWeight: 900, color: "#FFFFFF",
+              letterSpacing: -0.5, lineHeight: 1,
+            }}>
               Slip Gaji
             </p>
           </div>
-          {/* Slip number — right */}
-          <div style={{ marginLeft: "auto", textAlign: "right" }}>
-            <p style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.65)", marginBottom: 3 }}>
+
+          {/* Slip number */}
+          <div style={{ flexShrink: 0, textAlign: "right" }}>
+            <p style={{
+              fontSize: 8, fontWeight: 700, letterSpacing: 2,
+              textTransform: "uppercase", color: "rgba(255,255,255,0.65)",
+              marginBottom: 3,
+            }}>
               No. Slip
             </p>
-            <p style={{ fontSize: 10, fontWeight: 800, color: "#FFFFFF", fontFamily: "monospace,sans-serif", letterSpacing: 0.5 }}>
-              {slipNumber(payment.id, summary.paymentNumber)}
+            <p style={{
+              fontSize: 10, fontWeight: 800, color: "#FFFFFF",
+              fontFamily: "monospace,sans-serif", letterSpacing: 0.5,
+              whiteSpace: "nowrap",
+            }}>
+              {slipNo(payment.id, summary.paymentNumber)}
             </p>
-            <p style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>
+            <p style={{ fontSize: 9, color: "rgba(255,255,255,0.72)", marginTop: 2 }}>
               Ke-{summary.paymentNumber} dari {summary.totalPayments}
             </p>
           </div>
         </div>
 
-        {/* Tanggal bayar chip */}
+        {/* Date chip */}
         <div style={{
-          background: "rgba(0,0,0,0.22)",
-          borderRadius: 8,
-          padding: "7px 12px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
+          background: "rgba(0,0,0,0.22)", borderRadius: 8,
+          padding: "8px 14px",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
-          <p style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>
-            Dibayar pada <strong style={{ color: "#FFFFFF" }}>{formatDateWithDayID(payment.paid_at?.slice(0, 10))}</strong>
+          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.85)", fontWeight: 600, margin: 0 }}>
+            Dibayar pada&nbsp;
+            <strong style={{ color: "#FFFFFF", fontWeight: 800 }}>
+              {formatDateWithDayID(payment.paid_at?.slice(0, 10))}
+            </strong>
           </p>
-          <p style={{ fontSize: 10, fontWeight: 800, color: "#FFFFFF" }}>
+          <p style={{
+            fontSize: 11, fontWeight: 800, color: "#FFFFFF",
+            background: "rgba(255,255,255,0.18)", borderRadius: 20,
+            padding: "2px 10px", flexShrink: 0, marginLeft: 8,
+          }}>
             {summary.coveredShiftCount} shift
           </p>
         </div>
       </div>
 
-      {/* ── divider ── */}
+      {/* ── orange divider ── */}
       <div style={{ height: 4, background: "#F0681A" }} />
 
       {/* ── Info Karyawan ── */}
-      <Block>
-        <Label>Informasi Karyawan</Label>
-        <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", border: "1.5px solid #EDD5C5" }}>
-          {[
+      <Sect>
+        <SecLabel>Informasi Karyawan</SecLabel>
+        <div style={{
+          background: "#fff", borderRadius: 12, overflow: "hidden",
+          border: "1.5px solid #EDD5C5",
+        }}>
+          {([
             ["Nama Karyawan", staff.name],
-            ["Outlet", outlet?.name || "—"],
-            ["Periode Kerja", periodLabel(payment.date_from, payment.date_to)],
+            ["Outlet", outlet?.name ?? "—"],
+            ["Periode Kerja", period(payment.date_from, payment.date_to)],
             ["Tanggal Bayar", formatDateWithDayID(payment.paid_at?.slice(0, 10))],
             ["Gaji per Shift", rupiah(staff.salary_per_shift)],
-            ["Total Shift Dibayar", `${summary.coveredShiftCount} shift`],
-          ].map(([lbl, val], i) => (
+            ["Shift Dibayar", `${summary.coveredShiftCount} shift`],
+          ] as [string, string][]).map(([lbl, val], i) => (
             <div key={lbl} style={{
-              display: "flex", alignItems: "center",
+              display: "flex",
               borderTop: i === 0 ? "none" : "1px solid #F2E8E0",
+              minHeight: 36,
             }}>
-              <p style={{
-                width: 148, flexShrink: 0, padding: "8px 12px",
-                fontSize: 10, fontWeight: 600, color: "#9B7060",
-                background: "#FFF8F2", borderRight: "1px solid #F2E8E0",
+              <div style={{
+                width: 148, flexShrink: 0,
+                padding: "9px 12px",
+                background: "#FFF8F2",
+                borderRight: "1px solid #F2E8E0",
+                display: "flex", alignItems: "center",
               }}>
-                {lbl}
-              </p>
-              <p style={{ flex: 1, padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "#1C0A00" }}>
-                {val}
-              </p>
+                <p style={{
+                  fontSize: 10, fontWeight: 600, color: "#9B7060",
+                  margin: 0, lineHeight: 1.3,
+                }}>
+                  {lbl}
+                </p>
+              </div>
+              <div style={{
+                flex: 1, minWidth: 0,
+                padding: "9px 12px",
+                display: "flex", alignItems: "center",
+              }}>
+                <p style={{
+                  fontSize: 12, fontWeight: 700, color: "#1C0A00",
+                  margin: 0, lineHeight: 1.3,
+                  wordBreak: "break-word",
+                }}>
+                  {val}
+                </p>
+              </div>
             </div>
           ))}
         </div>
-      </Block>
+      </Sect>
 
       {/* ── Rincian Shift ── */}
-      <Block>
-        <Label>Rincian Shift</Label>
-        <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", border: "1.5px solid #EDD5C5" }}>
+      <Sect>
+        <SecLabel>Rincian Shift</SecLabel>
+        <div style={{
+          background: "#fff", borderRadius: 12, overflow: "hidden",
+          border: "1.5px solid #EDD5C5",
+        }}>
           {/* Table header */}
           <div style={{
             display: "grid",
-            gridTemplateColumns: `${COL.date}px ${COL.shift}px ${COL.time}px ${COL.salary}`,
+            gridTemplateColumns: `${C.date}px ${C.shift}px ${C.time}px ${C.sal}px`,
             background: "#FEF0E8",
-            padding: "8px 12px",
+            padding: "7px 12px",
             borderBottom: "1.5px solid #EDD5C5",
           }}>
-            {["Tanggal", "Shift", "Jam Kerja", "Gaji"].map(h => (
-              <p key={h} style={{ fontSize: 8, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase", color: "#9B7060" }}>
+            {(["Tanggal", "Shift", "Jam Kerja", "Gaji"] as const).map(h => (
+              <p key={h} style={{
+                fontSize: 8, fontWeight: 800, letterSpacing: 1.5,
+                textTransform: "uppercase", color: "#9B7060",
+                margin: 0, overflow: "hidden",
+              }}>
                 {h}
               </p>
             ))}
           </div>
 
-          {/* Rows */}
           {shifts.length === 0 ? (
-            <p style={{ padding: 16, fontSize: 12, color: "#9B7060", textAlign: "center" }}>
+            <p style={{ padding: "16px 12px", fontSize: 12, color: "#9B7060", textAlign: "center" }}>
               Tidak ada data shift
             </p>
           ) : shifts.map((row, i) => {
-            const is2x = String(row.flags || "").includes("FULL_SHIFT_2X");
+            const is2x = String(row.flags ?? "").includes("FULL_SHIFT_2X");
             return (
-              <div
-                key={row.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `${COL.date}px ${COL.shift}px ${COL.time}px ${COL.salary}`,
-                  padding: "6px 12px",
-                  background: i % 2 === 0 ? "#fff" : "#FFFAF6",
-                  borderBottom: i < shifts.length - 1 ? "1px solid #F2E8E0" : "none",
-                  alignItems: "center",
-                }}
-              >
-                {/* Date */}
-                <p style={{ fontSize: 10, fontWeight: 700, color: "#1C0A00", lineHeight: 1.3 }}>
+              <div key={row.id} style={{
+                display: "grid",
+                gridTemplateColumns: `${C.date}px ${C.shift}px ${C.time}px ${C.sal}px`,
+                padding: "6px 12px",
+                background: i % 2 === 0 ? "#fff" : "#FFFAF6",
+                borderBottom: i < shifts.length - 1 ? "1px solid #F2E8E0" : "none",
+                alignItems: "center",
+                minHeight: 34,
+              }}>
+                {/* Date — "1 Jun 2026" */}
+                <p style={{
+                  fontSize: 10, fontWeight: 700, color: "#1C0A00",
+                  margin: 0, overflow: "hidden", lineHeight: 1.35,
+                }}>
                   {formatDateID(row.date)}
                 </p>
+
                 {/* Shift badge */}
-                <div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                   <span style={{
                     fontSize: 9, fontWeight: 800,
                     background: "#FEF0E8", color: "#C8202B",
                     padding: "2px 6px", borderRadius: 20,
                     border: "1px solid #F5CDB4",
-                    display: "inline-block",
+                    display: "inline-block", whiteSpace: "nowrap",
                   }}>
                     {shiftName(row.shift)}
                   </span>
@@ -264,31 +355,45 @@ export function PayslipDocument({ data }: { data: PayslipData }) {
                     <span style={{
                       fontSize: 8, fontWeight: 800,
                       background: "#EEF2FF", color: "#4338CA",
-                      padding: "1px 4px", borderRadius: 4,
-                      marginLeft: 3, display: "inline-block",
+                      padding: "1px 5px", borderRadius: 4,
+                      display: "inline-block",
                     }}>
                       2×
                     </span>
                   )}
                 </div>
-                {/* Time */}
+
+                {/* Time + late */}
                 <div>
-                  <p style={{ fontSize: 10, color: "#3D1A08", fontWeight: 600 }}>
+                  <p style={{
+                    fontSize: 10, fontWeight: 600, color: "#3D1A08",
+                    margin: 0, whiteSpace: "nowrap", overflow: "hidden",
+                  }}>
                     {hhmm(row.checkin_time)} → {row.checkout_time ? hhmm(row.checkout_time) : "—"}
                   </p>
                   {row.late_minutes > 0 && (
-                    <p style={{ fontSize: 9, color: "#C8202B", fontWeight: 700, marginTop: 1 }}>
+                    <p style={{
+                      fontSize: 9, fontWeight: 700, color: "#C8202B",
+                      margin: "2px 0 0", whiteSpace: "nowrap",
+                    }}>
                       Telat {row.late_minutes}m
                     </p>
                   )}
                 </div>
+
                 {/* Salary */}
                 <div style={{ textAlign: "right" }}>
-                  <p style={{ fontSize: 12, fontWeight: 900, color: "#1A8A3C" }}>
+                  <p style={{
+                    fontSize: 12, fontWeight: 900, color: "#1A8A3C",
+                    margin: 0, whiteSpace: "nowrap",
+                  }}>
                     {rupiah(row.final_salary)}
                   </p>
                   {row.deduction > 0 && (
-                    <p style={{ fontSize: 9, color: "#C8202B", fontWeight: 700 }}>
+                    <p style={{
+                      fontSize: 9, fontWeight: 700, color: "#C8202B",
+                      margin: "2px 0 0", whiteSpace: "nowrap",
+                    }}>
                       −{rupiah(row.deduction)}
                     </p>
                   )}
@@ -297,102 +402,144 @@ export function PayslipDocument({ data }: { data: PayslipData }) {
             );
           })}
         </div>
-      </Block>
+      </Sect>
 
       {/* ── Ringkasan Pembayaran ── */}
-      <Block>
-        <Label>Ringkasan Pembayaran</Label>
-        <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", border: "1.5px solid #EDD5C5" }}>
-          {/* Highlight row */}
+      <Sect>
+        <SecLabel>Ringkasan Pembayaran</SecLabel>
+        <div style={{
+          background: "#fff", borderRadius: 12, overflow: "hidden",
+          border: "1.5px solid #EDD5C5",
+        }}>
+          {/* Highlight: nilai pembayaran ini */}
           <div style={{
             display: "flex", justifyContent: "space-between", alignItems: "center",
             padding: "11px 16px", background: "#FEF0E8",
             borderBottom: "1px solid #F2E8E0",
           }}>
-            <p style={{ fontSize: 12, fontWeight: 700, color: "#5C3A24" }}>Nilai pembayaran ini</p>
-            <p style={{ fontSize: 15, fontWeight: 900, color: "#C8202B" }}>{rupiah(summary.thisPaymentAmount)}</p>
+            <p style={{ fontSize: 12, fontWeight: 700, color: "#5C3A24", margin: 0 }}>
+              Nilai pembayaran ini
+            </p>
+            <p style={{ fontSize: 15, fontWeight: 900, color: "#C8202B", margin: 0, whiteSpace: "nowrap" }}>
+              {rupiah(summary.thisPaymentAmount)}
+            </p>
           </div>
-          <SumRow label="Total gaji kumulatif" value={rupiah(summary.totalEarned)} />
+
+          <SumRow label="Total gaji kumulatif (semua shift)" value={rupiah(summary.totalEarned)} />
           <SumRow label="Total sudah dibayarkan" value={rupiah(summary.totalPaid)} />
-          {/* Balance */}
+
+          {/* Saldo tertahan */}
           <div style={{
             display: "flex", justifyContent: "space-between", alignItems: "center",
             padding: "11px 16px",
             background: summary.balance > 0 ? "#FFF1F0" : "#F0FFF4",
             borderTop: "2px solid #EDD5C5",
           }}>
-            <p style={{ fontSize: 12, fontWeight: 800, color: "#5C3A24" }}>Saldo gaji tertahan</p>
-            <p style={{ fontSize: 16, fontWeight: 900, color: summary.balance > 0 ? "#C8202B" : "#1A8A3C" }}>
+            <p style={{ fontSize: 12, fontWeight: 800, color: "#5C3A24", margin: 0 }}>
+              Saldo gaji tertahan
+            </p>
+            <p style={{
+              fontSize: 16, fontWeight: 900, margin: 0, whiteSpace: "nowrap",
+              color: summary.balance > 0 ? "#C8202B" : "#1A8A3C",
+            }}>
               {rupiah(summary.balance)}
             </p>
           </div>
         </div>
-      </Block>
+      </Sect>
 
-      {/* ── Catatan ── */}
-      {cleanNote && (
-        <Block noPadBottom>
+      {/* ── Catatan (optional) ── */}
+      {note && (
+        <div style={{ padding: "0 18px 14px" }}>
           <div style={{
             background: "#FEF8E0", border: "1.5px solid #F6B800",
             borderRadius: 12, padding: "10px 14px",
           }}>
-            <p style={{ fontSize: 8, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase", color: "#92400E", marginBottom: 4 }}>
+            <p style={{
+              fontSize: 8, fontWeight: 800, letterSpacing: 2,
+              textTransform: "uppercase", color: "#92400E", marginBottom: 4,
+            }}>
               Catatan
             </p>
-            <p style={{ fontSize: 12, color: "#78350F", fontWeight: 700 }}>{cleanNote}</p>
+            <p style={{
+              fontSize: 12, color: "#78350F", fontWeight: 700,
+              margin: 0, wordBreak: "break-word",
+            }}>
+              {note}
+            </p>
           </div>
-        </Block>
+        </div>
       )}
 
       {/* ── Footer ── */}
-      <div style={{ padding: "14px 22px 18px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 9, color: "#B08070", fontWeight: 600, lineHeight: 1.7 }}>
+      <div style={{
+        padding: "12px 22px 18px",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        gap: 12, borderTop: "1px solid #F2E8E0",
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{
+            fontSize: 9, color: "#B08070", fontWeight: 600,
+            lineHeight: 1.7, margin: 0,
+          }}>
             Slip ini diterbitkan resmi oleh sistem Roti Bakar Ngeunah.<br />
             Dokumen sah tanpa tanda tangan basah.
           </p>
-          <p style={{ fontSize: 8, color: "#CCAAA0", fontFamily: "monospace,sans-serif", marginTop: 4, letterSpacing: 0.2 }}>
+          <p style={{
+            fontSize: 8, color: "#CCAAA0", fontFamily: "monospace,sans-serif",
+            marginTop: 5, wordBreak: "break-all",
+          }}>
             {payment.id}
           </p>
         </div>
-        {/* Solid stamp — no gradient, guaranteed visible text */}
+
+        {/* Stamp — solid colour only (no gradient text overlap) */}
         <div style={{
           background: "#C8202B",
           borderRadius: 10,
-          padding: "9px 16px",
+          padding: "10px 16px",
           textAlign: "center",
           flexShrink: 0,
           border: "2px solid #A31B24",
+          minWidth: 110,
         }}>
-          <p style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.8)", marginBottom: 2 }}>
+          <p style={{
+            fontSize: 8, fontWeight: 700, letterSpacing: 2,
+            textTransform: "uppercase", color: "rgba(255,255,255,0.82)",
+            marginBottom: 3,
+          }}>
             Disetujui
           </p>
-          <p style={{ fontSize: 13, fontWeight: 900, color: "#FFFFFF" }}>Admin RBN</p>
-          <p style={{ fontSize: 9, color: "rgba(255,255,255,0.8)", marginTop: 1 }}>Roti Bakar Ngeunah</p>
+          <p style={{ fontSize: 13, fontWeight: 900, color: "#FFFFFF", margin: 0 }}>
+            Admin RBN
+          </p>
+          <p style={{
+            fontSize: 9, color: "rgba(255,255,255,0.8)",
+            marginTop: 2,
+          }}>
+            Roti Bakar Ngeunah
+          </p>
         </div>
       </div>
 
-      {/* ── bottom band ── */}
+      {/* ── bottom rainbow band ── */}
       <div style={{ height: 6, background: "linear-gradient(90deg,#F6B800,#F0681A,#C8202B)" }} />
     </div>
   );
 }
 
-// ─── layout helpers ───────────────────────────────────────────────────────────
+// ─── Section wrappers ─────────────────────────────────────────────────────────
 
-function Block({ children, noPadBottom }: { children: React.ReactNode; noPadBottom?: boolean }) {
-  return (
-    <div style={{ padding: noPadBottom ? "14px 18px 0" : "14px 18px" }}>
-      {children}
-    </div>
-  );
+function Sect({ children }: { children: React.ReactNode }) {
+  return <div style={{ padding: "14px 18px" }}>{children}</div>;
 }
 
-function Label({ children }: { children: React.ReactNode }) {
+function SecLabel({ children }: { children: React.ReactNode }) {
   return (
     <p style={{
-      fontSize: 8, fontWeight: 800, letterSpacing: 2.5, textTransform: "uppercase",
-      color: "#9B7060", marginBottom: 7, paddingLeft: 2,
+      fontSize: 8, fontWeight: 800, letterSpacing: 2.5,
+      textTransform: "uppercase", color: "#9B7060",
+      margin: "0 0 7px 2px",
     }}>
       {children}
     </p>
@@ -404,9 +551,14 @@ function SumRow({ label, value }: { label: string; value: string }) {
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
       padding: "10px 16px", borderBottom: "1px solid #F2E8E0",
+      gap: 8,
     }}>
-      <p style={{ fontSize: 12, fontWeight: 600, color: "#5C3A24" }}>{label}</p>
-      <p style={{ fontSize: 13, fontWeight: 800, color: "#1C0A00" }}>{value}</p>
+      <p style={{ fontSize: 12, fontWeight: 600, color: "#5C3A24", margin: 0, flex: 1, minWidth: 0 }}>
+        {label}
+      </p>
+      <p style={{ fontSize: 13, fontWeight: 800, color: "#1C0A00", margin: 0, whiteSpace: "nowrap" }}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -416,14 +568,19 @@ function SumRow({ label, value }: { label: string; value: string }) {
 export function PayslipView({ data }: { data: PayslipData }) {
   const slipRef = useRef<HTMLDivElement>(null);
   const [dl, setDl] = useState<"img" | "pdf" | null>(null);
+  // Pre-load logo as base64 on mount so html2canvas always gets it
+  const [logoSrc, setLogoSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    toBase64(LOGO_URL).then(setLogoSrc);
+  }, []);
 
   const safeName = data.staff.name.replace(/\s+/g, "-");
-  const safeDate = data.payment.paid_at?.slice(0, 10) || "slip";
+  const safeDate = data.payment.paid_at?.slice(0, 10) ?? "slip";
   const filename = `slip-gaji-${safeName}-${safeDate}`;
 
-  // Capture the slip to canvas at 2× scale
   async function capture() {
-    if (!slipRef.current) throw new Error("Slip tidak ditemukan");
+    if (!slipRef.current) throw new Error("Ref not found");
     const html2canvas = (await import("html2canvas")).default;
     return html2canvas(slipRef.current, {
       scale: 2,
@@ -431,54 +588,48 @@ export function PayslipView({ data }: { data: PayslipData }) {
       allowTaint: false,
       backgroundColor: "#FFF8F2",
       logging: false,
-      imageTimeout: 0,
+      imageTimeout: 15000,
       removeContainer: true,
     });
   }
 
-  // PNG download: always output exactly 1080 × 1920 px
+  // PNG — always 1080 × 1920 px output
   async function downloadImage() {
     if (dl) return;
     setDl("img");
     try {
       const src = await capture();
-
-      const OUT_W = 1080;
-      const OUT_H = 1920;
+      const OW = 1080, OH = 1920;
 
       const out = document.createElement("canvas");
-      out.width = OUT_W;
-      out.height = OUT_H;
+      out.width = OW; out.height = OH;
       const ctx = out.getContext("2d")!;
 
-      // Warm brand background fill
+      // Background
       ctx.fillStyle = "#FFF8F2";
-      ctx.fillRect(0, 0, OUT_W, OUT_H);
+      ctx.fillRect(0, 0, OW, OH);
 
-      // Subtle bottom decorative gradient strip
-      const grad = ctx.createLinearGradient(0, OUT_H - 120, 0, OUT_H);
-      grad.addColorStop(0, "rgba(240,104,26,0)");
-      grad.addColorStop(1, "rgba(240,104,26,0.08)");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, OUT_H - 120, OUT_W, 120);
+      // Soft gradient footer area
+      const grd = ctx.createLinearGradient(0, OH - 160, 0, OH);
+      grd.addColorStop(0, "rgba(240,104,26,0)");
+      grd.addColorStop(1, "rgba(240,104,26,0.07)");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, OH - 160, OW, 160);
 
-      // Scale slip to fit exactly 1080 wide, max 1860 tall (leave 60px margin bottom)
-      const SLIP_MAX_H = OUT_H - 60;
-      const scaleX = OUT_W / src.width;       // always 2× since src is 1080px
-      const scaleY = SLIP_MAX_H / src.height; // shrink if needed
-      const s = Math.min(scaleX, scaleY);
+      // Scale slip: full width (×2 because src is already @2×), cap height at OH-60
+      const MAX_SLIP_H = OH - 60;
+      const s = Math.min(OW / src.width, MAX_SLIP_H / src.height);
+      const dw = Math.round(src.width * s);
+      const dh = Math.round(src.height * s);
+      const dx = Math.round((OW - dw) / 2);
 
-      const drawW = Math.round(src.width * s);
-      const drawH = Math.round(src.height * s);
-      const offsetX = Math.round((OUT_W - drawW) / 2);
+      ctx.drawImage(src, dx, 0, dw, dh);
 
-      ctx.drawImage(src, offsetX, 0, drawW, drawH);
-
-      // Small watermark
+      // Watermark
       ctx.font = "600 13px 'Segoe UI',sans-serif";
-      ctx.fillStyle = "rgba(176,128,112,0.55)";
+      ctx.fillStyle = "rgba(176,128,112,0.5)";
       ctx.textAlign = "center";
-      ctx.fillText("Staff Portal · Roti Bakar Ngeunah", OUT_W / 2, OUT_H - 22);
+      ctx.fillText("Staff Portal · Roti Bakar Ngeunah", OW / 2, OH - 24);
 
       const link = document.createElement("a");
       link.href = out.toDataURL("image/png", 1.0);
@@ -486,14 +637,11 @@ export function PayslipView({ data }: { data: PayslipData }) {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (e) {
-      console.error("Download gagal:", e);
-    } finally {
-      setDl(null);
-    }
+    } catch (e) { console.error(e); }
+    finally { setDl(null); }
   }
 
-  // PDF: A4 portrait, multi-page if needed
+  // PDF — A4, multi-page if needed
   async function downloadPdf() {
     if (dl) return;
     setDl("pdf");
@@ -501,89 +649,86 @@ export function PayslipView({ data }: { data: PayslipData }) {
       const src = await capture();
       const { jsPDF } = await import("jspdf");
 
-      const A4_W_MM = 210;
-      const A4_H_MM = 297;
-      const MARGIN_MM = 10;
-      const contentW = A4_W_MM - MARGIN_MM * 2;
-
-      // mm per pixel
-      const mmPerPx = contentW / src.width;
-      const totalH_mm = src.height * mmPerPx;
+      const A4W = 210, A4H = 297, M = 10;
+      const cw = A4W - M * 2;
+      const mmPerPx = cw / src.width;
+      const totalH = src.height * mmPerPx;
+      const pageH = A4H - M * 2;
 
       const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
-      const pageContentH = A4_H_MM - MARGIN_MM * 2;
 
-      if (totalH_mm <= pageContentH) {
-        // Single page
-        pdf.addImage(src.toDataURL("image/jpeg", 0.96), "JPEG", MARGIN_MM, MARGIN_MM, contentW, totalH_mm);
+      if (totalH <= pageH) {
+        pdf.addImage(src.toDataURL("image/jpeg", 0.96), "JPEG", M, M, cw, totalH);
       } else {
-        // Multi-page: slice canvas into A4-height chunks
-        const pxPerPage = Math.floor(pageContentH / mmPerPx);
-        let yPx = 0;
-        let page = 0;
-
+        const pxPerPage = Math.floor(pageH / mmPerPx);
+        let yPx = 0, page = 0;
         while (yPx < src.height) {
           if (page > 0) pdf.addPage();
-
-          const sliceH = Math.min(pxPerPage, src.height - yPx);
+          const h = Math.min(pxPerPage, src.height - yPx);
           const slice = document.createElement("canvas");
-          slice.width = src.width;
-          slice.height = sliceH;
-          const sctx = slice.getContext("2d")!;
-          sctx.fillStyle = "#FFF8F2";
-          sctx.fillRect(0, 0, src.width, sliceH);
-          sctx.drawImage(src, 0, -yPx);
-
-          const sliceH_mm = sliceH * mmPerPx;
-          pdf.addImage(slice.toDataURL("image/jpeg", 0.96), "JPEG", MARGIN_MM, MARGIN_MM, contentW, sliceH_mm);
-
-          yPx += pxPerPage;
-          page++;
+          slice.width = src.width; slice.height = h;
+          const sc = slice.getContext("2d")!;
+          sc.fillStyle = "#FFF8F2"; sc.fillRect(0, 0, src.width, h);
+          sc.drawImage(src, 0, -yPx);
+          pdf.addImage(slice.toDataURL("image/jpeg", 0.96), "JPEG", M, M, cw, h * mmPerPx);
+          yPx += pxPerPage; page++;
         }
       }
-
       pdf.save(`${filename}.pdf`);
-    } catch (e) {
-      console.error("PDF gagal:", e);
-    } finally {
-      setDl(null);
-    }
+    } catch (e) { console.error(e); }
+    finally { setDl(null); }
   }
 
   return (
     <div>
-      {/* Buttons */}
+      {/* Action buttons */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-        <Btn onClick={downloadImage} disabled={!!dl} active={dl === "img"} color="#1A5FA8"
-          icon={<FileImage size={15} />} label="Unduh Gambar (1080×1920)" loading="Mengunduh..." />
-        <Btn onClick={downloadPdf} disabled={!!dl} active={dl === "pdf"} color="#C8202B"
-          icon={<FileText size={15} />} label="Unduh PDF" loading="Mengunduh..." />
-        <Btn onClick={() => window.print()} disabled={false} active={false} color="#F0681A"
-          icon={<Printer size={15} />} label="Cetak" loading="" />
+        <ActionBtn onClick={downloadImage} disabled={!!dl} active={dl === "img"}
+          color="#1A5FA8" icon={<FileImage size={15} />}
+          label="Unduh PNG (1080×1920)" loadingLabel="Mengunduh…" />
+        <ActionBtn onClick={downloadPdf} disabled={!!dl} active={dl === "pdf"}
+          color="#C8202B" icon={<FileText size={15} />}
+          label="Unduh PDF" loadingLabel="Mengunduh…" />
+        <ActionBtn onClick={() => window.print()} disabled={false} active={false}
+          color="#F0681A" icon={<Printer size={15} />}
+          label="Cetak" loadingLabel="" />
       </div>
 
-      {/* Scrollable wrapper (slip is 540 px wide) */}
+      {/* Logo loading indicator */}
+      {logoSrc === null && (
+        <p style={{
+          fontSize: 11, color: "#9B7060", marginBottom: 10, fontStyle: "italic",
+        }}>
+          Memuat logo…
+        </p>
+      )}
+
+      {/* Slip preview */}
       <div style={{ overflowX: "auto" }}>
         <div ref={slipRef} style={{ display: "inline-block" }}>
-          <PayslipDocument data={data} />
+          <PayslipDocument data={data} logoSrc={logoSrc} />
         </div>
       </div>
 
       <style>{`
         @media print {
-          body > *:not(#payslip-doc) { display: none !important; }
-          #payslip-doc { border: none !important; border-radius: 0 !important; width: 100% !important; }
+          body > *:not(#payslip-doc) { display:none!important; }
+          #payslip-doc {
+            position:absolute; top:0; left:0;
+            width:100%!important;
+            border:none!important; border-radius:0!important;
+          }
         }
       `}</style>
     </div>
   );
 }
 
-function Btn({
-  onClick, disabled, active, color, icon, label, loading
+function ActionBtn({
+  onClick, disabled, active, color, icon, label, loadingLabel,
 }: {
-  onClick: () => void; disabled: boolean; active: boolean;
-  color: string; icon: React.ReactNode; label: string; loading: string;
+  onClick: () => void; disabled: boolean; active: boolean; color: string;
+  icon: React.ReactNode; label: string; loadingLabel: string;
 }) {
   return (
     <button
@@ -595,13 +740,13 @@ function Btn({
         background: disabled && !active ? "#bbb" : color,
         color: "#fff", fontSize: 13, fontWeight: 700,
         cursor: disabled ? "wait" : "pointer",
-        opacity: disabled && !active ? 0.6 : 1,
-        whiteSpace: "nowrap",
+        opacity: disabled && !active ? 0.55 : 1,
         transition: "opacity .15s",
+        whiteSpace: "nowrap",
       }}
     >
       {icon}
-      {active ? loading : label}
+      {active ? loadingLabel : label}
     </button>
   );
 }
@@ -613,8 +758,7 @@ export function PayslipSkeleton() {
     <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 540 }}>
       {[90, 160, 300, 120].map((h, i) => (
         <div key={i} style={{
-          height: h, borderRadius: 14,
-          background: "#F0DDD0",
+          height: h, borderRadius: 14, background: "#F0DDD0",
           animation: "skeleton-pulse 1.4s ease-in-out infinite",
         }} />
       ))}
