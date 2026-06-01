@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   Banknote,
@@ -284,7 +285,8 @@ export function PayrollPaymentCard({
   dateTo,
   note,
   proofUrl,
-  compact
+  compact,
+  slipHref
 }: {
   paidAt: string;
   amount: number;
@@ -293,8 +295,8 @@ export function PayrollPaymentCard({
   note: string | null;
   proofUrl: string | null;
   compact?: boolean;
+  slipHref?: string;
 }) {
-  const [showPreview, setShowPreview] = useState(false);
   const [modalUrl, setModalUrl] = useState<string | null>(null);
   const cleanNote = note
     ?.replace(/\[LEBIH_BAYAR:\d+\]/g, "")
@@ -303,56 +305,56 @@ export function PayrollPaymentCard({
 
   return (
     <div className="payroll-payment-card">
-      <div className="payroll-payment-card-top">
-        <div style={{ minWidth: 0 }}>
-          <p style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)", marginBottom: 4 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)", marginBottom: 3 }}>
             Transfer {formatDateID(paidAt.slice(0, 10))}
           </p>
           {dateFrom && dateTo && (
-            <p style={{ fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 5 }}>
+            <p style={{ fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
               <CalendarCheck size={12} />
               {formatDateID(dateFrom)}
               {dateFrom !== dateTo ? ` – ${formatDateID(dateTo)}` : ""}
             </p>
           )}
           {!compact && cleanNote ? (
-            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, display: "flex", gap: 5, alignItems: "flex-start" }}>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6, display: "flex", gap: 5, alignItems: "flex-start" }}>
               <FileText size={12} style={{ flexShrink: 0, marginTop: 1 }} />
               {cleanNote}
             </p>
           ) : null}
+          <p className="payroll-payment-amount">{rupiah(amount)}</p>
         </div>
-        <span className="payroll-payment-amount">{rupiah(amount)}</span>
+        {proofUrl && (
+          <button
+            type="button"
+            onClick={() => setModalUrl(proofUrl)}
+            aria-label="Lihat bukti transfer"
+            style={{
+              flexShrink: 0, width: 60, height: 60, borderRadius: 10,
+              overflow: "hidden", border: "1.5px solid var(--border)",
+              cursor: "pointer", padding: 0, background: "#f8fafc"
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={proofUrl} alt="Bukti" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+          </button>
+        )}
       </div>
-      {proofUrl && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="payroll-proof-link"
-              style={{ border: "none", cursor: "pointer", flex: 1 }}
-              onClick={() => setShowPreview((v) => !v)}
-            >
-              <ImageIcon size={13} />
-              {showPreview ? "Sembunyikan bukti" : "Lihat bukti di sini"}
-            </button>
-            <button
-              type="button"
-              className="payroll-proof-link"
-              style={{ border: "none", cursor: "pointer" }}
-              onClick={() => setModalUrl(proofUrl)}
-            >
-              <Maximize2 size={13} />
-              Perbesar
-            </button>
-          </div>
-          {showPreview && (
-            <div className="payroll-proof-image-wrap" style={{ maxHeight: 200 }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={proofUrl} alt="Bukti pembayaran" />
-            </div>
-          )}
-        </div>
+      {slipHref && (
+        <Link
+          href={slipHref}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            marginTop: 10, padding: "9px 0", borderRadius: 10,
+            background: "linear-gradient(135deg,#F0681A,#F6B800)",
+            color: "#fff", fontSize: 12, fontWeight: 800,
+            textDecoration: "none", letterSpacing: 0.3
+          }}
+        >
+          <ExternalLink size={13} />
+          Lihat Slip Gaji
+        </Link>
       )}
       {modalUrl && <ProofImageModal url={modalUrl} onClose={() => setModalUrl(null)} />}
     </div>

@@ -1178,6 +1178,23 @@ img { display: block; }
   font-size: 13px;
 }
 .payroll-stack { display: flex; flex-direction: column; gap: 10px; }
+.payroll-detail-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.payroll-detail-toggle:hover {
+  border-color: var(--primary);
+  background: var(--surface-soft);
+}
 
 /* ════════════════════════════════════════
    HISTORY ITEMS (Staff payroll list)

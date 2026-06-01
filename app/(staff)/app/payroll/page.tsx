@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, ExternalLink, RefreshCw, Receipt, Sparkles } from "lucide-react";
-import Link from "next/link";
+import { ChevronDown, ChevronUp, Clock, Receipt, RefreshCw, Sparkles } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import {
   PayrollHero,
   PayrollPaymentCard,
-  PayrollProofPanel,
   PayrollSectionHeader,
   PayrollWorkDaySummary,
   type PayrollSummaryView
@@ -108,6 +106,7 @@ export default function StaffPayrollPage() {
   const [data, setData] = useState<PayrollPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [showDetails, setShowDetails] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -154,135 +153,129 @@ export default function StaffPayrollPage() {
         <PayrollSkeleton />
       ) : summary ? (
         <div className="payroll-stack">
+          {/* 1. Ringkasan gaji */}
           <PayrollHero summary={summary} />
-          {data?.payments?.length ? <PayrollProofPanel payments={data.payments} /> : null}
+
+          {/* 2. Riwayat Pembayaran — ditaruh di atas agar slip gaji langsung terlihat */}
+          <section>
+            <PayrollSectionHeader icon={Receipt} title="Riwayat Pembayaran" />
+            {(data!.payments).length === 0 ? (
+              <p className="payroll-empty">Belum ada pembayaran tercatat</p>
+            ) : (
+              <div className="payroll-stack">
+                {data!.payments.map((payment) => (
+                  <PayrollPaymentCard
+                    key={payment.id}
+                    paidAt={payment.paid_at}
+                    amount={payment.amount}
+                    dateFrom={payment.date_from}
+                    dateTo={payment.date_to}
+                    note={payment.note}
+                    proofUrl={payment.proof_url}
+                    slipHref={`/app/payslip/${payment.id}`}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* 3. Ringkasan hari kerja (paid vs unpaid) */}
           <PayrollWorkDaySummary summary={summary} />
+
+          {/* 4. Rincian per shift — collapsed by default */}
+          <section>
+            <button
+              type="button"
+              className="payroll-detail-toggle"
+              onClick={() => setShowDetails((v) => !v)}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Sparkles size={15} color="var(--primary)" />
+                <span style={{ fontSize: 14, fontWeight: 800, color: "var(--ink)" }}>Rincian per Shift</span>
+                {data!.attendance.length > 0 && (
+                  <span className="status-pill" style={{ fontSize: 10 }}>
+                    {data!.attendance.length} shift
+                  </span>
+                )}
+              </div>
+              {showDetails
+                ? <ChevronUp size={16} color="var(--muted)" />
+                : <ChevronDown size={16} color="var(--muted)" />}
+            </button>
+
+            {showDetails && (
+              <div className="payroll-stack" style={{ marginTop: 10 }}>
+                {data!.attendance.length === 0 ? (
+                  <p className="payroll-empty">Belum ada data absensi</p>
+                ) : (
+                  data!.attendance.map((row) => (
+                    <article
+                      key={row.id}
+                      className={`payroll-detail-card ${row.paid_status ? "paid" : "unpaid"}`}
+                    >
+                      <div className="payroll-detail-card-head">
+                        <div>
+                          <p className="payroll-detail-date">{formatDateWithDayID(row.date)}</p>
+                          <span className="payroll-shift-badge" style={{ marginTop: 6, display: "inline-block" }}>
+                            {shiftLabel(row.shift)}
+                          </span>
+                        </div>
+                        <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>
+                          {row.paid_status ? "Lunas" : "Belum dibayar"}
+                        </span>
+                      </div>
+
+                      <p className="payroll-detail-time">
+                        <Clock size={13} />
+                        {hhmm(row.checkin_time) || "—"} → {hhmm(row.checkout_time) || "Belum pulang"}
+                      </p>
+
+                      {row.late_minutes > 0 && (
+                        <LateDetail row={row} outlet={data!.outlet} config={data!.config} />
+                      )}
+
+                      {row.deduction > 0 && (
+                        <div style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "6px 10px", borderRadius: 8, marginBottom: 6,
+                          background: "var(--warning-bg)", fontSize: 11, fontWeight: 700, color: "var(--warning)"
+                        }}>
+                          <span>Telat {row.late_minutes} menit</span>
+                          <span style={{ color: "var(--danger)" }}>−{rupiah(row.deduction)}</span>
+                        </div>
+                      )}
+
+                      {String(row.flags || "").includes("FULL_SHIFT_2X") && (
+                        <div style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "6px 10px", borderRadius: 8, marginBottom: 6,
+                          background: "rgba(79,70,229,0.07)", border: "1px solid rgba(79,70,229,0.15)",
+                          fontSize: 11, fontWeight: 700, color: "#4338CA"
+                        }}>
+                          Full Shift · Gaji 2×
+                          <span className="status-pill" style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontSize: 10 }}>
+                            Bonus
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="payroll-salary-bar">
+                        <span style={{ fontSize: 12, fontWeight: 700 }}>Gaji shift</span>
+                        <span style={{
+                          fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
+                          color: row.paid_status ? "var(--success)" : "var(--warning)"
+                        }}>
+                          {rupiah(row.final_salary)}
+                        </span>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            )}
+          </section>
         </div>
       ) : null}
-
-      <section style={{ marginTop: 8 }}>
-        <PayrollSectionHeader icon={Sparkles} title="Rincian Shift" />
-
-        {loading ? (
-          <div className="payroll-stack">
-            {[1, 2, 3].map((i) => (
-              <div key={i} style={{ height: 100, borderRadius: 16, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
-            ))}
-          </div>
-        ) : (data?.attendance || []).length === 0 ? (
-          <p className="payroll-empty">Belum ada data absensi</p>
-        ) : (
-          <div className="payroll-stack">
-            {(data?.attendance || []).map((row) => (
-              <article
-                key={row.id}
-                className={`payroll-detail-card ${row.paid_status ? "paid" : "unpaid"}`}
-              >
-                <div className="payroll-detail-card-head">
-                  <div>
-                    <p className="payroll-detail-date">{formatDateWithDayID(row.date)}</p>
-                    <span className="payroll-shift-badge" style={{ marginTop: 6, display: "inline-block" }}>
-                      {shiftLabel(row.shift)}
-                    </span>
-                  </div>
-                  <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>
-                    {row.paid_status ? "Lunas" : "Belum dibayar"}
-                  </span>
-                </div>
-
-                <p className="payroll-detail-time">
-                  <Clock size={13} />
-                  {hhmm(row.checkin_time) || "—"} → {hhmm(row.checkout_time) || "Belum pulang"}
-                </p>
-
-                {row.late_minutes > 0 && data && (
-                  <LateDetail row={row} outlet={data.outlet} config={data.config} />
-                )}
-
-                {row.deduction > 0 && (
-                  <div style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    padding: "6px 10px", borderRadius: 8, marginBottom: 6,
-                    background: "var(--warning-bg)", fontSize: 11, fontWeight: 700, color: "var(--warning)"
-                  }}>
-                    <span>Telat {row.late_minutes} menit</span>
-                    <span style={{ color: "var(--danger)" }}>−{rupiah(row.deduction)}</span>
-                  </div>
-                )}
-
-                {String(row.flags || "").includes("FULL_SHIFT_2X") && (
-                  <div style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    padding: "6px 10px", borderRadius: 8, marginBottom: 6,
-                    background: "rgba(79,70,229,0.07)", border: "1px solid rgba(79,70,229,0.15)",
-                    fontSize: 11, fontWeight: 700, color: "#4338CA"
-                  }}>
-                    Full Shift · Gaji 2×
-                    <span className="status-pill" style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontSize: 10 }}>
-                      Bonus
-                    </span>
-                  </div>
-                )}
-
-                <div className="payroll-salary-bar">
-                  <span style={{ fontSize: 12, fontWeight: 700 }}>Gaji shift</span>
-                  <span style={{
-                    fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
-                    color: row.paid_status ? "var(--success)" : "var(--warning)"
-                  }}>
-                    {rupiah(row.final_salary)}
-                  </span>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section>
-        <PayrollSectionHeader icon={Receipt} title="Riwayat Pembayaran" />
-        {!loading && (data?.payments || []).some((p) => p.proof_url) && (
-          <p className="payroll-hint" style={{ marginTop: -4, marginBottom: 10 }}>
-            Bukti transfer juga tersedia di bagian atas halaman tanpa perlu scroll.
-          </p>
-        )}
-        {loading ? (
-          <div style={{ height: 80, borderRadius: 16, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} />
-        ) : (data?.payments || []).length === 0 ? (
-          <p className="payroll-empty">Belum ada pembayaran tercatat</p>
-        ) : (
-          <div className="payroll-stack">
-            {(data?.payments || []).map((payment) => (
-              <div key={payment.id}>
-                <PayrollPaymentCard
-                  paidAt={payment.paid_at}
-                  amount={payment.amount}
-                  dateFrom={payment.date_from}
-                  dateTo={payment.date_to}
-                  note={payment.note}
-                  proofUrl={payment.proof_url}
-                  compact
-                />
-                <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>
-                  <Link
-                    href={`/app/payslip/${payment.id}`}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
-                      padding: "7px 14px", borderRadius: 10,
-                      background: "linear-gradient(135deg,#F0681A,#F6B800)",
-                      color: "#fff", fontSize: 12, fontWeight: 800,
-                      textDecoration: "none", letterSpacing: 0.3
-                    }}
-                  >
-                    <ExternalLink size={13} />
-                    Lihat Slip Gaji
-                  </Link>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </StaffPage>
   );
 }
