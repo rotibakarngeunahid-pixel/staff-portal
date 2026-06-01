@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Download, FileImage, FileText, Printer } from "lucide-react";
+import { FileImage, FileText, Printer } from "lucide-react";
 import { formatDateID, formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
 
 export type PayslipShift = {
@@ -50,6 +50,8 @@ export type PayslipData = {
   };
 };
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
 function shiftName(shift: number) {
   if (shift === 0) return "Full Shift";
   return `Shift ${shift}`;
@@ -74,170 +76,210 @@ function noteClean(note: string | null) {
     .trim() || null;
 }
 
+// Inline SVG bread logo — no external URL, zero CORS risk
+function BreadLogo({ size = 40 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="22" width="34" height="15" rx="7.5" fill="white" />
+      <path d="M5 27 C7 18 13 16 20 16 C27 16 33 18 35 27" fill="white" />
+      <path d="M10 29.5 L30 29.5" stroke="#F0681A" strokeWidth="2" strokeLinecap="round" strokeDasharray="4 3" />
+      <path d="M10 33.5 L30 33.5" stroke="#F0681A" strokeWidth="2" strokeLinecap="round" strokeDasharray="4 3" opacity="0.5" />
+    </svg>
+  );
+}
+
+// ─── Document — 540 px wide (renders at 1080 px @2×) ─────────────────────────
+// All colours are solid (no CSS gradient on containers with overlaid text).
+// Gradient strips are decorative only (no text on top of them).
+
 export function PayslipDocument({ data }: { data: PayslipData }) {
   const { payment, staff, outlet, shifts, summary } = data;
   const cleanNote = noteClean(payment.note);
+  const font = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
   return (
     <div
+      id="payslip-print"
       style={{
-        fontFamily: "'Plus Jakarta Sans', 'Segoe UI', sans-serif",
+        fontFamily: font,
         background: "#FFF8F2",
-        width: 680,
-        padding: "0 0 32px",
+        width: 540,
         borderRadius: 20,
         overflow: "hidden",
-        boxShadow: "0 8px 40px rgba(200,32,43,0.13)",
-        border: "1.5px solid #F0DDD0"
+        border: "2px solid #EDD5C5",
       }}
     >
-      {/* Header */}
+
+      {/* ── Gradient header band (decorative, no text on top of gradient) ── */}
+      <div style={{ height: 8, background: "linear-gradient(90deg,#C8202B,#F0681A,#F6B800)" }} />
+
+      {/* ── Header card ── */}
       <div
         style={{
-          background: "linear-gradient(135deg,#C8202B 0%,#F0681A 60%,#F6B800 100%)",
-          padding: "28px 32px 24px",
-          display: "flex",
-          alignItems: "center",
-          gap: 20
+          background: "#C8202B",
+          padding: "24px 28px 20px",
         }}
       >
-        <div
-          style={{
-            width: 64, height: 64, borderRadius: "50%",
-            background: "#fff", display: "flex", alignItems: "center",
-            justifyContent: "center", flexShrink: 0,
-            boxShadow: "0 0 0 3px rgba(255,255,255,0.35)"
-          }}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto,w_96/v1777572835/Untitled-2_tgjm4u.png"
-            alt="Logo"
-            width={56}
-            height={56}
-            style={{ borderRadius: "50%", objectFit: "contain" }}
-            crossOrigin="anonymous"
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: "rgba(255,255,255,0.75)", marginBottom: 2 }}>
-            Roti Bakar Ngeunah
-          </p>
-          <p style={{ fontSize: 26, fontWeight: 900, color: "#fff", letterSpacing: -0.5, lineHeight: 1.1 }}>
-            Slip Gaji
-          </p>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "rgba(255,255,255,0.65)", marginBottom: 3 }}>
-            No. Slip
-          </p>
-          <p style={{ fontSize: 11, fontWeight: 800, color: "#fff", fontFamily: "monospace", letterSpacing: 0.5 }}>
-            {slipNumber(payment.id, summary.paymentNumber)}
-          </p>
-          <p style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.65)", marginTop: 4 }}>
-            Pembayaran ke-{summary.paymentNumber} / {summary.totalPayments}
-          </p>
-        </div>
-      </div>
-
-      {/* Staff info */}
-      <div style={{ padding: "20px 32px 0" }}>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12,
-            background: "#fff",
-            borderRadius: 14,
-            padding: "16px 20px",
-            border: "1.5px solid #F0DDD0"
-          }}
-        >
-          <InfoRow label="Nama Karyawan" value={staff.name} />
-          <InfoRow label="Outlet" value={outlet?.name || "—"} />
-          <InfoRow label="Periode Kerja" value={periodLabel(payment.date_from, payment.date_to)} />
-          <InfoRow label="Tanggal Bayar" value={formatDateWithDayID(payment.paid_at?.slice(0, 10))} />
-          <InfoRow label="Gaji per Shift" value={rupiah(staff.salary_per_shift)} />
-          <InfoRow label="Total Shift" value={`${summary.coveredShiftCount} shift`} />
-        </div>
-      </div>
-
-      {/* Shift detail table */}
-      <div style={{ padding: "20px 32px 0" }}>
-        <p
-          style={{
-            fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase",
-            color: "#9B7060", marginBottom: 10
-          }}
-        >
-          Rincian Shift
-        </p>
-        <div
-          style={{
-            background: "#fff",
-            borderRadius: 14,
-            overflow: "hidden",
-            border: "1.5px solid #F0DDD0"
-          }}
-        >
-          {/* Table header */}
+        {/* Logo + brand */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "2fr 90px 80px 80px 1fr 90px",
-              background: "#FEF0E8",
-              padding: "10px 16px",
-              borderBottom: "1.5px solid #F0DDD0"
+              width: 52, height: 52, borderRadius: "50%",
+              background: "#fff",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0,
+              border: "3px solid rgba(255,255,255,0.4)",
             }}
           >
-            {["Tanggal", "Shift", "Masuk", "Pulang", "Gaji", "Status"].map((h) => (
-              <p key={h} style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase", color: "#9B7060" }}>{h}</p>
-            ))}
+            <BreadLogo size={36} />
           </div>
+          <div>
+            <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: "rgba(255,255,255,0.75)", marginBottom: 2 }}>
+              Roti Bakar Ngeunah
+            </p>
+            <p style={{ fontSize: 22, fontWeight: 900, color: "#FFFFFF", letterSpacing: -0.3, lineHeight: 1 }}>
+              Slip Gaji
+            </p>
+          </div>
+        </div>
 
-          {/* Rows */}
+        {/* Slip metadata chips */}
+        <div
+          style={{
+            background: "rgba(0,0,0,0.25)",
+            borderRadius: 10,
+            padding: "10px 14px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <div>
+            <p style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.65)", marginBottom: 2 }}>
+              Nomor Slip
+            </p>
+            <p style={{ fontSize: 12, fontWeight: 800, color: "#FFFFFF", letterSpacing: 0.5, fontFamily: "monospace, sans-serif" }}>
+              {slipNumber(payment.id, summary.paymentNumber)}
+            </p>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <p style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.65)", marginBottom: 2 }}>
+              Pembayaran
+            </p>
+            <p style={{ fontSize: 12, fontWeight: 800, color: "#FFFFFF" }}>
+              ke-{summary.paymentNumber} / {summary.totalPayments}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Thin accent divider ── */}
+      <div style={{ height: 4, background: "#F0681A" }} />
+
+      {/* ── Info karyawan ── */}
+      <div style={{ padding: "20px 24px 0" }}>
+        <SectionLabel>Informasi Karyawan</SectionLabel>
+        <div style={{ background: "#fff", borderRadius: 14, overflow: "hidden", border: "1.5px solid #EDD5C5" }}>
+          <InfoTableRow label="Nama Karyawan" value={staff.name} first />
+          <InfoTableRow label="Outlet" value={outlet?.name || "—"} />
+          <InfoTableRow label="Periode Kerja" value={periodLabel(payment.date_from, payment.date_to)} />
+          <InfoTableRow label="Tanggal Bayar" value={formatDateWithDayID(payment.paid_at?.slice(0, 10))} />
+          <InfoTableRow label="Gaji per Shift" value={rupiah(staff.salary_per_shift)} />
+          <InfoTableRow label="Jumlah Shift Dibayar" value={`${summary.coveredShiftCount} shift`} />
+        </div>
+      </div>
+
+      {/* ── Rincian shift ── */}
+      <div style={{ padding: "20px 24px 0" }}>
+        <SectionLabel>Rincian Shift</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {shifts.length === 0 ? (
-            <p style={{ padding: "16px", fontSize: 12, color: "#9B7060", textAlign: "center" }}>Tidak ada data shift</p>
+            <div style={{ background: "#fff", borderRadius: 12, padding: "16px 20px", border: "1.5px solid #EDD5C5", textAlign: "center" }}>
+              <p style={{ fontSize: 12, color: "#9B7060" }}>Tidak ada data shift</p>
+            </div>
           ) : (
             shifts.map((row, i) => {
-              const isFullShift2x = String(row.flags || "").includes("FULL_SHIFT_2X");
+              const is2x = String(row.flags || "").includes("FULL_SHIFT_2X");
               const isEven = i % 2 === 0;
               return (
                 <div
                   key={row.id}
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "2fr 90px 80px 80px 1fr 90px",
-                    padding: "10px 16px",
-                    background: isEven ? "#fff" : "#FFFAF7",
-                    borderBottom: i < shifts.length - 1 ? "1px solid #F5EAE0" : "none",
-                    alignItems: "center"
+                    background: isEven ? "#fff" : "#FFFAF6",
+                    borderRadius: 12,
+                    border: "1.5px solid #EDD5C5",
+                    overflow: "hidden",
                   }}
                 >
-                  <p style={{ fontSize: 11, fontWeight: 700, color: "#1C0A00" }}>{formatDateID(row.date)}</p>
-                  <div>
-                    <p style={{ fontSize: 11, fontWeight: 700, color: "#1C0A00" }}>{shiftName(row.shift)}</p>
-                    {isFullShift2x && (
-                      <span style={{ fontSize: 8, fontWeight: 800, color: "#4338CA", background: "#EEF2FF", padding: "1px 5px", borderRadius: 4, letterSpacing: 0.5 }}>2×</span>
-                    )}
-                  </div>
-                  <p style={{ fontSize: 11, color: "#5C3A24" }}>{hhmm(row.checkin_time)}</p>
-                  <p style={{ fontSize: 11, color: "#5C3A24" }}>{hhmm(row.checkout_time)}</p>
-                  <div>
-                    <p style={{ fontSize: 12, fontWeight: 800, color: "#1A8A3C" }}>{rupiah(row.final_salary)}</p>
-                    {row.deduction > 0 && (
-                      <p style={{ fontSize: 9, color: "#C8202B", fontWeight: 700 }}>−{rupiah(row.deduction)} telat</p>
-                    )}
-                  </div>
-                  <span
+                  {/* Row top: date + shift badge + status */}
+                  <div
                     style={{
-                      fontSize: 9, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
-                      background: "#E8F5ED", color: "#1A8A3C",
-                      padding: "3px 8px", borderRadius: 20, display: "inline-block"
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "10px 16px 8px",
+                      borderBottom: "1px solid #F5EAE0",
                     }}
                   >
-                    Lunas
-                  </span>
+                    <div>
+                      <p style={{ fontSize: 12, fontWeight: 800, color: "#1C0A00" }}>{formatDateID(row.date)}</p>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                        <span
+                          style={{
+                            fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 20,
+                            background: "#FEF0E8", color: "#C8202B", border: "1px solid #F5CDB4",
+                          }}
+                        >
+                          {shiftName(row.shift)}
+                        </span>
+                        {is2x && (
+                          <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 6, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }}>
+                            2× Bonus
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span
+                      style={{
+                        fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
+                        background: "#E8F5ED", color: "#1A8A3C",
+                        padding: "4px 10px", borderRadius: 20,
+                        border: "1px solid #B8DFC6",
+                      }}
+                    >
+                      Lunas
+                    </span>
+                  </div>
+
+                  {/* Row bottom: jam + gaji */}
+                  <div
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "8px 16px 10px",
+                    }}
+                  >
+                    <div>
+                      <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#9B7060", marginBottom: 3 }}>
+                        Jam Kerja
+                      </p>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: "#3D1A08" }}>
+                        {hhmm(row.checkin_time)} → {row.checkout_time ? hhmm(row.checkout_time) : "—"}
+                      </p>
+                      {row.late_minutes > 0 && (
+                        <p style={{ fontSize: 10, fontWeight: 700, color: "#C8202B", marginTop: 2 }}>
+                          Telat {row.late_minutes} menit · −{rupiah(row.deduction)}
+                        </p>
+                      )}
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#9B7060", marginBottom: 3 }}>
+                        Gaji Shift
+                      </p>
+                      <p style={{ fontSize: 16, fontWeight: 900, color: "#1A8A3C" }}>
+                        {rupiah(row.final_salary)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               );
             })
@@ -245,285 +287,326 @@ export function PayslipDocument({ data }: { data: PayslipData }) {
         </div>
       </div>
 
-      {/* Summary */}
-      <div style={{ padding: "20px 32px 0" }}>
-        <p
-          style={{
-            fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase",
-            color: "#9B7060", marginBottom: 10
-          }}
-        >
-          Ringkasan Pembayaran
-        </p>
-        <div
-          style={{
-            background: "#fff",
-            borderRadius: 14,
-            overflow: "hidden",
-            border: "1.5px solid #F0DDD0"
-          }}
-        >
-          <SummaryRow label="Nilai pembayaran ini" value={rupiah(summary.thisPaymentAmount)} highlight />
-          <SummaryRow label="Total gaji kumulatif (semua shift)" value={rupiah(summary.totalEarned)} />
+      {/* ── Ringkasan pembayaran ── */}
+      <div style={{ padding: "20px 24px 0" }}>
+        <SectionLabel>Ringkasan Pembayaran</SectionLabel>
+        <div style={{ background: "#fff", borderRadius: 14, overflow: "hidden", border: "1.5px solid #EDD5C5" }}>
+          <SummaryRow label="Nilai pembayaran ini" value={rupiah(summary.thisPaymentAmount)} accent="highlight" />
+          <SummaryRow label="Total gaji kumulatif (semua periode)" value={rupiah(summary.totalEarned)} />
           <SummaryRow label="Total sudah dibayarkan" value={rupiah(summary.totalPaid)} />
-          <div style={{ borderTop: "2px solid #F0DDD0" }}>
+          <div style={{ background: summary.balance > 0 ? "#FFF1F0" : "#F0FFF4", borderTop: "2px solid #EDD5C5" }}>
             <SummaryRow
               label="Saldo gaji tertahan"
               value={rupiah(summary.balance)}
-              accent={summary.balance > 0 ? "warn" : "ok"}
+              accent={summary.balance > 0 ? "danger" : "success"}
               bold
             />
           </div>
         </div>
       </div>
 
-      {/* Note */}
+      {/* ── Catatan ── */}
       {cleanNote && (
-        <div style={{ padding: "16px 32px 0" }}>
+        <div style={{ padding: "16px 24px 0" }}>
           <div
             style={{
               background: "#FEF8E0",
-              border: "1px solid #F6B800",
+              border: "1.5px solid #F6B800",
               borderRadius: 12,
-              padding: "10px 14px"
+              padding: "12px 16px",
             }}
           >
-            <p style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase", color: "#B45309", marginBottom: 4 }}>Catatan</p>
-            <p style={{ fontSize: 12, color: "#78350F", fontWeight: 600 }}>{cleanNote}</p>
+            <p style={{ fontSize: 9, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase", color: "#92400E", marginBottom: 5 }}>
+              Catatan
+            </p>
+            <p style={{ fontSize: 13, color: "#78350F", fontWeight: 700 }}>{cleanNote}</p>
           </div>
         </div>
       )}
 
-      {/* Footer */}
-      <div
-        style={{
-          padding: "20px 32px 0",
-          display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "space-between",
-          gap: 16
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 9, color: "#C8A898", fontWeight: 600, lineHeight: 1.6 }}>
-            Slip gaji ini diterbitkan secara resmi oleh sistem Roti Bakar Ngeunah.
-            <br />
-            Dokumen ini sah tanpa tanda tangan basah.
-          </p>
-          <p style={{ fontSize: 8, color: "#D0B8A8", marginTop: 4 }}>
-            ID: {payment.id}
-          </p>
-        </div>
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
+      {/* ── Footer ── */}
+      <div style={{ padding: "20px 24px 24px" }}>
+        <div
+          style={{
+            display: "flex", justifyContent: "space-between", alignItems: "flex-end",
+            gap: 12,
+          }}
+        >
+          {/* Legal text */}
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 9, color: "#B08070", fontWeight: 600, lineHeight: 1.7, marginBottom: 6 }}>
+              Slip gaji ini diterbitkan secara resmi oleh sistem Roti Bakar Ngeunah.
+              Dokumen ini sah tanpa tanda tangan basah.
+            </p>
+            <p style={{ fontSize: 8, color: "#CCAAA0", fontFamily: "monospace, sans-serif", letterSpacing: 0.3 }}>
+              ID: {payment.id}
+            </p>
+          </div>
+
+          {/* Admin stamp — solid red background for reliable rendering */}
           <div
             style={{
-              background: "linear-gradient(135deg,#C8202B,#F0681A)",
-              borderRadius: 10,
-              padding: "8px 16px",
-              display: "inline-block"
+              background: "#C8202B",
+              borderRadius: 12,
+              padding: "10px 18px",
+              textAlign: "center",
+              flexShrink: 0,
+              border: "2px solid #A31B24",
             }}
           >
-            <p style={{ fontSize: 9, fontWeight: 800, color: "rgba(255,255,255,0.8)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 1 }}>Admin</p>
-            <p style={{ fontSize: 11, fontWeight: 900, color: "#fff" }}>Roti Bakar Ngeunah</p>
+            <p style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.8)", marginBottom: 3 }}>
+              Disetujui oleh
+            </p>
+            <p style={{ fontSize: 13, fontWeight: 900, color: "#FFFFFF" }}>
+              Admin RBN
+            </p>
+            <p style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.75)", marginTop: 1 }}>
+              Roti Bakar Ngeunah
+            </p>
           </div>
         </div>
       </div>
+
+      {/* ── Bottom accent band ── */}
+      <div style={{ height: 8, background: "linear-gradient(90deg,#F6B800,#F0681A,#C8202B)" }} />
     </div>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+// ─── sub-components ───────────────────────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div>
-      <p style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#9B7060", marginBottom: 2 }}>{label}</p>
-      <p style={{ fontSize: 13, fontWeight: 700, color: "#1C0A00" }}>{value}</p>
+    <p
+      style={{
+        fontSize: 9, fontWeight: 800, letterSpacing: 2.5, textTransform: "uppercase",
+        color: "#9B7060", marginBottom: 8, paddingLeft: 2,
+      }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function InfoTableRow({ label, value, first }: { label: string; value: string; first?: boolean }) {
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "center",
+        borderTop: first ? "none" : "1px solid #F5EAE0",
+      }}
+    >
+      <div
+        style={{
+          width: 160, flexShrink: 0,
+          padding: "10px 16px",
+          background: "#FFF8F2",
+          borderRight: "1px solid #F5EAE0",
+        }}
+      >
+        <p style={{ fontSize: 10, fontWeight: 700, color: "#9B7060" }}>{label}</p>
+      </div>
+      <div style={{ flex: 1, padding: "10px 16px" }}>
+        <p style={{ fontSize: 12, fontWeight: 700, color: "#1C0A00" }}>{value}</p>
+      </div>
     </div>
   );
 }
 
 function SummaryRow({
-  label, value, highlight, accent, bold
+  label, value, accent, bold
 }: {
   label: string;
   value: string;
-  highlight?: boolean;
-  accent?: "warn" | "ok";
+  accent?: "highlight" | "danger" | "success";
   bold?: boolean;
 }) {
-  const bg = highlight ? "linear-gradient(90deg,#FEF0E8,#fff)" : "transparent";
-  const valueColor = accent === "warn" ? "#C8202B" : accent === "ok" ? "#1A8A3C" : "#1C0A00";
+  const bgMap = { highlight: "#FEF0E8", danger: "transparent", success: "transparent" };
+  const valColMap = { highlight: "#C8202B", danger: "#C8202B", success: "#1A8A3C" };
+  const bg = accent ? bgMap[accent] : "transparent";
+  const valColor = accent ? valColMap[accent] : "#1C0A00";
 
   return (
     <div
       style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
         padding: "12px 20px",
         background: bg,
-        borderBottom: "1px solid #F5EAE0"
+        borderBottom: "1px solid #F5EAE0",
       }}
     >
       <p style={{ fontSize: 12, fontWeight: bold ? 800 : 600, color: "#5C3A24" }}>{label}</p>
-      <p style={{ fontSize: bold ? 15 : 13, fontWeight: 800, color: valueColor }}>{value}</p>
+      <p style={{ fontSize: bold ? 16 : 13, fontWeight: 800, color: valColor }}>{value}</p>
     </div>
   );
 }
 
+// ─── PayslipView (with download buttons) ─────────────────────────────────────
+
 export function PayslipView({ data }: { data: PayslipData }) {
   const slipRef = useRef<HTMLDivElement>(null);
-  const [downloading, setDownloading] = useState<"img" | "pdf" | null>(null);
+  const [dl, setDl] = useState<"img" | "pdf" | null>(null);
+
+  const filename = `slip-gaji-${data.staff.name.replace(/\s+/g, "-")}-${data.payment.paid_at?.slice(0, 10) || "slip"}`;
+
+  async function captureCanvas() {
+    if (!slipRef.current) throw new Error("Slip tidak ditemukan");
+    const html2canvas = (await import("html2canvas")).default;
+    return html2canvas(slipRef.current, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: "#FFF8F2",
+      logging: false,
+      imageTimeout: 0,
+      removeContainer: true,
+    });
+  }
 
   async function downloadImage() {
-    if (!slipRef.current || downloading) return;
-    setDownloading("img");
+    if (dl) return;
+    setDl("img");
     try {
-      const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(slipRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#FFF8F2",
-        logging: false
-      });
-      const url = canvas.toDataURL("image/png");
+      const canvas = await captureCanvas();
+      const url = canvas.toDataURL("image/png", 1.0);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `slip-gaji-${data.staff.name.replace(/\s+/g, "-")}-${data.payment.paid_at?.slice(0, 10) || "slip"}.png`;
+      a.download = `${filename}.png`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error("Download gambar gagal:", e);
     } finally {
-      setDownloading(null);
+      setDl(null);
     }
   }
 
   async function downloadPdf() {
-    if (!slipRef.current || downloading) return;
-    setDownloading("pdf");
+    if (dl) return;
+    setDl("pdf");
     try {
-      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await captureCanvas();
       const { jsPDF } = await import("jspdf");
 
-      const canvas = await html2canvas(slipRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#FFF8F2",
-        logging: false
-      });
-
-      const imgData = canvas.toDataURL("image/png");
-      const pxWidth = canvas.width;
-      const pxHeight = canvas.height;
-      const ptWidth = pxWidth * 0.75;
-      const ptHeight = pxHeight * 0.75;
+      // Use exact canvas dimensions → perfect portrait crop
+      const pxW = canvas.width;
+      const pxH = canvas.height;
+      // 1px = 0.264583 mm
+      const mmW = pxW * 0.264583;
+      const mmH = pxH * 0.264583;
 
       const pdf = new jsPDF({
-        orientation: ptWidth > ptHeight ? "landscape" : "portrait",
-        unit: "pt",
-        format: [ptWidth, ptHeight]
+        orientation: "portrait",
+        unit: "mm",
+        format: [mmW, mmH],
+        compress: true,
       });
-      pdf.addImage(imgData, "PNG", 0, 0, ptWidth, ptHeight, undefined, "FAST");
-      pdf.save(`slip-gaji-${data.staff.name.replace(/\s+/g, "-")}-${data.payment.paid_at?.slice(0, 10) || "slip"}.pdf`);
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.96), "JPEG", 0, 0, mmW, mmH);
+      pdf.save(`${filename}.pdf`);
+    } catch (e) {
+      console.error("Download PDF gagal:", e);
     } finally {
-      setDownloading(null);
+      setDl(null);
     }
   }
 
   return (
     <div>
-      {/* Download buttons */}
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginBottom: 20,
-          flexWrap: "wrap"
-        }}
-      >
-        <button
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <BtnAction
           onClick={downloadImage}
-          disabled={!!downloading}
-          style={{
-            display: "flex", alignItems: "center", gap: 8,
-            padding: "10px 18px", borderRadius: 12,
-            background: downloading === "img" ? "#ccc" : "linear-gradient(135deg,#1A5FA8,#1A8A3C)",
-            border: "none", color: "#fff",
-            fontSize: 13, fontWeight: 700, cursor: downloading ? "wait" : "pointer",
-            opacity: downloading && downloading !== "img" ? 0.5 : 1,
-            transition: "opacity .2s"
-          }}
-        >
-          <FileImage size={16} />
-          {downloading === "img" ? "Mengunduh..." : "Unduh Gambar (PNG)"}
-        </button>
-
-        <button
+          disabled={!!dl}
+          loading={dl === "img"}
+          bg={dl === "img" ? "#aaa" : "#1A5FA8"}
+          label="Unduh Gambar (PNG)"
+          loadingLabel="Mengunduh..."
+          icon={<FileImage size={16} />}
+        />
+        <BtnAction
           onClick={downloadPdf}
-          disabled={!!downloading}
-          style={{
-            display: "flex", alignItems: "center", gap: 8,
-            padding: "10px 18px", borderRadius: 12,
-            background: downloading === "pdf" ? "#ccc" : "linear-gradient(135deg,#C8202B,#F0681A)",
-            border: "none", color: "#fff",
-            fontSize: 13, fontWeight: 700, cursor: downloading ? "wait" : "pointer",
-            opacity: downloading && downloading !== "pdf" ? 0.5 : 1,
-            transition: "opacity .2s"
-          }}
-        >
-          <FileText size={16} />
-          {downloading === "pdf" ? "Mengunduh..." : "Unduh PDF"}
-        </button>
-
-        <button
+          disabled={!!dl}
+          loading={dl === "pdf"}
+          bg={dl === "pdf" ? "#aaa" : "#C8202B"}
+          label="Unduh PDF"
+          loadingLabel="Mengunduh..."
+          icon={<FileText size={16} />}
+        />
+        <BtnAction
           onClick={() => window.print()}
-          style={{
-            display: "flex", alignItems: "center", gap: 8,
-            padding: "10px 18px", borderRadius: 12,
-            background: "#FFF8F2", border: "1.5px solid #F0DDD0",
-            color: "#5C3A24", fontSize: 13, fontWeight: 700, cursor: "pointer"
-          }}
-        >
-          <Printer size={16} />
-          Cetak
-        </button>
+          disabled={false}
+          loading={false}
+          bg="#F0681A"
+          label="Cetak"
+          loadingLabel=""
+          icon={<Printer size={16} />}
+        />
       </div>
 
-      {/* The slip document */}
-      <div
-        style={{
-          maxWidth: 700,
-          overflowX: "auto"
-        }}
-      >
-        <div ref={slipRef}>
+      {/* Slip container — capped at 540 px, scrollable on small screens */}
+      <div style={{ overflowX: "auto" }}>
+        <div ref={slipRef} style={{ display: "inline-block" }}>
           <PayslipDocument data={data} />
         </div>
       </div>
 
       <style>{`
         @media print {
-          body * { visibility: hidden !important; }
-          #payslip-print, #payslip-print * { visibility: visible !important; }
-          #payslip-print { position: absolute; left: 0; top: 0; width: 100%; }
+          body > *:not(#payslip-print-wrapper) { display: none !important; }
+          #payslip-print { margin: 0; border: none !important; border-radius: 0 !important; width: 100% !important; }
         }
       `}</style>
     </div>
   );
 }
 
+function BtnAction({
+  onClick, disabled, loading, bg, label, loadingLabel, icon
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  loading: boolean;
+  bg: string;
+  label: string;
+  loadingLabel: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8,
+        padding: "11px 20px", borderRadius: 12, border: "none",
+        background: bg, color: "#fff",
+        fontSize: 13, fontWeight: 700, cursor: disabled ? "wait" : "pointer",
+        opacity: disabled && !loading ? 0.5 : 1,
+        transition: "opacity .2s",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {icon}
+      {loading ? loadingLabel : label}
+    </button>
+  );
+}
+
+// ─── skeleton ─────────────────────────────────────────────────────────────────
+
 export function PayslipSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {[180, 120, 220, 140].map((h, i) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 540 }}>
+      {[100, 180, 260, 120].map((h, i) => (
         <div
           key={i}
           style={{
             height: h, borderRadius: 14,
-            background: "var(--border, #F0DDD0)",
-            animation: "skeleton-pulse 1.4s ease-in-out infinite"
+            background: "#F0DDD0",
+            animation: "skeleton-pulse 1.4s ease-in-out infinite",
           }}
         />
       ))}
     </div>
   );
 }
-
-export const DownloadIcon = Download;
