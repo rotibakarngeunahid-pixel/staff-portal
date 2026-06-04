@@ -758,6 +758,25 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     if (assignedShift === 1 || assignedShift === 2) effectiveShift = assignedShift;
   }
 
+  // Smart fallback overlap-shift: jika shift=1 terdeteksi (time-based, tanpa assignment aktif)
+  // tetapi slot shift 1 sudah diisi staff lain di outlet ini, switch ke shift 2.
+  // Kasus nyata: Shift 2 mulai 20:00 tapi staff datang jam 19:50 → detectShift salah return 1.
+  // Dengan fallback ini, status API tetap mengembalikan shift 2 ke frontend sehingga absen tetap benar.
+  if (outlet.shift_mode === 2 && effectiveShift === 1 && !assignment && !isFullShift) {
+    const { data: shift1Occupant } = await db
+      .from("attendance")
+      .select("id")
+      .eq("outlet_id", outlet.id)
+      .eq("date", effective)
+      .eq("shift", 1)
+      .neq("staff_id", staff.id)
+      .not("checkin_time", "is", null)
+      .limit(1);
+    if (shift1Occupant && shift1Occupant.length > 0) {
+      effectiveShift = 2;
+    }
+  }
+
   // Cek apakah staff sudah checkin hari ini (tanpa filter shift)
   // Penting: admin bisa koreksi shift setelah checkin, sehingga attendance.shift bisa berbeda dari assignment.shift_type
   // Gunakan array fetch (bukan maybeSingle) agar aman saat ada lebih dari satu baris per tanggal
@@ -982,11 +1001,31 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
 
   // Override shift berdasarkan assignment jika ada (mencegah deteksi shift salah saat datang lebih awal)
   // Contoh: staff punya assignment SHIFT_2 tapi absen sebelum shift2_start → shift tetap 2 bukan 1
+  let checkinAssignment: Awaited<ReturnType<typeof resolveStaffShiftAssignment>> | null = null;
   if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
-    const existingAssignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, date);
-    if (existingAssignment) {
-      const assignedShiftNum = shiftFromShiftType((existingAssignment as any).shift_type) || shift;
+    checkinAssignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, date);
+    if (checkinAssignment) {
+      const assignedShiftNum = shiftFromShiftType((checkinAssignment as any).shift_type) || shift;
       if (assignedShiftNum !== shift) shift = assignedShiftNum as 1 | 2;
+    }
+  }
+
+  // Smart fallback overlap-shift: jika shift=1 (time-based, tanpa assignment) dan slot shift 1
+  // sudah diisi staff lain di outlet ini, switch ke shift 2.
+  // Defense in depth — status API melakukan hal yang sama, tapi ini mencegah edge case
+  // di mana status cache stale saat staff langsung memanggil endpoint checkin.
+  if (outlet.shift_mode === 2 && shift === 1 && !checkinAssignment) {
+    const { data: shift1Occupant } = await db
+      .from("attendance")
+      .select("id")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .eq("shift", 1)
+      .neq("staff_id", staff.id)
+      .not("checkin_time", "is", null)
+      .limit(1);
+    if (shift1Occupant && shift1Occupant.length > 0) {
+      shift = 2;
     }
   }
 
@@ -1031,6 +1070,31 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const { data: existingRows, error: existingError } = await existingQuery.limit(1);
   if (existingError) throw existingError;
   if ((existingRows || []).length > 0) throw new HttpError("Absen masuk untuk shift ini sudah tercatat", 409, "ALREADY_CHECKED_IN");
+
+  // Blokir checkin jika shift ini sudah diisi staff lain di outlet yang sama
+  if (outlet.shift_mode === 2) {
+    // Shift 0 (full) menempati slot 1 dan 2; shift 1/2 menempati slot masing-masing + berpotensi bentrok dengan shift 0
+    const conflictingShifts = shift === 0 ? [0, 1, 2] : [0, shift];
+    const { data: shiftTaken } = await db
+      .from("attendance")
+      .select("id, staff_name, shift")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .neq("staff_id", staff.id)
+      .in("shift", conflictingShifts)
+      .not("checkin_time", "is", null)
+      .limit(1);
+    if (shiftTaken && shiftTaken.length > 0) {
+      const taken = shiftTaken[0] as { staff_name?: string; shift?: number };
+      const takenShiftLabel = taken.shift === 0 ? "Full Shift" : `Shift ${taken.shift}`;
+      const thisShiftLabel = shift === 0 ? "Full Shift" : `Shift ${shift}`;
+      throw new HttpError(
+        `${thisShiftLabel} pada ${date} sudah diisi oleh ${taken.staff_name || "staff lain"} (${takenShiftLabel}). Setiap shift hanya boleh diisi 1 orang.`,
+        409,
+        "SHIFT_ALREADY_TAKEN"
+      );
+    }
+  }
 
   // Blokir checkin jika ada cuti yang disetujui untuk tanggal ini
   const { data: approvedLeave } = await db
@@ -2035,7 +2099,111 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/staff-dayoff") return adminStaffDayoff(db, method, body);
   if (path === "/admin/email") return adminEmail(db, method, body);
   if (path === "/admin/config") return adminConfig(db, method, body);
+  if (path === "/admin/attendance/duplicates") return adminFixDuplicateShifts(db, method, body);
   throw new HttpError("Endpoint admin tidak ditemukan", 404, "ADMIN_NOT_FOUND");
+}
+
+async function adminFixDuplicateShifts(db: Db, method: string, body: Body) {
+  type AttRow = {
+    id: string;
+    staff_id: string;
+    staff_name: string;
+    outlet_id: string;
+    outlet_name: string;
+    date: string;
+    shift: number;
+    checkin_time: string | null;
+    final_salary: number;
+    flags: string | null;
+    paid_status: boolean;
+    original_final_salary: number | null;
+  };
+
+  if (method === "GET") {
+    const { data: rows, error } = await db
+      .from("attendance")
+      .select("id,staff_id,staff_name,outlet_id,outlet_name,date,shift,checkin_time,final_salary,flags,paid_status")
+      .not("checkin_time", "is", null)
+      .in("shift", [1, 2])
+      .order("date", { ascending: false }) as { data: AttRow[] | null; error: unknown };
+    if (error) throw error;
+
+    const groups = new Map<string, AttRow[]>();
+    for (const row of rows || []) {
+      const key = `${row.outlet_id}|${row.date}|${row.shift}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+
+    const duplicates: object[] = [];
+    for (const groupRows of groups.values()) {
+      if (groupRows.length < 2) continue;
+      const sorted = [...groupRows].sort(
+        (a, b) => new Date(a.checkin_time!).getTime() - new Date(b.checkin_time!).getTime()
+      );
+      duplicates.push({
+        outlet_name: sorted[0].outlet_name,
+        date: sorted[0].date,
+        shift: sorted[0].shift,
+        valid_record: sorted[0],
+        duplicate_records: sorted.slice(1)
+      });
+    }
+
+    return ok({ duplicates, totalDuplicateGroups: duplicates.length });
+  }
+
+  if (method === "POST") {
+    const dryRun = body.dryRun === true || body.dryRun === "true";
+
+    const { data: rows, error } = await db
+      .from("attendance")
+      .select("id,staff_id,staff_name,outlet_id,date,shift,checkin_time,final_salary,flags,original_final_salary,paid_status")
+      .not("checkin_time", "is", null)
+      .in("shift", [1, 2]) as { data: AttRow[] | null; error: unknown };
+    if (error) throw error;
+
+    const groups = new Map<string, AttRow[]>();
+    for (const row of rows || []) {
+      const key = `${row.outlet_id}|${row.date}|${row.shift}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+
+    const toMark: AttRow[] = [];
+    for (const groupRows of groups.values()) {
+      if (groupRows.length < 2) continue;
+      const sorted = [...groupRows].sort(
+        (a, b) => new Date(a.checkin_time!).getTime() - new Date(b.checkin_time!).getTime()
+      );
+      for (const row of sorted.slice(1)) {
+        if (!(row.flags || "").split(",").includes("DUPLIKAT")) toMark.push(row);
+      }
+    }
+
+    if (dryRun) {
+      return ok({ dryRun: true, wouldMark: toMark.length, ids: toMark.map((r) => r.id) });
+    }
+
+    let markedCount = 0;
+    for (const row of toMark) {
+      const flagsArr = (row.flags || "").split(",").filter(Boolean);
+      if (!flagsArr.includes("DUPLIKAT")) flagsArr.push("DUPLIKAT");
+      await db.from("attendance").update({
+        is_duplicate: true,
+        flags: flagsArr.join(","),
+        original_final_salary: row.original_final_salary ?? row.final_salary,
+        final_salary: 0,
+        deduction: 0
+      }).eq("id", row.id);
+      markedCount++;
+    }
+
+    await logAudit(db, "fix_duplicate_shifts", "Admin", { markedCount, ids: toMark.map((r) => r.id) });
+    return ok({ markedCount, ids: toMark.map((r) => r.id) });
+  }
+
+  throw new HttpError("Method tidak diizinkan", 405);
 }
 
 async function adminDashboard(db: Db) {

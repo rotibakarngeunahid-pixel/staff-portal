@@ -721,7 +721,8 @@ export default function StaffHomePage() {
   const reportPhotoDisabled = loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit;
   const reportSubmitDisabled =
     loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit ||
-    !requiredReportPhotosComplete || effectiveReportItems.length === 0;
+    !requiredReportPhotosComplete || effectiveReportItems.length === 0 ||
+    (nextState === "report_tutup" && invCheck !== "ok");
 
   function openReportCamera(item: ReportCfgItem) {
     if (!reportWindow.canSubmit) {
@@ -1121,225 +1122,256 @@ export default function StaffHomePage() {
         {/* ═══ LAPORAN ═══ */}
         {isReportState && !loading && (
           <div key={nextState} className="animate-slide-up" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {/* Report header */}
-            <div style={{
-              background: `${reportTypeColor}0E`, border: `1.5px solid ${reportTypeColor}30`,
-              borderRadius: 16, padding: "14px 16px",
-              display: "flex", alignItems: "center", justifyContent: "space-between"
-            }}>
-              <div>
-                <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.7px", color: reportTypeColor, textTransform: "uppercase", marginBottom: 3 }}>
-                  {reportType === "BUKA" ? "🌅 Laporan" : "🌙 Laporan"}
-                </p>
-                <h2 style={{ fontSize: 17, fontWeight: 900, color: reportType === "BUKA" ? "#1D4ED8" : "#6D28D9", letterSpacing: "-0.3px" }}>
-                  {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}
-                </h2>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{formatDateID(status?.date)}</p>
-                <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
-                  {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
-                </p>
-              </div>
-            </div>
 
-            {/* Indikator draft tersimpan */}
-            {draftSavedVisible && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 6,
-                background: "#F0FDF4", border: "1px solid #BBF7D0",
-                borderRadius: 8, padding: "6px 12px",
-                fontSize: 11, fontWeight: 700, color: "#16A34A",
-                alignSelf: "flex-start"
-              }}>
-                <CheckCircle2 size={12} />
-                Draft tersimpan
-              </div>
-            )}
-
-            {/* GPS bar (compact) */}
-            <div className="gps-bar" style={{ padding: "10px 14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div className={`gps-dot gps-${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} />
-                <p className="gps-label" style={{ fontSize: 11 }}>
-                  {gps.status === "locating" ? "Mendeteksi GPS..." : `GPS · ±${gps.accuracy}m`}
-                </p>
-              </div>
-              <p className={`gps-dist ${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} style={{ fontSize: 16 }}>
-                {gps.dist !== null ? `${gps.dist}m` : "—"}
-              </p>
-            </div>
-
-            {/* Report error */}
-            {reportError && (
-              <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 600, color: "var(--danger)" }}>
-                ⚠️ {reportError}
-              </div>
-            )}
-
-            {reportBusy && (
-              <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
-                {reportBusyLabel || "Memproses laporan..."}
-              </div>
-            )}
-
-            {/* Di luar window waktu laporan — sembunyikan form sepenuhnya */}
-            {!reportWindow.canSubmit ? (
-              <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 16, padding: "24px 20px", textAlign: "center" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>⏰</div>
-                <h3 style={{ fontSize: 16, fontWeight: 900, color: "#D97706", marginBottom: 8 }}>
-                  Belum Waktunya {reportType === "BUKA" ? "Laporan Buka Toko" : "Laporan Tutup Toko"}
-                </h3>
-                <p style={{ fontSize: 13, color: "#78350F", lineHeight: 1.6, marginBottom: 8 }}>
-                  Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} dapat diisi mulai pukul{" "}
-                  <strong style={{ color: "#92400E" }}>{reportWindow.start.slice(0, 5)}</strong> hingga{" "}
-                  <strong style={{ color: "#92400E" }}>{reportWindow.end.slice(0, 5)}</strong>.
-                </p>
-                <p style={{ fontSize: 12, color: "#B45309", marginTop: 4 }}>
-                  {reportType === "BUKA"
-                    ? "Silakan kembali ke halaman ini saat sudah waktunya."
-                    : "Selesaikan tugas lain terlebih dahulu dan kembali saat sudah waktunya."}
-                </p>
-              </div>
-            ) : (
+            {/* ═══ BLOKIR INVENTORI: tampil sebagai pengganti form saat inventori belum selesai ═══ */}
+            {nextState === "report_tutup" && invCheck !== "ok" && reportWindowEarly.canSubmit ? (
               <>
-                {reportWindow.isLate && (
-                  <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
-                    Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} dan akan tercatat sebagai laporan terlambat.
+                {/* Header minimal */}
+                <div style={{
+                  background: "#F5F3FF", border: "1.5px solid #DDD6FE",
+                  borderRadius: 16, padding: "14px 16px",
+                  display: "flex", alignItems: "center", justifyContent: "space-between"
+                }}>
+                  <div>
+                    <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.7px", color: "#7C3AED", textTransform: "uppercase", marginBottom: 3 }}>🌙 Laporan</p>
+                    <h2 style={{ fontSize: 17, fontWeight: 900, color: "#6D28D9", letterSpacing: "-0.3px" }}>Tutup Toko</h2>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{formatDateID(status?.date)}</p>
+                    <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
+                      {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Sedang mengecek inventori */}
+                {(invCheck === "idle" || invCheck === "loading") && (
+                  <div style={{ borderRadius: 20, overflow: "hidden", border: "2px solid #DDD6FE", boxShadow: "0 4px 20px rgba(109,40,217,0.10)" }}>
+                    <div style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)", padding: "36px 24px", textAlign: "center" }}>
+                      <div style={{ width: 52, height: 52, border: "4px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.9s linear infinite", margin: "0 auto 18px" }} />
+                      <h3 style={{ fontSize: 18, fontWeight: 900, color: "#fff", margin: "0 0 10px", letterSpacing: "-0.3px" }}>Memeriksa Laporan Inventori...</h3>
+                      <p style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", margin: 0, lineHeight: 1.7 }}>
+                        Laporan Tutup Toko hanya bisa diisi setelah laporan inventori selesai dikerjakan.
+                      </p>
+                    </div>
+                    <div style={{ background: "#F5F3FF", padding: "16px 20px", textAlign: "center" }}>
+                      <p style={{ fontSize: 12, color: "#6D28D9", fontWeight: 600, margin: 0 }}>
+                        Harap tunggu, sistem sedang memeriksa status inventori cabang ini...
+                      </p>
+                    </div>
                   </div>
                 )}
 
-                {/* ─── Gate inventori (hanya untuk Laporan Tutup Toko) ─── */}
-                {nextState === "report_tutup" && invCheck === "loading" && (
-                  <div style={{ borderRadius: 14, overflow: "hidden", border: "1.5px solid #DDD6FE" }}>
-                    <div style={{ background: "#6D28D9", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ width: 18, height: 18, border: "2.5px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-                      <p style={{ fontSize: 13, fontWeight: 800, color: "#fff", margin: 0 }}>Mengecek laporan inventori...</p>
-                    </div>
-                    <div style={{ background: "#F5F3FF", padding: "10px 16px" }}>
-                      <p style={{ fontSize: 12, color: "#6D28D9", margin: 0, fontWeight: 600 }}>
-                        Sistem sedang memverifikasi apakah laporan inventori cabang ini sudah selesai.
+                {/* Inventori belum selesai — blokir total */}
+                {invCheck === "blocked" && (
+                  <div style={{ borderRadius: 20, overflow: "hidden", border: "2.5px solid #FCA5A5", boxShadow: "0 6px 28px rgba(220,38,38,0.18)" }}>
+                    <div style={{ background: "linear-gradient(135deg,#DC2626,#B91C1C)", padding: "36px 24px", textAlign: "center" }}>
+                      <div style={{ fontSize: 56, marginBottom: 14, lineHeight: 1 }}>🚫</div>
+                      <h3 style={{ fontSize: 21, fontWeight: 900, color: "#fff", margin: "0 0 12px", letterSpacing: "-0.4px" }}>
+                        Laporan Inventori Belum Selesai!
+                      </h3>
+                      <p style={{ fontSize: 14, color: "rgba(255,255,255,0.92)", margin: 0, lineHeight: 1.75 }}>
+                        {invBlockMsg || "Laporan inventori cabang ini belum dikerjakan hari ini."}
                       </p>
                     </div>
-                  </div>
-                )}
-
-                {nextState === "report_tutup" && invCheck === "blocked" && (
-                  <div style={{ borderRadius: 14, overflow: "hidden", border: "1.5px solid #FECACA" }}>
-                    <div style={{ background: "#DC2626", padding: "14px 16px", textAlign: "center" }}>
-                      <div style={{ fontSize: 32, marginBottom: 6 }}>📦</div>
-                      <h3 style={{ fontSize: 15, fontWeight: 900, color: "#fff", margin: "0 0 4px" }}>Laporan Inventori Belum Selesai</h3>
-                      <p style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", margin: 0, lineHeight: 1.5 }}>
-                        {invBlockMsg || "Selesaikan laporan inventori cabang ini terlebih dahulu."}
-                      </p>
-                    </div>
-                    <div style={{ background: "#FEF2F2", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-                      <p style={{ fontSize: 12, fontWeight: 700, color: "#7F1D1D", margin: 0, lineHeight: 1.6 }}>
-                        Laporan Tutup Toko <strong>tidak bisa dikirim</strong> sebelum laporan inventori selesai diisi.
-                        Buka sistem inventori, selesaikan laporan, lalu kembali ke sini dan klik tombol di bawah.
-                      </p>
+                    <div style={{ background: "#FEF2F2", padding: "20px", display: "flex", flexDirection: "column", gap: 12 }}>
+                      <div style={{ background: "#fff", borderRadius: 14, padding: "16px", border: "1.5px solid #FECACA" }}>
+                        <p style={{ fontSize: 14, fontWeight: 900, color: "#7F1D1D", margin: "0 0 8px" }}>⚠️ Laporan Tutup Toko DIKUNCI</p>
+                        <p style={{ fontSize: 13, color: "#991B1B", margin: 0, lineHeight: 1.75 }}>
+                          Kamu <strong>tidak bisa mengisi</strong> Laporan Tutup Toko sebelum laporan inventori selesai.
+                          Buka sistem inventori, selesaikan laporan hari ini, lalu kembali ke sini untuk mengisi laporan tutup toko.
+                        </p>
+                      </div>
                       <button
-                        className="btn btn-soft"
-                        style={{ fontSize: 13, fontWeight: 800, borderColor: "#DC2626", color: "#DC2626" }}
+                        className="btn btn-danger btn-action"
+                        style={{ fontSize: 14, fontWeight: 900 }}
                         onClick={checkInventory}
                       >
-                        🔄 Cek Ulang Status Inventori
+                        🔄 Sudah Selesai — Cek Ulang Status Inventori
                       </button>
                     </div>
                   </div>
                 )}
+              </>
+            ) : (
+              <>
+                {/* Report header */}
+                <div style={{
+                  background: `${reportTypeColor}0E`, border: `1.5px solid ${reportTypeColor}30`,
+                  borderRadius: 16, padding: "14px 16px",
+                  display: "flex", alignItems: "center", justifyContent: "space-between"
+                }}>
+                  <div>
+                    <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.7px", color: reportTypeColor, textTransform: "uppercase", marginBottom: 3 }}>
+                      {reportType === "BUKA" ? "🌅 Laporan" : "🌙 Laporan"}
+                    </p>
+                    <h2 style={{ fontSize: 17, fontWeight: 900, color: reportType === "BUKA" ? "#1D4ED8" : "#6D28D9", letterSpacing: "-0.3px" }}>
+                      {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}
+                    </h2>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>{formatDateID(status?.date)}</p>
+                    <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
+                      {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
+                    </p>
+                  </div>
+                </div>
 
-                {/* Report items — hanya tampil jika inventori sudah selesai (atau tidak ada mapping) */}
-                {(nextState !== "report_tutup" || invCheck === "ok") && (
-                  <>
-                {reportItemsLoading ? (
-                  <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
-                    Memuat konfigurasi...
-                  </p>
-                ) : null}
-
-                {!reportItemsLoading && reportItems.length === 0 && (
-                  <div className="panel" style={{ padding: 14, fontSize: 13, color: "var(--muted)", textAlign: "center" }}>
-                    Admin belum mengatur item foto. Gunakan foto laporan umum di bawah.
+                {/* Indikator draft tersimpan */}
+                {draftSavedVisible && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: "#F0FDF4", border: "1px solid #BBF7D0",
+                    borderRadius: 8, padding: "6px 12px",
+                    fontSize: 11, fontWeight: 700, color: "#16A34A",
+                    alignSelf: "flex-start"
+                  }}>
+                    <CheckCircle2 size={12} />
+                    Draft tersimpan
                   </div>
                 )}
 
-                {effectiveReportItems.map((item) => {
-                  const done = Boolean(reportPhotos[item.label]);
-                  const isUploadMode = item.photo_mode === "upload";
-                  return (
-                    <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                        <div style={{ flex: 1 }}>
-                          <h3 style={{ fontSize: 14, fontWeight: 800 }}>
-                            {item.label}
-                            {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
-                          </h3>
-                          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                            {item.required ? "Wajib" : "Opsional"}
-                            {" · "}
-                            {isUploadMode ? "Upload foto" : "Foto langsung"}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => isUploadMode ? openUploadForItem(item) : openReportCamera(item)}
-                          disabled={reportPhotoDisabled}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 6,
-                            background: done ? "var(--success)" : reportTypeColor,
-                            color: "#fff", border: "none", borderRadius: 10,
-                            padding: "9px 14px", fontSize: 12, fontWeight: 800,
-                            cursor: reportPhotoDisabled ? "not-allowed" : "pointer",
-                            fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0,
-                            opacity: reportPhotoDisabled ? 0.48 : 1
-                          }}
-                        >
-                          {done ? <CheckCircle2 size={14} /> : isUploadMode ? <Upload size={14} /> : <Camera size={14} />}
-                          {done ? "Ubah" : isUploadMode ? "Upload" : "Foto"}
-                        </button>
+                {/* GPS bar (compact) */}
+                <div className="gps-bar" style={{ padding: "10px 14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className={`gps-dot gps-${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} />
+                    <p className="gps-label" style={{ fontSize: 11 }}>
+                      {gps.status === "locating" ? "Mendeteksi GPS..." : `GPS · ±${gps.accuracy}m`}
+                    </p>
+                  </div>
+                  <p className={`gps-dist ${gps.status === "ready" ? "ok" : gps.status === "locating" ? "wait" : "bad"}`} style={{ fontSize: 16 }}>
+                    {gps.dist !== null ? `${gps.dist}m` : "—"}
+                  </p>
+                </div>
+
+                {/* Report error */}
+                {reportError && (
+                  <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 600, color: "var(--danger)" }}>
+                    ⚠️ {reportError}
+                  </div>
+                )}
+
+                {reportBusy && (
+                  <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
+                    {reportBusyLabel || "Memproses laporan..."}
+                  </div>
+                )}
+
+                {/* Di luar window waktu laporan — sembunyikan form sepenuhnya */}
+                {!reportWindow.canSubmit ? (
+                  <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 16, padding: "24px 20px", textAlign: "center" }}>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>⏰</div>
+                    <h3 style={{ fontSize: 16, fontWeight: 900, color: "#D97706", marginBottom: 8 }}>
+                      Belum Waktunya {reportType === "BUKA" ? "Laporan Buka Toko" : "Laporan Tutup Toko"}
+                    </h3>
+                    <p style={{ fontSize: 13, color: "#78350F", lineHeight: 1.6, marginBottom: 8 }}>
+                      Laporan {reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} dapat diisi mulai pukul{" "}
+                      <strong style={{ color: "#92400E" }}>{reportWindow.start.slice(0, 5)}</strong> hingga{" "}
+                      <strong style={{ color: "#92400E" }}>{reportWindow.end.slice(0, 5)}</strong>.
+                    </p>
+                    <p style={{ fontSize: 12, color: "#B45309", marginTop: 4 }}>
+                      {reportType === "BUKA"
+                        ? "Silakan kembali ke halaman ini saat sudah waktunya."
+                        : "Selesaikan tugas lain terlebih dahulu dan kembali saat sudah waktunya."}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {reportWindow.isLate && (
+                      <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--warning)" }}>
+                        Laporan sudah melewati batas {reportWindow.end.slice(0, 5)} dan akan tercatat sebagai laporan terlambat.
                       </div>
+                    )}
 
-                      {item.example_photo_url && !done && (
-                        <div style={{ marginTop: 12, border: "2.5px dashed #F59E0B", borderRadius: 12, overflow: "hidden", background: "#FFFBEB" }}>
-                          <div style={{ background: "#F59E0B", padding: "7px 12px", display: "flex", alignItems: "center", gap: 7 }}>
-                            <ImageIcon size={13} color="#fff" />
-                            <span style={{ fontSize: 11, fontWeight: 900, color: "#fff", letterSpacing: "0.6px", textTransform: "uppercase" }}>Foto Contoh</span>
-                            <span style={{ marginLeft: "auto", background: "rgba(255,255,255,0.3)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 6, padding: "2px 7px", letterSpacing: "0.4px" }}>BUKAN FOTO ASLI</span>
+                    {/* Report items */}
+                    {reportItemsLoading ? (
+                      <p style={{ fontSize: 12, color: "var(--muted)", textAlign: "center", padding: "12px 0" }}>
+                        Memuat konfigurasi...
+                      </p>
+                    ) : null}
+
+                    {!reportItemsLoading && reportItems.length === 0 && (
+                      <div className="panel" style={{ padding: 14, fontSize: 13, color: "var(--muted)", textAlign: "center" }}>
+                        Admin belum mengatur item foto. Gunakan foto laporan umum di bawah.
+                      </div>
+                    )}
+
+                    {effectiveReportItems.map((item) => {
+                      const done = Boolean(reportPhotos[item.label]);
+                      const isUploadMode = item.photo_mode === "upload";
+                      return (
+                        <div key={item.id} className={`report-item-card${done ? " done" : ""}`}>
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                            <div style={{ flex: 1 }}>
+                              <h3 style={{ fontSize: 14, fontWeight: 800 }}>
+                                {item.label}
+                                {item.required ? <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span> : null}
+                              </h3>
+                              <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                                {item.required ? "Wajib" : "Opsional"}
+                                {" · "}
+                                {isUploadMode ? "Upload foto" : "Foto langsung"}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => isUploadMode ? openUploadForItem(item) : openReportCamera(item)}
+                              disabled={reportPhotoDisabled}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 6,
+                                background: done ? "var(--success)" : reportTypeColor,
+                                color: "#fff", border: "none", borderRadius: 10,
+                                padding: "9px 14px", fontSize: 12, fontWeight: 800,
+                                cursor: reportPhotoDisabled ? "not-allowed" : "pointer",
+                                fontFamily: "var(--font-nunito,sans-serif)", flexShrink: 0,
+                                opacity: reportPhotoDisabled ? 0.48 : 1
+                              }}
+                            >
+                              {done ? <CheckCircle2 size={14} /> : isUploadMode ? <Upload size={14} /> : <Camera size={14} />}
+                              {done ? "Ubah" : isUploadMode ? "Upload" : "Foto"}
+                            </button>
                           </div>
-                          <div style={{ padding: "7px 12px 4px", background: "#FEF3C7" }}>
-                            <p style={{ fontSize: 11, color: "#92400E", fontWeight: 700, lineHeight: 1.4 }}>
-                              Ini hanya contoh foto yang benar. Foto kamu harus sesuai kondisi toko yang sesungguhnya.
-                            </p>
-                          </div>
-                          <a href={item.example_photo_url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={item.example_photo_url} alt={`Contoh: ${item.label}`} style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 180, background: "#f8fafc", opacity: 0.88 }} />
-                          </a>
-                          <div style={{ padding: "5px 12px 8px", background: "#FEF3C7" }}>
-                            <p style={{ fontSize: 10, color: "#B45309", textAlign: "center", fontWeight: 600 }}>👆 Tap foto untuk memperbesar contoh</p>
-                          </div>
+
+                          {item.example_photo_url && !done && (
+                            <div style={{ marginTop: 12, border: "2.5px dashed #F59E0B", borderRadius: 12, overflow: "hidden", background: "#FFFBEB" }}>
+                              <div style={{ background: "#F59E0B", padding: "7px 12px", display: "flex", alignItems: "center", gap: 7 }}>
+                                <ImageIcon size={13} color="#fff" />
+                                <span style={{ fontSize: 11, fontWeight: 900, color: "#fff", letterSpacing: "0.6px", textTransform: "uppercase" }}>Foto Contoh</span>
+                                <span style={{ marginLeft: "auto", background: "rgba(255,255,255,0.3)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 6, padding: "2px 7px", letterSpacing: "0.4px" }}>BUKAN FOTO ASLI</span>
+                              </div>
+                              <div style={{ padding: "7px 12px 4px", background: "#FEF3C7" }}>
+                                <p style={{ fontSize: 11, color: "#92400E", fontWeight: 700, lineHeight: 1.4 }}>
+                                  Ini hanya contoh foto yang benar. Foto kamu harus sesuai kondisi toko yang sesungguhnya.
+                                </p>
+                              </div>
+                              <a href={item.example_photo_url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={item.example_photo_url} alt={`Contoh: ${item.label}`} style={{ width: "100%", display: "block", objectFit: "contain", maxHeight: 180, background: "#f8fafc", opacity: 0.88 }} />
+                              </a>
+                              <div style={{ padding: "5px 12px 8px", background: "#FEF3C7" }}>
+                                <p style={{ fontSize: 10, color: "#B45309", textAlign: "center", fontWeight: 600 }}>👆 Tap foto untuk memperbesar contoh</p>
+                              </div>
+                            </div>
+                          )}
+
+                          {done && (
+                            <div style={{ marginTop: 8 }}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={reportPhotos[item.label]?.previewUrl} alt={item.label} className="report-photo-thumb" />
+                            </div>
+                          )}
                         </div>
-                      )}
+                      );
+                    })}
 
-                      {done && (
-                        <div style={{ marginTop: 8 }}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={reportPhotos[item.label]?.previewUrl} alt={item.label} className="report-photo-thumb" />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                <button
-                  className="btn btn-ok btn-action"
-                  disabled={reportSubmitDisabled}
-                  onClick={submitReport}
-                  style={{ marginTop: 4, fontSize: 15 }}
-                >
-                  <Send size={18} />
-                  {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}`}
-                </button>
+                    <button
+                      className="btn btn-ok btn-action"
+                      disabled={reportSubmitDisabled}
+                      onClick={submitReport}
+                      style={{ marginTop: 4, fontSize: 15 }}
+                    >
+                      <Send size={18} />
+                      {reportBusy ? (reportBusyLabel || "Mengirim laporan...") : `Kirim Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"}`}
+                    </button>
                   </>
                 )}
               </>
