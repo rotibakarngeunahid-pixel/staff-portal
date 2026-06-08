@@ -260,6 +260,12 @@ export default function StaffHomePage() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadingItemRef = useRef<ReportCfgItem | null>(null);
 
+  /* ─── Late reason modal ─── */
+  const [pendingCheckinPhoto, setPendingCheckinPhoto] = useState<CapturedPhoto | null>(null);
+  const [showLateReasonModal, setShowLateReasonModal] = useState(false);
+  const [lateReason, setLateReason] = useState("");
+  const [lateReasonError, setLateReasonError] = useState("");
+
   /* ─── Draft auto-save ─── */
   const [draftSavedVisible, setDraftSavedVisible] = useState(false);
   const draftSaveTimerRef = useRef<number | null>(null);
@@ -531,7 +537,7 @@ export default function StaffHomePage() {
   function closeCamera() { setCamera(null); }
 
   /* ─── Checkin / Checkout ─── */
-  async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto) {
+  async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto, reason?: string) {
     if (attendanceBusyRef.current) return; // anti double-submit
     setError("");
     if (action === "checkin" && (gps.lat === null || gps.lng === null)) {
@@ -560,6 +566,7 @@ export default function StaffHomePage() {
       body.append("lat", String(gps.lat));
       body.append("lng", String(gps.lng));
       body.append("accuracy", String(gps.accuracy));
+      if (reason) body.append("lateReason", reason);
       setBusy(action === "checkin" ? "Menyimpan absen masuk..." : "Menyimpan absen pulang...");
       const result = await apiFetch<{ ok: true; praise_message?: string | null }>(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       if (action === "checkin" && result.praise_message) setPraiseMessage(result.praise_message);
@@ -570,6 +577,50 @@ export default function StaffHomePage() {
       attendanceBusyRef.current = false;
       setBusy("");
     }
+  }
+
+  function isLikelyLate(outlet: OutletInfo | null | undefined, shift: number, now: Date): boolean {
+    if (!outlet) return false;
+    const startStr = shift === 2 ? outlet.shift2_start : outlet.shift1_start;
+    if (!startStr) return false;
+    const parts = String(startStr).split(":");
+    const h = parseInt(parts[0] ?? "0", 10);
+    const m = parseInt(parts[1] ?? "0", 10);
+    const shiftStart = new Date(now);
+    shiftStart.setHours(h, m, 0, 0);
+    return now > shiftStart;
+  }
+
+  function handleCheckinCapture(photo: CapturedPhoto) {
+    const now = new Date(Date.now() + serverClockOffsetRef.current);
+    if (isLikelyLate(status?.outlet, status?.shift ?? 0, now)) {
+      setPendingCheckinPhoto(photo);
+      setLateReason("");
+      setLateReasonError("");
+      setShowLateReasonModal(true);
+    } else {
+      runAttendance("checkin", photo);
+    }
+  }
+
+  function submitLateReason() {
+    if (!lateReason.trim()) {
+      setLateReasonError("Alasan keterlambatan wajib diisi.");
+      return;
+    }
+    if (!pendingCheckinPhoto) return;
+    setShowLateReasonModal(false);
+    runAttendance("checkin", pendingCheckinPhoto, lateReason.trim());
+    setPendingCheckinPhoto(null);
+    setLateReason("");
+  }
+
+  function cancelLateReason() {
+    setShowLateReasonModal(false);
+    if (pendingCheckinPhoto) revokePhoto(pendingCheckinPhoto);
+    setPendingCheckinPhoto(null);
+    setLateReason("");
+    setLateReasonError("");
   }
 
   /* ─── Submit report ─── */
@@ -840,6 +891,70 @@ export default function StaffHomePage() {
         />
       )}
 
+      {/* Modal alasan keterlambatan */}
+      {showLateReasonModal && (
+        <>
+          <div
+            onClick={cancelLateReason}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 900, backdropFilter: "blur(2px)" }}
+          />
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            width: 340, maxWidth: "calc(100vw - 32px)",
+            background: "#fff", borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.25)",
+            zIndex: 901, padding: 24, display: "flex", flexDirection: "column", gap: 14
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <span style={{ fontSize: 36, lineHeight: 1.2 }}>⚠️</span>
+              <h2 style={{ fontSize: 17, fontWeight: 900, color: "#D97706", marginTop: 8, marginBottom: 4 }}>Kamu Terlambat</h2>
+              <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
+                Waktu absen masuk melebihi jam shift yang ditentukan. Tuliskan alasan keterlambatanmu untuk melanjutkan.
+              </p>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Alasan Keterlambatan <span style={{ color: "var(--danger)" }}>*</span>
+              </label>
+              <textarea
+                value={lateReason}
+                onChange={(e) => { setLateReason(e.target.value); setLateReasonError(""); }}
+                placeholder="Contoh: Kendaraan mogok, macet, transportasi telat, dll."
+                maxLength={500}
+                rows={3}
+                style={{
+                  width: "100%", borderRadius: 10, border: `1.5px solid ${lateReasonError ? "var(--danger)" : "var(--border)"}`,
+                  padding: "10px 12px", fontSize: 13, resize: "vertical", boxSizing: "border-box",
+                  fontFamily: "inherit", lineHeight: 1.5, outline: "none"
+                }}
+                autoFocus
+              />
+              {lateReasonError && (
+                <p style={{ fontSize: 12, color: "var(--danger)", fontWeight: 600, marginTop: 4 }}>{lateReasonError}</p>
+              )}
+              <p style={{ fontSize: 11, color: "var(--muted-light)", marginTop: 4 }}>{lateReason.length}/500 karakter</p>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                className="btn btn-primary"
+                style={{ fontSize: 14, fontWeight: 800, padding: "12px 0" }}
+                onClick={submitLateReason}
+                disabled={Boolean(busy)}
+              >
+                {busy ? busy : "Kirim Absen Masuk"}
+              </button>
+              <button
+                className="btn btn-soft"
+                style={{ fontSize: 13, padding: "10px 0" }}
+                onClick={cancelLateReason}
+                disabled={Boolean(busy)}
+              >
+                Batal, Ulangi Foto
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       <StaffPage title="Sistem Absensi" subtitle={outlet ? `${outlet.name} · ${formatDateID(status?.date)}` : undefined}>
         {/* Top action row */}
         <div style={{ display: "flex", gap: 8 }}>
@@ -1084,7 +1199,7 @@ export default function StaffHomePage() {
                       lat: gps.lat,
                       lng: gps.lng
                     },
-                    onCapture: (photo) => runAttendance("checkin", photo)
+                    onCapture: (photo) => handleCheckinCapture(photo)
                   })}
                   disabled={checkinDisabled}
                 >

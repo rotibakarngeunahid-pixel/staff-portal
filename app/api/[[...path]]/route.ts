@@ -1124,6 +1124,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
   if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
   await consumeNonce(db, stringBody(body, "nonce"));
+  const lateReason = stringBody(body, "lateReason");
 
   const cfg = await configMap(db);
   // Full shift always starts at shift1_start; shiftStartTime(outlet, 0) already returns shift1_start
@@ -1140,6 +1141,10 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     configNumber(cfg, "late_tolerance_minutes", 10),
     configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
   );
+
+  if (salary.lateMinutes > 0 && !lateReason) {
+    throw new HttpError("Alasan keterlambatan wajib diisi karena kamu terlambat masuk shift ini.", 400, "LATE_REASON_REQUIRED");
+  }
 
   const flags = [
     gpsLowAccuracy ? "GPS_LOW_ACCURACY" : "",
@@ -1167,7 +1172,8 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       flags,
       selfie_in: selfieUrl,
       lat,
-      lng
+      lng,
+      late_reason: lateReason || null
     })
     .select("*")
     .single();
@@ -2595,6 +2601,11 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       ["late_minutes", "deduction", "final_salary", "status", "paid_status"].forEach((key) => {
         if (body[key] !== undefined && body[key] !== null && body[key] !== "") updates[key] = body[key];
       });
+    }
+
+    // Update late_reason jika dikirim (bisa di-clear dengan string kosong)
+    if (body.late_reason !== undefined) {
+      updates.late_reason = stringBody(body, "late_reason") || null;
     }
 
     if (body.checkin_time) updates.checkin_time = dateTimeUtc(existing.date, String(body.checkin_time).slice(0, 5)).toISOString();

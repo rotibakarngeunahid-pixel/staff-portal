@@ -83,6 +83,7 @@ export type Attendance = {
   original_deduction: number | null;
   original_final_salary: number | null;
   created_at?: string;
+  late_reason?: string | null;
   // PRD §11.3 — schedule linkage
   schedule_id?: string | null;
   shift_type?: ShiftType | null;

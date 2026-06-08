@@ -25,6 +25,7 @@ type Attendance = {
   selfie_out?: string | null;
   flags?: string | null;
   revision_note?: string | null;
+  late_reason?: string | null;
 };
 type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
 type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number; active?: boolean };
@@ -120,7 +121,7 @@ export default function AdminAttendancePage() {
 
   // Revise modal
   const [reviseTarget, setReviseTarget] = useState<Attendance | null>(null);
-  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "", shift: "" });
+  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "", shift: "", late_reason: "" });
   const [revising, setRevising] = useState(false);
 
   // Delete modal
@@ -212,7 +213,8 @@ export default function AdminAttendancePage() {
       late_minutes: String(row.late_minutes),
       deduction: String(row.deduction),
       final_salary: String(row.final_salary),
-      shift: String(row.shift)
+      shift: String(row.shift),
+      late_reason: row.late_reason || ""
     });
   }
 
@@ -232,6 +234,7 @@ export default function AdminAttendancePage() {
         body: {
           attendanceId: reviseTarget.id,
           revision_note: reviseForm.revision_note,
+          late_reason: reviseForm.late_reason,
           ...(shiftChanged ? { shift: reviseForm.shift } : {
             late_minutes: reviseForm.late_minutes,
             deduction: reviseForm.deduction,
@@ -516,6 +519,7 @@ export default function AdminAttendancePage() {
                 <th>Masuk</th>
                 <th>Pulang</th>
                 <th>Telat</th>
+                <th>Alasan Terlambat</th>
                 <th>Gaji</th>
                 <th>Status Bayar</th>
                 <th>Foto / GPS</th>
@@ -526,13 +530,13 @@ export default function AdminAttendancePage() {
               {loading ? (
                 [1, 2, 3, 4].map((i) => (
                   <tr key={i}>
-                    {[60, 90, 80, 40, 40, 40, 40, 60, 55, 50, 80].map((w, j) => (
+                    {[60, 90, 80, 40, 40, 40, 40, 100, 60, 55, 50, 80].map((w, j) => (
                       <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
                     ))}
                   </tr>
                 ))
               ) : rows.length === 0 ? (
-                <tr><td colSpan={11} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+                <tr><td colSpan={12} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
               ) : rows.map((row) => {
                 const gps = parseCheckoutGps(row.flags);
                 const hasSelfie = row.selfie_in || row.selfie_out;
@@ -545,6 +549,19 @@ export default function AdminAttendancePage() {
                     <td>{hhmm(row.checkin_time)}</td>
                     <td>{hhmm(row.checkout_time)}</td>
                     <td>{row.late_minutes} mnt</td>
+                    <td style={{ maxWidth: 160 }}>
+                      {row.status === "late" && row.late_reason ? (
+                        <span title={row.late_reason} style={{
+                          fontSize: 12, display: "block",
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                          color: "var(--warning)", fontWeight: 600
+                        }}>
+                          {row.late_reason}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--muted-light)", fontSize: 12 }}>—</span>
+                      )}
+                    </td>
                     <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
                     <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
                     <td>
@@ -664,6 +681,18 @@ export default function AdminAttendancePage() {
                     <input className="field" type="number" min="0" value={reviseForm.final_salary}
                       onChange={(e) => setReviseForm({ ...reviseForm, final_salary: e.target.value })} />
                   </div>
+                </div>
+              )}
+              {(reviseTarget.status === "late" || reviseForm.late_reason) && (
+                <div>
+                  <label className="label">Alasan Terlambat</label>
+                  <input
+                    className="field"
+                    placeholder="Alasan keterlambatan (opsional untuk admin)"
+                    value={reviseForm.late_reason}
+                    onChange={(e) => setReviseForm({ ...reviseForm, late_reason: e.target.value })}
+                    maxLength={500}
+                  />
                 </div>
               )}
             </div>
