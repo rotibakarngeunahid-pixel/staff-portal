@@ -11,7 +11,7 @@ import { drawWatermark } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
 import { useSessionStore } from "@/stores/session";
-import { saveDraft, loadDraft, clearDraft } from "@/lib/report-draft";
+import { saveDraft, loadDraft, clearDraft, type RestoredPhoto } from "@/lib/report-draft";
 
 /* ─── Types ─── */
 type Attendance = {
@@ -209,6 +209,8 @@ function RealtimeGuide({
 
   if (!message) return null;
 
+  void shiftLabel; // suppress unused warning
+
   return (
     <div style={{
       background: bg, border: `1.5px solid ${border}`,
@@ -221,6 +223,12 @@ function RealtimeGuide({
       </p>
     </div>
   );
+}
+
+/* ─── Format HH:MM dari ISO string ─── */
+function fmtTime(isoString: string): string {
+  const d = new Date(isoString);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 export default function StaffHomePage() {
@@ -267,9 +275,32 @@ export default function StaffHomePage() {
   const [lateReasonError, setLateReasonError] = useState("");
 
   /* ─── Draft auto-save ─── */
-  const [draftSavedVisible, setDraftSavedVisible] = useState(false);
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftHideTimerRef = useRef<number | null>(null);
+
+  /* ─── Draft restore dialog ─── */
+  const [draftRestoreDialog, setDraftRestoreDialog] = useState<{
+    draft: Record<string, RestoredPhoto>;
+    savedAt: string;
+  } | null>(null);
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
+  const pendingDraftRef = useRef<Record<string, RestoredPhoto> | null>(null);
+
+  /* ─── Staff ID dari JWT (konstan selama sesi) ─── */
+  const staffId = useMemo<string>(() => {
+    if (typeof window === "undefined") return "unknown";
+    try {
+      const token = localStorage.getItem("rbn_staff_token");
+      if (!token) return "unknown";
+      const parts = token.split(".");
+      if (parts.length !== 3) return "unknown";
+      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const payload = JSON.parse(atob(b64)) as { sub?: string };
+      return String(payload.sub || "unknown");
+    } catch {
+      return "unknown";
+    }
+  }, []);
 
   useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
@@ -292,10 +323,8 @@ export default function StaffHomePage() {
 
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = window.setTimeout(async () => {
-      await saveDraft(type, reportPhotos, date, shift);
-      setDraftSavedVisible(true);
-      if (draftHideTimerRef.current !== null) window.clearTimeout(draftHideTimerRef.current);
-      draftHideTimerRef.current = window.setTimeout(() => setDraftSavedVisible(false), 4000);
+      await saveDraft(type, staffId, reportPhotos, date, shift);
+      setDraftSavedAt(new Date());
     }, 400);
 
     return () => {
@@ -469,26 +498,30 @@ export default function StaffHomePage() {
     });
   }
 
-  /* ─── Load report config when entering report state ─── */
+  /* ─── Load report config dan cek draft saat masuk state laporan ─── */
   useEffect(() => {
+    // Bersihkan pending draft dari state laporan sebelumnya (jika ada)
+    if (pendingDraftRef.current) {
+      Object.values(pendingDraftRef.current).forEach(revokePhoto);
+      pendingDraftRef.current = null;
+    }
+    setDraftRestoreDialog(null);
+    setDraftSavedAt(null);
+
     if (nextState !== "report_buka" && nextState !== "report_tutup") return;
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
     setReportItemsLoading(true);
     clearReportPhotos();
     setReportError("");
 
-    // Pulihkan draft jika ada dan masih valid untuk shift hari ini
-    // (status selalu tersedia saat nextState menjadi report karena nextState diturunkan dari status)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Cek draft tersimpan untuk staff + tanggal + shift hari ini
     const s = status;
     if (s?.date && s?.shift !== undefined) {
-      const draft = loadDraft(type, s.date, s.shift);
-      if (draft && Object.keys(draft).length > 0) {
-        setReportPhotos(draft);
-        reportPhotosRef.current = draft;
-        setDraftSavedVisible(true);
-        if (draftHideTimerRef.current !== null) window.clearTimeout(draftHideTimerRef.current);
-        draftHideTimerRef.current = window.setTimeout(() => setDraftSavedVisible(false), 5000);
+      const result = loadDraft(type, staffId, s.date, s.shift);
+      if (result && Object.keys(result.photos).length > 0) {
+        // Simpan ke ref agar bisa di-cleanup jika dialog diabaikan
+        pendingDraftRef.current = result.photos;
+        setDraftRestoreDialog({ draft: result.photos, savedAt: result.savedAt });
       }
     }
 
@@ -704,8 +737,9 @@ export default function StaffHomePage() {
       });
 
       clearReportPhotos();
-      clearDraft(type); // hapus draft setelah laporan berhasil dikirim
-      setDraftSavedVisible(false);
+      // Hapus draft setelah laporan berhasil dikirim
+      clearDraft(type, staffId, status?.date || "");
+      setDraftSavedAt(null);
       setReportBusyLabel("Memuat ulang status...");
       await load();
     } catch (err) {
@@ -721,6 +755,27 @@ export default function StaffHomePage() {
     await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setStaffToken(null);
     router.replace("/app/login");
+  }
+
+  /* ─── Draft restore / discard handlers ─── */
+  function handleRestoreDraft() {
+    if (!draftRestoreDialog) return;
+    // Foto berpindah ke reportPhotos — pending ref tidak perlu cleanup lagi
+    pendingDraftRef.current = null;
+    setReportPhotos(draftRestoreDialog.draft);
+    reportPhotosRef.current = draftRestoreDialog.draft;
+    setDraftSavedAt(new Date(draftRestoreDialog.savedAt));
+    setDraftRestoreDialog(null);
+  }
+
+  function handleDiscardDraft() {
+    if (!draftRestoreDialog) return;
+    // Revoke semua object URL foto yang belum dipakai
+    Object.values(draftRestoreDialog.draft).forEach(revokePhoto);
+    pendingDraftRef.current = null;
+    if (status?.date) clearDraft(reportType as "BUKA" | "TUTUP", staffId, status.date);
+    setDraftSavedAt(null);
+    setDraftRestoreDialog(null);
   }
 
   const att = status?.attendance;
@@ -774,6 +829,13 @@ export default function StaffHomePage() {
     loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit ||
     !requiredReportPhotosComplete || effectiveReportItems.length === 0 ||
     (nextState === "report_tutup" && invCheck !== "ok");
+
+  /* ─── Warna indikator draft: hijau jika < 5 menit, abu-abu jika lebih ─── */
+  const draftIndicatorColor = draftSavedAt
+    ? clockNow.getTime() - draftSavedAt.getTime() < 5 * 60 * 1000
+      ? "#16A34A"
+      : "#9CA3AF"
+    : "#9CA3AF";
 
   function openReportCamera(item: ReportCfgItem) {
     if (!reportWindow.canSubmit) {
@@ -889,6 +951,51 @@ export default function StaffHomePage() {
           onCapture={camera.onCapture}
           onCancel={closeCamera}
         />
+      )}
+
+      {/* ═══ Modal: Draft Tersimpan Ditemukan ═══ */}
+      {draftRestoreDialog && (
+        <>
+          <div
+            onClick={handleDiscardDraft}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 900, backdropFilter: "blur(2px)" }}
+          />
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            width: 340, maxWidth: "calc(100vw - 32px)",
+            background: "#fff", borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.25)",
+            zIndex: 901, padding: 24, display: "flex", flexDirection: "column", gap: 14
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <span style={{ fontSize: 36, lineHeight: 1.2 }}>📝</span>
+              <h2 style={{ fontSize: 17, fontWeight: 900, color: "#1D4ED8", marginTop: 8, marginBottom: 4 }}>
+                Draft Ditemukan
+              </h2>
+              <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7 }}>
+                Ditemukan draft tersimpan dari pukul{" "}
+                <strong style={{ color: "#1D4ED8" }}>{fmtTime(draftRestoreDialog.savedAt)}</strong>.
+                <br />
+                Lanjutkan mengisi laporan dengan foto yang sudah tersimpan?
+              </p>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                className="btn btn-primary"
+                style={{ fontSize: 14, fontWeight: 800, padding: "12px 0" }}
+                onClick={handleRestoreDraft}
+              >
+                Ya, Lanjutkan
+              </button>
+              <button
+                className="btn btn-soft"
+                style={{ fontSize: 13, padding: "10px 0" }}
+                onClick={handleDiscardDraft}
+              >
+                Mulai Baru
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Modal alasan keterlambatan */}
@@ -1310,7 +1417,7 @@ export default function StaffHomePage() {
               </>
             ) : (
               <>
-                {/* Report header */}
+                {/* ─── Report header (dengan indikator draft di pojok kanan atas) ─── */}
                 <div style={{
                   background: `${reportTypeColor}0E`, border: `1.5px solid ${reportTypeColor}30`,
                   borderRadius: 16, padding: "14px 16px",
@@ -1329,22 +1436,18 @@ export default function StaffHomePage() {
                     <p style={{ fontSize: 10, color: "var(--muted-light)", marginTop: 2 }}>
                       {status?.shift === 0 ? "Full Shift" : `Shift ${status?.shift}`}
                     </p>
+                    {/* Indikator draft — selalu terlihat saat ada draft tersimpan */}
+                    {draftSavedAt && (
+                      <div style={{
+                        display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
+                        marginTop: 4, fontSize: 9, fontWeight: 700, color: draftIndicatorColor
+                      }}>
+                        <CheckCircle2 size={9} />
+                        <span>Draft {fmtTime(draftSavedAt.toISOString())}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-
-                {/* Indikator draft tersimpan */}
-                {draftSavedVisible && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    background: "#F0FDF4", border: "1px solid #BBF7D0",
-                    borderRadius: 8, padding: "6px 12px",
-                    fontSize: 11, fontWeight: 700, color: "#16A34A",
-                    alignSelf: "flex-start"
-                  }}>
-                    <CheckCircle2 size={12} />
-                    Draft tersimpan
-                  </div>
-                )}
 
                 {/* GPS bar (compact) */}
                 <div className="gps-bar" style={{ padding: "10px 14px" }}>
