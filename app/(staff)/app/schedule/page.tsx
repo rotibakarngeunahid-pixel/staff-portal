@@ -245,8 +245,10 @@ export default function StaffSchedulePage() {
   }, [weekStart]);
 
   const nextWeek = useMemo(() => {
-    const date = new Date(`${weekStart}T00:00:00`);
-    date.setDate(date.getDate() + 7);
+    // Hitung dalam UTC murni — parsing "T00:00:00" (lokal) lalu toISOString (UTC)
+    // mundur 1 hari di zona UTC+7/+8 sehingga tombol hanya maju 6 hari.
+    const date = new Date(`${weekStart}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + 7);
     return date.toISOString().slice(0, 10);
   }, [weekStart]);
 

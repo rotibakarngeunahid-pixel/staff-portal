@@ -40,7 +40,13 @@ export default function AdminConfigPage() {
     setSavingConfig(true);
     setMessage("Menyimpan..."); setMsgType("info");
     try {
-      await apiFetch("/api/admin/config", { method: "PUT", role: "admin", body: config });
+      // Kirim hanya field yang bisa diedit di halaman ini — jangan kirim seluruh config
+      // (terutama admin_pin_hash) agar tidak menimpa nilai yang diubah di tempat lain.
+      const editable: Record<string, string> = {};
+      CONFIG_FIELDS.forEach(([key]) => {
+        if (config[key] !== undefined) editable[key] = config[key];
+      });
+      await apiFetch("/api/admin/config", { method: "PUT", role: "admin", body: editable });
       setMessage("Pengaturan tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");

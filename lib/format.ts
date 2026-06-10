@@ -41,8 +41,10 @@ export function hhmm(value?: string | null) {
     const match = value.match(/\d{1,2}:\d{2}/);
     return match ? match[0] : "-";
   }
+  // Jam bisnis kanonik adalah WITA (Asia/Makassar) — sama dengan jam shift outlet,
+  // watermark foto, email notifikasi, dan kalkulasi keterlambatan (dateTimeUtc +08:00).
   return new Intl.DateTimeFormat("id-ID", {
-    timeZone: "Asia/Jakarta",
+    timeZone: "Asia/Makassar",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false

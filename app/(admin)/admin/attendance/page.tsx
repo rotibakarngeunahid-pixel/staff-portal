@@ -32,6 +32,11 @@ type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: 
 type BulkEntry = { staffId: string; staffName: string; checked: boolean; checkin_time: string; checkout_time: string };
 type BulkResult = { staffId: string; staffName: string; status: "success" | "error"; message?: string };
 
+/** Tanggal hari ini menurut jam bisnis WITA — toISOString() (UTC) bisa mundur 1 hari sebelum 08:00 WITA */
+function todayWita(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(new Date());
+}
+
 function parseCheckoutGps(flags?: string | null): { lat: string; lng: string; acc: string } | null {
   if (!flags) return null;
   const seg = flags.split(",").find((f) => f.startsWith("CHECKOUT_GPS:"));
@@ -105,14 +110,14 @@ export default function AdminAttendancePage() {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [filters, setFilters] = useState({ dateFrom: "", dateTo: "", staffId: "", outletId: "", status: "" });
-  const [manual, setManual] = useState({ staffId: "", outletId: "", date: new Date().toISOString().slice(0, 10), shift: "0", checkin_time: "09:00", checkout_time: "" });
+  const [manual, setManual] = useState({ staffId: "", outletId: "", date: todayWita(), shift: "0", checkin_time: "09:00", checkout_time: "" });
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [showBulk, setShowBulk] = useState(false);
-  const [bulkDate, setBulkDate] = useState(new Date().toISOString().slice(0, 10));
+  const [bulkDate, setBulkDate] = useState(todayWita());
   const [bulkOutletId, setBulkOutletId] = useState("");
   const [bulkShift, setBulkShift] = useState("0");
   const [bulkEntries, setBulkEntries] = useState<BulkEntry[]>([]);

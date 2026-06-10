@@ -3,9 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, Clock, ImageIcon, LogOut, MapPin, RefreshCw, Send, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/client-api";
+import { ApiError, apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
-import { haversineDistance, isCheckoutTimeReached, reportSubmissionStatus, shiftEndTime } from "@/lib/business";
+import {
+  WORKING_DAY_CUTOFF_HOUR,
+  haversineDistance,
+  hourMakassar,
+  isCheckoutTimeReached,
+  parseTimeToMinutes,
+  reportSubmissionStatus,
+  shiftEndTime,
+  timeMakassar
+} from "@/lib/business";
 import { CapturedPhoto, isValidImageFile, photoFromFile, revokePhoto } from "@/lib/client-image";
 import { drawWatermark } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
@@ -41,6 +50,7 @@ type StatusPayload = {
   ok: true;
   staff: { name: string };
   outlet: OutletInfo;
+  config?: Record<string, string>;
   date: string;
   shift: number;
   isFullShift?: boolean;
@@ -605,28 +615,48 @@ export default function StaffHomePage() {
       if (action === "checkin" && result.praise_message) setPraiseMessage(result.praise_message);
       await load();
     } catch (err) {
-      setError(humanError(err));
+      // Fallback: server mendeteksi telat tapi modal alasan belum sempat muncul
+      // (mis. jam perangkat tidak akurat) → buka modal dengan selfie yang sama,
+      // jangan buang foto agar staff tidak terkunci dari absen masuk.
+      if (action === "checkin" && err instanceof ApiError && err.code === "LATE_REASON_REQUIRED") {
+        setPendingCheckinPhoto(selfie);
+        setLateReason(reason || "");
+        setLateReasonError("");
+        setShowLateReasonModal(true);
+      } else {
+        setError(humanError(err));
+      }
     } finally {
       attendanceBusyRef.current = false;
       setBusy("");
     }
   }
 
-  function isLikelyLate(outlet: OutletInfo | null | undefined, shift: number, now: Date): boolean {
+  function isLikelyLate(
+    outlet: OutletInfo | null | undefined,
+    shift: number,
+    now: Date,
+    toleranceMinutes: number
+  ): boolean {
     if (!outlet) return false;
+    // Shift 0 (full shift) mulai pada jam shift 1
     const startStr = shift === 2 ? outlet.shift2_start : outlet.shift1_start;
     if (!startStr) return false;
-    const parts = String(startStr).split(":");
-    const h = parseInt(parts[0] ?? "0", 10);
-    const m = parseInt(parts[1] ?? "0", 10);
-    const shiftStart = new Date(now);
-    shiftStart.setHours(h, m, 0, 0);
-    return now > shiftStart;
+    // Bandingkan dengan jam WITA (jam bisnis kanonik), bukan jam perangkat —
+    // perangkat dengan zona waktu/jam berbeda membuat modal alasan telat tidak muncul.
+    const startMin = parseTimeToMinutes(startStr);
+    const nowMin = parseTimeToMinutes(timeMakassar(now));
+    if (startMin === null || nowMin === null) return false;
+    // Dini hari (< cutoff 03:00) masih bagian hari kerja sebelumnya →
+    // pasti sudah melewati jam mulai shift malam (mis. checkin 00:30 untuk shift 2 jam 15:00)
+    if (hourMakassar(now) < WORKING_DAY_CUTOFF_HOUR && startMin >= WORKING_DAY_CUTOFF_HOUR * 60) return true;
+    return nowMin > startMin + toleranceMinutes;
   }
 
   function handleCheckinCapture(photo: CapturedPhoto) {
     const now = new Date(Date.now() + serverClockOffsetRef.current);
-    if (isLikelyLate(status?.outlet, status?.shift ?? 0, now)) {
+    const tolerance = Number(status?.config?.late_tolerance_minutes ?? 10) || 0;
+    if (isLikelyLate(status?.outlet, status?.shift ?? 0, now, tolerance)) {
       setPendingCheckinPhoto(photo);
       setLateReason("");
       setLateReasonError("");
