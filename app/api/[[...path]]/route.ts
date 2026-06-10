@@ -753,9 +753,11 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   const assignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, effective);
 
   // Override effectiveShift berdasarkan assignment (lebih akurat dari deteksi berbasis jam)
+  // FULL_SHIFT assignment pada outlet 2 shift → effectiveShift 0 (laporan BUKA+TUTUP, gaji 2x)
   if (assignment && !isFullShift) {
     const assignedShift = shiftFromShiftType((assignment as any).shift_type);
     if (assignedShift === 1 || assignedShift === 2) effectiveShift = assignedShift;
+    else if (assignedShift === 0 && outlet.shift_mode === 2) effectiveShift = 0;
   }
 
   // Smart fallback overlap-shift: jika shift=1 terdeteksi (time-based, tanpa assignment aktif)
@@ -1001,12 +1003,15 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
 
   // Override shift berdasarkan assignment jika ada (mencegah deteksi shift salah saat datang lebih awal)
   // Contoh: staff punya assignment SHIFT_2 tapi absen sebelum shift2_start → shift tetap 2 bukan 1
+  // Assignment FULL_SHIFT (staff ambil "Full Shift" dari menu Jadwal) → shift 0 agar gaji 2x dan
+  // alur laporan BUKA+TUTUP berlaku. shiftFromShiftType mengembalikan 0 (falsy) untuk FULL_SHIFT,
+  // jadi wajib dibandingkan dengan null — jangan pakai `|| shift`.
   let checkinAssignment: Awaited<ReturnType<typeof resolveStaffShiftAssignment>> | null = null;
   if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
     checkinAssignment = await resolveStaffShiftAssignment(db, staff.id, outlet.id, date);
     if (checkinAssignment) {
-      const assignedShiftNum = shiftFromShiftType((checkinAssignment as any).shift_type) || shift;
-      if (assignedShiftNum !== shift) shift = assignedShiftNum as 1 | 2;
+      const assignedShiftNum = shiftFromShiftType((checkinAssignment as any).shift_type);
+      if (assignedShiftNum !== null && assignedShiftNum !== shift) shift = assignedShiftNum;
     }
   }
 
@@ -1120,10 +1125,6 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     throw new HttpError(`Kamu di luar area outlet (${Math.round(distance)}m dari pusat)`, 400, "OUTSIDE_RADIUS");
   }
   const gpsLowAccuracy = accuracy > radius * 3;
-  const selfie = body.selfie || body.photo;
-  const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
-  if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
-  await consumeNonce(db, stringBody(body, "nonce"));
   const lateReason = stringBody(body, "lateReason");
 
   const cfg = await configMap(db);
@@ -1142,9 +1143,16 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
   );
 
+  // Validasi alasan telat SEBELUM upload selfie & konsumsi nonce —
+  // agar selfie tidak terbuang dan request bisa diulang dengan aman.
   if (salary.lateMinutes > 0 && !lateReason) {
     throw new HttpError("Alasan keterlambatan wajib diisi karena kamu terlambat masuk shift ini.", 400, "LATE_REASON_REQUIRED");
   }
+
+  const selfie = body.selfie || body.photo;
+  const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
+  if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
+  await consumeNonce(db, stringBody(body, "nonce"));
 
   const flags = [
     gpsLowAccuracy ? "GPS_LOW_ACCURACY" : "",
@@ -1277,6 +1285,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     scheduledStart: shiftStartTime(outlet, shift),
     checkinTime: now.toISOString(),
     lateMinutes: salary.lateMinutes,
+    lateReason: lateReason || null,
     lat,
     lng,
     accuracy,
@@ -1647,7 +1656,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   if (type === "BUKA") {
     const { data: attRows, error: attEmailError } = await db
       .from("attendance")
-      .select("id, checkin_time, selfie_in, lat, lng, late_minutes, shift, flags")
+      .select("id, checkin_time, selfie_in, lat, lng, late_minutes, late_reason, shift, flags")
       .eq("staff_id", staff.id)
       .eq("date", date)
       .not("checkin_time", "is", null);
@@ -1665,6 +1674,7 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
         scheduledStart: shiftStartTime(outlet, isFullShiftAttendance ? 0 : (attShift as 0 | 1 | 2)),
         checkinTime: attData?.checkin_time || null,
         lateMinutes: attData?.late_minutes || 0,
+        lateReason: attData?.late_reason || null,
         checkinLat: attData?.lat || null,
         checkinLng: attData?.lng || null,
         selfieInUrl: attData?.selfie_in || null
@@ -3677,6 +3687,10 @@ async function adminConfig(db: Db, method: string, body: Body) {
       }
     } else {
       Object.entries(body).forEach(([key, value]) => {
+        // Password admin hanya boleh diubah lewat mode single-key (key: "admin_pin").
+        // Tanpa guard ini, bulk save dari halaman pengaturan bisa menimpa hash password
+        // baru dengan nilai lama yang masih tersimpan di state browser.
+        if (key === "admin_pin" || key === "admin_pin_hash") return;
         if (value !== undefined && value !== null) entries.push({ key, value: String(value) });
       });
     }

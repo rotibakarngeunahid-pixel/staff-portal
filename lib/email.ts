@@ -371,20 +371,27 @@ export function buildAttendanceInEmail(data: {
   scheduledStart?: string | null;
   checkinTime: string;
   lateMinutes?: number;
+  lateReason?: string | null;
   lat?: number | null;
   lng?: number | null;
   accuracy?: number | null;
   selfieUrl?: string | null;
 }) {
   const isLate = Number(data.lateMinutes || 0) > 0;
+  const timeRows: InfoRow[] = [
+    { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : "-" },
+    { label: "Jam absen masuk", value: formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") },
+    { label: "Status keterlambatan", value: isLate ? `Terlambat ${formatMinutes(data.lateMinutes)}` : "Tepat waktu", tone: isLate ? "warning" : "success" },
+    ...(isLate && data.lateReason
+      ? [{ label: "Alasan keterlambatan", value: data.lateReason, tone: "warning" as const }]
+      : [])
+  ];
   const rows: InfoRow[] = [
     { label: "Nama staff", value: data.staffName },
     { label: "Outlet", value: data.outletName },
     { label: "Shift", value: data.shiftLabel },
     { label: "Tanggal operasional", value: formatDateID(data.date) },
-    { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : "-" },
-    { label: "Jam absen masuk", value: formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") },
-    { label: "Status keterlambatan", value: isLate ? `Terlambat ${formatMinutes(data.lateMinutes)}` : "Tepat waktu", tone: isLate ? "warning" : "success" },
+    ...timeRows,
     { label: "Lokasi/GPS", value: gpsText(data.lat, data.lng, data.accuracy) }
   ];
 
@@ -396,8 +403,8 @@ export function buildAttendanceInEmail(data: {
     statusTone: isLate ? "warning" : "success",
     sections:
       section("Informasi Staff", infoTable(rows.slice(0, 4))) +
-      section("Detail Waktu", infoTable(rows.slice(4, 7))) +
-      section("Lokasi/GPS", infoTable(rows.slice(7)) + actionButton(mapsUrl, "Buka Lokasi GPS")) +
+      section("Detail Waktu", infoTable(timeRows)) +
+      section("Lokasi/GPS", infoTable([{ label: "Lokasi/GPS", value: gpsText(data.lat, data.lng, data.accuracy) }]) + actionButton(mapsUrl, "Buka Lokasi GPS")) +
       section("Foto Dokumentasi", photoGallery([{ label: "Foto Selfie Absen Masuk", url: data.selfieUrl }]))
   });
   return { subject: `[RBN] Absen Masuk - ${data.staffName}`, html, text: textTemplate("Absen Masuk Staff", rows) };
@@ -411,20 +418,25 @@ export function buildLateAttendanceEmail(data: {
   scheduledStart?: string | null;
   checkinTime: string;
   lateMinutes: number;
+  lateReason?: string | null;
   lat?: number | null;
   lng?: number | null;
   accuracy?: number | null;
   selfieUrl?: string | null;
 }) {
+  const lateRows: InfoRow[] = [
+    { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : "-" },
+    { label: "Jam absen masuk", value: formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") },
+    { label: "Total terlambat", value: formatMinutes(data.lateMinutes), tone: "warning" },
+    { label: "Alasan keterlambatan", value: data.lateReason || "Tidak diisi", tone: "warning" },
+    { label: "Lokasi/GPS", value: gpsText(data.lat, data.lng, data.accuracy) }
+  ];
   const rows: InfoRow[] = [
     { label: "Nama staff", value: data.staffName },
     { label: "Outlet", value: data.outletName },
     { label: "Shift", value: data.shiftLabel },
     { label: "Tanggal operasional", value: formatDateID(data.date) },
-    { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : "-" },
-    { label: "Jam absen masuk", value: formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") },
-    { label: "Total terlambat", value: formatMinutes(data.lateMinutes), tone: "warning" },
-    { label: "Lokasi/GPS", value: gpsText(data.lat, data.lng, data.accuracy) }
+    ...lateRows
   ];
 
   const html = emailLayout({
@@ -434,7 +446,7 @@ export function buildLateAttendanceEmail(data: {
     statusTone: "warning",
     sections:
       section("Informasi Staff", infoTable(rows.slice(0, 4))) +
-      section("Detail Keterlambatan", infoTable(rows.slice(4, 8)) + actionButton(mapUrl(data.lat, data.lng), "Buka Lokasi GPS")) +
+      section("Detail Keterlambatan", infoTable(lateRows) + actionButton(mapUrl(data.lat, data.lng), "Buka Lokasi GPS")) +
       section("Foto Dokumentasi", photoGallery([{ label: "Foto Selfie Absen Masuk", url: data.selfieUrl }]))
   });
   return { subject: `[RBN] Staff Terlambat - ${data.staffName}`, html, text: textTemplate("Staff Terlambat", rows) };
@@ -763,6 +775,7 @@ export function buildOpeningCombinedEmail(data: {
   scheduledStart?: string | null;
   checkinTime?: string | null;
   lateMinutes?: number | null;
+  lateReason?: string | null;
   checkinLat?: number | null;
   checkinLng?: number | null;
   selfieInUrl?: string | null;
@@ -782,6 +795,7 @@ export function buildOpeningCombinedEmail(data: {
     { label: "Jadwal masuk", value: data.scheduledStart ? formatTimeID(data.scheduledStart, "Asia/Makassar", "WITA") : null },
     { label: "Jam absen masuk", value: data.checkinTime ? formatDateTimeID(data.checkinTime, "Asia/Makassar", "WITA") : "Belum absen" },
     { label: "Status", value: isLate ? `Terlambat ${formatMinutes(data.lateMinutes)}` : "Tepat waktu", tone: isLate ? "warning" : "success" },
+    { label: "Alasan keterlambatan", value: isLate ? (data.lateReason || "Tidak diisi") : null, tone: "warning" },
   ].filter((r) => r.value !== null && r.value !== undefined && r.value !== "") as InfoRow[];
   const reportRows: InfoRow[] = [
     { label: "Jam kirim laporan", value: formatDateTimeID(data.submittedAt, "Asia/Makassar", "WITA") },
@@ -1234,6 +1248,7 @@ function buildTestTemplate(type: EmailNotificationType) {
         scheduledStart: "09:00",
         checkinTime: now,
         lateMinutes: 27,
+        lateReason: "Ban motor bocor di jalan, harus tambal dulu.",
         lat: -6.914744,
         lng: 107.60981,
         accuracy: 18,
