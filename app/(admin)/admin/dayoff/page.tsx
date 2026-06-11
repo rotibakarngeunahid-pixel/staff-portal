@@ -35,6 +35,7 @@ export default function AdminDayoffPage() {
   const [staffDayoffs, setStaffDayoffs] = useState<StaffDayoff[]>([]);
   const [shiftDayoffs, setShiftDayoffs] = useState<ShiftDayoff[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
 
@@ -85,9 +86,11 @@ export default function AdminDayoffPage() {
 
   async function addStaffDayoff(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
     if (!staffForm.outletId || !staffForm.staffId || !staffForm.date) {
       setMessage("Outlet, staff, dan tanggal wajib diisi"); setMsgType("err"); return;
     }
+    setSaving(true);
     setMessage("Menyimpan libur staff..."); setMsgType("info");
     try {
       const result = await apiFetch<{ ok: true; dayoff: StaffDayoff; coverage: { action: string; staffName?: string; message?: string } }>(
@@ -103,11 +106,15 @@ export default function AdminDayoffPage() {
       setMessage(`Libur staff disimpan ✓${coverMsg}`); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function cancelStaffDayoff(id: string, staffName: string) {
+    if (saving) return;
     if (!window.confirm(`Batalkan libur ${staffName}?`)) return;
+    setSaving(true);
     setMessage("Membatalkan libur..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/staff-dayoff", { method: "DELETE", role: "admin", body: { id } });
@@ -115,11 +122,15 @@ export default function AdminDayoffPage() {
       setMessage("Libur staff dibatalkan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function addShiftDayoff(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     setMessage("Menyimpan hari libur shift..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/dayoff", { method: "POST", role: "admin", body: shiftForm });
@@ -127,11 +138,15 @@ export default function AdminDayoffPage() {
       setMessage("Hari libur shift disimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function removeShiftDayoff(id: string) {
+    if (saving) return;
     if (!window.confirm("Hapus hari libur shift ini?")) return;
+    setSaving(true);
     setMessage("Menghapus..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/dayoff", { method: "DELETE", role: "admin", body: { id } });
@@ -139,6 +154,8 @@ export default function AdminDayoffPage() {
       setMessage("Hari libur shift dihapus ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -211,8 +228,8 @@ export default function AdminDayoffPage() {
                     onChange={(e) => setStaffForm({ ...staffForm, reason: e.target.value })}
                   />
                 </div>
-                <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}>
-                  <Plus size={15} /> Set Libur
+                <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={saving}>
+                  <Plus size={15} /> {saving ? "Menyimpan..." : "Set Libur"}
                 </button>
               </div>
             </form>
@@ -259,6 +276,7 @@ export default function AdminDayoffPage() {
                         className="btn btn-danger"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => cancelStaffDayoff(row.id, row.staff_name)}
+                        disabled={saving}
                       >
                         <Trash2 size={13} /> Batalkan
                       </button>
@@ -299,8 +317,8 @@ export default function AdminDayoffPage() {
                     <option value="2">Shift 2</option>
                   </select>
                 </div>
-                <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}>
-                  <Plus size={15} /> Set Off
+                <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={saving}>
+                  <Plus size={15} /> {saving ? "Menyimpan..." : "Set Off"}
                 </button>
               </div>
             </form>
@@ -334,6 +352,7 @@ export default function AdminDayoffPage() {
                         className="btn btn-danger"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
                         onClick={() => removeShiftDayoff(row.id)}
+                        disabled={saving}
                       >
                         <Trash2 size={13} /> Hapus
                       </button>

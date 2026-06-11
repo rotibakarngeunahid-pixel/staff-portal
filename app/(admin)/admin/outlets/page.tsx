@@ -46,6 +46,7 @@ export default function AdminOutletsPage() {
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [inventoryBranches, setInventoryBranches] = useState<InventoryBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
 
@@ -78,7 +79,9 @@ export default function AdminOutletsPage() {
   }
 
   async function deactivate(outletId: string, name: string) {
+    if (saving) return;
     if (!window.confirm(`Nonaktifkan outlet "${name}"?\n\nOutlet tidak akan muncul dalam daftar, tapi data histori tetap tersimpan.`)) return;
+    setSaving(true);
     setMessage("Menonaktifkan outlet..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/outlets", { method: "DELETE", role: "admin", body: { outletId } });
@@ -86,6 +89,8 @@ export default function AdminOutletsPage() {
       setMessage(`Outlet "${name}" dinonaktifkan ✓`); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menonaktifkan outlet"); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -140,6 +145,8 @@ export default function AdminOutletsPage() {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) { setMessage("Koordinat GPS tidak valid"); setMsgType("err"); return; }
     if (!Number.isFinite(r) || r <= 0) { setMessage("Radius harus lebih dari 0"); setMsgType("err"); return; }
     if (form.shift_mode === "2" && (!form.shift2_start || !form.shift2_end)) { setMessage("Jam shift 2 wajib diisi"); setMsgType("err"); return; }
+    if (saving) return;
+    setSaving(true);
     setMessage("Menyimpan..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/outlets", {
@@ -152,6 +159,8 @@ export default function AdminOutletsPage() {
       setMessage("Outlet tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menyimpan"); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -301,8 +310,10 @@ export default function AdminOutletsPage() {
           </AdminSection>
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button type="submit" className="btn btn-primary">{editing ? "Update Outlet" : "Simpan Outlet"}</button>
-            <button type="button" className="btn btn-soft" onClick={() => { setEditing(null); setForm(empty); setShowForm(false); }}>Batal</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? "Menyimpan..." : editing ? "Update Outlet" : "Simpan Outlet"}
+            </button>
+            <button type="button" className="btn btn-soft" onClick={() => { setEditing(null); setForm(empty); setShowForm(false); }} disabled={saving}>Batal</button>
           </div>
         </form>
       ) : null}

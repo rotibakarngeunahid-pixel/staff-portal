@@ -114,6 +114,7 @@ export default function AdminAttendancePage() {
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [showManual, setShowManual] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [showBulk, setShowBulk] = useState(false);
@@ -169,6 +170,8 @@ export default function AdminAttendancePage() {
 
   async function addManual(event: React.FormEvent) {
     event.preventDefault();
+    if (manualSaving) return;
+    setManualSaving(true);
     setMessage("Menyimpan absen manual..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/attendance", { method: "POST", role: "admin", body: manual });
@@ -177,6 +180,8 @@ export default function AdminAttendancePage() {
       setMessage("Absen manual tersimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal"); setMsgType("err");
+    } finally {
+      setManualSaving(false);
     }
   }
 
@@ -345,10 +350,10 @@ export default function AdminAttendancePage() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }}>
-                <Plus size={15} /> Tambah Absen
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={manualSaving}>
+                <Plus size={15} /> {manualSaving ? "Menyimpan..." : "Tambah Absen"}
               </button>
-              <button type="button" className="btn btn-soft" onClick={() => setShowManual(false)}>Batal</button>
+              <button type="button" className="btn btn-soft" onClick={() => setShowManual(false)} disabled={manualSaving}>Batal</button>
             </div>
           </form>
         </AdminSection>
@@ -502,8 +507,8 @@ export default function AdminAttendancePage() {
               <option value="off">Off</option>
             </select>
           </div>
-          <button className="btn btn-primary" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={load}>
-            <RefreshCw size={14} /> Filter
+          <button className="btn btn-primary" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={load} disabled={loading}>
+            <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "Memuat..." : "Filter"}
           </button>
         </div>
       </AdminSection>

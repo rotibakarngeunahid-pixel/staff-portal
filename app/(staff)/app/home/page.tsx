@@ -598,7 +598,7 @@ export default function StaffHomePage() {
       }
     }
     attendanceBusyRef.current = true;
-    setBusy(action === "checkin" ? "Mengompres & mengunggah selfie..." : "Mengompres & mengunggah selfie...");
+    setBusy("Mengompres & mengunggah selfie...");
     try {
       const body = new FormData();
       body.append("nonce", crypto.randomUUID());

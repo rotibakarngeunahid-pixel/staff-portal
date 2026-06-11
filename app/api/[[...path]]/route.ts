@@ -2516,10 +2516,12 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       ? dateTimeUtc(date, String(body.checkin_time).slice(0, 5))
       : dateTimeUtc(date, shiftStartTime(outlet, shift));
     const checkout = body.checkout_time ? dateTimeUtc(date, String(body.checkout_time).slice(0, 5)) : null;
+    // Full shift di outlet 2-shift = gaji 2x — konsisten dengan alur checkin mandiri staff
+    const isFullShift2x = outlet.shift_mode === 2 && shift === 0;
     const salary = calculateSalary(
       checkin,
       dateTimeUtc(date, shiftStartTime(outlet, shift)),
-      normalizeCurrency(staff.salary_per_shift),
+      normalizeCurrency(staff.salary_per_shift) * (isFullShift2x ? 2 : 1),
       configNumber(cfg, "late_tolerance_minutes", 10),
       configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
     );
@@ -2541,7 +2543,7 @@ async function adminAttendance(db: Db, method: string, body: Body) {
           late_minutes: salary.lateMinutes,
           deduction: salary.deduction,
           final_salary: salary.finalSalary,
-          flags: "MANUAL_ADMIN"
+          flags: isFullShift2x ? "MANUAL_ADMIN,FULL_SHIFT_2X" : "MANUAL_ADMIN"
         },
         { onConflict: "staff_id,date,shift" }
       )
@@ -2584,10 +2586,12 @@ async function adminAttendance(db: Db, method: string, body: Body) {
         const revOutlet = toOutlet(outletRaw);
         const checkinDt = new Date(existing.checkin_time);
         const newShiftStart = dateTimeUtc(existing.date, shiftStartTime(revOutlet, newShift));
+        // Full shift di outlet 2-shift = gaji 2x — konsisten dengan alur checkin mandiri staff
+        const isFullShift2x = revOutlet.shift_mode === 2 && newShift === 0;
         const recalc = calculateSalary(
           checkinDt,
           newShiftStart,
-          normalizeCurrency((staffRaw as any).salary_per_shift),
+          normalizeCurrency((staffRaw as any).salary_per_shift) * (isFullShift2x ? 2 : 1),
           configNumber(revCfg, "late_tolerance_minutes", 10),
           configNumber(revCfg, "deduction_per_minute", configNumber(revCfg, "late_deduction_per_minute", 1000))
         );
@@ -2596,6 +2600,13 @@ async function adminAttendance(db: Db, method: string, body: Body) {
         updates.deduction = recalc.deduction;
         updates.final_salary = recalc.finalSalary;
         updates.status = recalc.lateMinutes > 0 ? "late" : "present";
+        // Sinkronkan flag FULL_SHIFT_2X dengan shift baru tanpa menghapus flag lain (GPS, dsb.)
+        const flagSet = String(existing.flags || "")
+          .split(",")
+          .filter(Boolean)
+          .filter((flag) => flag !== "FULL_SHIFT_2X");
+        if (isFullShift2x) flagSet.push("FULL_SHIFT_2X");
+        updates.flags = flagSet.join(",");
 
         // Sinkronkan shift_type di staff_shift_assignments agar status endpoint konsisten
         const newShiftType = newShift === 1 ? "SHIFT_1" : newShift === 2 ? "SHIFT_2" : "FULL_SHIFT";
@@ -2723,10 +2734,12 @@ async function adminAttendanceBulk(db: Db, body: Body) {
         : dateTimeUtc(date, shiftStartTime(outlet, shift));
       const checkout = entry.checkout_time ? dateTimeUtc(date, String(entry.checkout_time).slice(0, 5)) : null;
 
+      // Full shift di outlet 2-shift = gaji 2x — konsisten dengan alur checkin mandiri staff
+      const isFullShift2x = outlet.shift_mode === 2 && shift === 0;
       const salary = calculateSalary(
         checkin,
         dateTimeUtc(date, shiftStartTime(outlet, shift)),
-        normalizeCurrency(staff.salary_per_shift),
+        normalizeCurrency(staff.salary_per_shift) * (isFullShift2x ? 2 : 1),
         lateTolerance,
         deductionPerMinute
       );
@@ -2748,7 +2761,7 @@ async function adminAttendanceBulk(db: Db, body: Body) {
             late_minutes: salary.lateMinutes,
             deduction: salary.deduction,
             final_salary: salary.finalSalary,
-            flags: "MANUAL_ADMIN"
+            flags: isFullShift2x ? "MANUAL_ADMIN,FULL_SHIFT_2X" : "MANUAL_ADMIN"
           },
           { onConflict: "staff_id,date,shift" }
         )

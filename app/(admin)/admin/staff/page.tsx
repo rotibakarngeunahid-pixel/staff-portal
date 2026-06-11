@@ -158,7 +158,9 @@ export default function AdminStaffPage() {
   }
 
   async function deactivate(id: string, name: string) {
+    if (saving) return;
     if (!window.confirm(`Nonaktifkan ${name}?`)) return;
+    setSaving(true);
     setMessage("Menonaktifkan..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/staff", { method: "DELETE", role: "admin", body: { staffId: id, mode: "deactivate" } });
@@ -166,6 +168,8 @@ export default function AdminStaffPage() {
       setMessage(`${name} dinonaktifkan ✓`); setMsgType("ok");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal menonaktifkan"); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 

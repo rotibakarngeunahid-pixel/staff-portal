@@ -23,6 +23,7 @@ export default function AdminSchedulePage() {
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [assignTarget, setAssignTarget] = useState<AssignTarget>(null);
   const [assignStaffId, setAssignStaffId] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
 
   async function loadBase() {
     setLoading(true);
@@ -73,7 +74,8 @@ export default function AdminSchedulePage() {
   }, [outletId, weekStart]);
 
   async function submitAssign() {
-    if (!assignTarget || !assignStaffId) return;
+    if (!assignTarget || !assignStaffId || actionBusy) return;
+    setActionBusy(true);
     setMessage("Menyimpan jadwal..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/schedule", {
@@ -87,10 +89,14 @@ export default function AdminSchedulePage() {
       setMessage("Jadwal disimpan ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setActionBusy(false);
     }
   }
 
   async function markOff(date: string, shift: number) {
+    if (actionBusy) return;
+    setActionBusy(true);
     setMessage("Menyimpan hari libur..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/schedule", { method: "POST", role: "admin", body: { outletId, date, shift, status: "off" } });
@@ -98,6 +104,8 @@ export default function AdminSchedulePage() {
       setMessage("Shift ditandai libur ✓"); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -138,8 +146,10 @@ export default function AdminSchedulePage() {
                 {outletStaff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </div>
-            <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={submitAssign} disabled={!assignStaffId}>Simpan</button>
-            <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={() => { setAssignTarget(null); setAssignStaffId(""); }}>Batal</button>
+            <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={submitAssign} disabled={!assignStaffId || actionBusy}>
+              {actionBusy ? "Menyimpan..." : "Simpan"}
+            </button>
+            <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={() => { setAssignTarget(null); setAssignStaffId(""); }} disabled={actionBusy}>Batal</button>
           </div>
         </AdminSection>
       ) : null}
@@ -199,6 +209,7 @@ export default function AdminSchedulePage() {
                               className="btn btn-soft"
                               style={{ fontSize: 11, padding: "5px 10px" }}
                               onClick={() => { setAssignTarget({ date: day.date, shift: slot.shift }); setAssignStaffId(""); }}
+                              disabled={actionBusy}
                             >
                               Assign
                             </button>
@@ -208,7 +219,7 @@ export default function AdminSchedulePage() {
                               className="btn btn-danger"
                               style={{ fontSize: 11, padding: "5px 10px", opacity: offDisabled ? 0.4 : 1 }}
                               onClick={() => markOff(day.date, slot.shift)}
-                              disabled={offDisabled}
+                              disabled={offDisabled || actionBusy}
                               title={offDisabled ? "Tidak bisa meliburkan kedua shift" : undefined}
                             >
                               Off

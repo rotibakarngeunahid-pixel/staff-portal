@@ -53,6 +53,7 @@ export default function AdminReportCfgPage() {
   const [type, setType] = useState<"BUKA" | "TUTUP">("BUKA");
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [msgType, setMsgType] = useState<"info" | "ok" | "err">("info");
   const [clearing, setClearing] = useState(false);
@@ -164,12 +165,14 @@ export default function AdminReportCfgPage() {
   const hasErrors = items.some((item) => Boolean(item._error));
 
   async function save() {
+    if (saving) return;
     const validated = validateItems(items);
     setItems(validated);
     if (validated.some((item) => Boolean(item._error))) {
       setMessage("Perbaiki semua error sebelum menyimpan"); setMsgType("err");
       return;
     }
+    setSaving(true);
     setMessage("Menyimpan..."); setMsgType("info");
     try {
       const result = await apiFetch<{ ok: true; items: Item[] }>("/api/admin/report-cfg", {
@@ -181,6 +184,8 @@ export default function AdminReportCfgPage() {
       setMessage(`Konfigurasi tersimpan ✓ — ${result.items.length} item`); setMsgType("ok");
     } catch (err) {
       setMessage(humanError(err)); setMsgType("err");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -492,10 +497,10 @@ export default function AdminReportCfgPage() {
             className="btn btn-primary"
             style={{ fontSize: 13 }}
             onClick={save}
-            disabled={hasErrors || items.length === 0 || uploadingIndex !== null}
+            disabled={saving || hasErrors || items.length === 0 || uploadingIndex !== null}
             title={uploadingIndex !== null ? "Tunggu upload foto selesai" : hasErrors ? "Perbaiki error terlebih dahulu" : ""}
           >
-            <Save size={15} /> Simpan Konfigurasi
+            <Save size={15} /> {saving ? "Menyimpan..." : "Simpan Konfigurasi"}
           </button>
 
           {/* Danger zone — styled as secondary outline-danger, not big red */}

@@ -221,7 +221,8 @@ function RejectedLeaveBanner({ leave }: { leave: Leave }) {
 export default function StaffSchedulePage() {
   const [weekStart, setWeekStart] = useState(isoToday());
   const [data, setData] = useState<SchedulePayload | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Mulai true agar skeleton langsung tampil di paint pertama (bukan layar kosong)
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [leaveModal, setLeaveModal] = useState<LeaveModalState>(null);

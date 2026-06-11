@@ -79,7 +79,7 @@ export default function AdminDashboardPage() {
       subtitle={data ? `Hari ini · ${formatDateID(data.date)}` : "Overview operasional hari ini"}
       action={
         <button className="btn btn-soft" style={{ fontSize: 13 }} onClick={load} disabled={loading}>
-          <RefreshCw size={15} /> Refresh
+          <RefreshCw size={15} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "Memuat..." : "Refresh"}
         </button>
       }
     >

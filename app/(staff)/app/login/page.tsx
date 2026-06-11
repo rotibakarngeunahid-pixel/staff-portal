@@ -16,6 +16,7 @@ export default function StaffLoginPage() {
   const router = useRouter();
   const setStaffToken = useSessionStore((state) => state.setStaffToken);
   const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [staffLoading, setStaffLoading] = useState(true);
   const [staffId, setStaffId] = useState("");
   const [pins, setPins] = useState<string[]>(Array(PIN_LEN).fill(""));
   const [showPin, setShowPin] = useState(false);
@@ -31,7 +32,8 @@ export default function StaffLoginPage() {
   useEffect(() => {
     apiFetch<{ ok: true; staff: StaffOption[] }>("/api/staff/list")
       .then((payload) => setStaff(payload.staff))
-      .catch((err: unknown) => setError(loginErrorMessage(err, "staff")));
+      .catch((err: unknown) => setError(loginErrorMessage(err, "staff")))
+      .finally(() => setStaffLoading(false));
   }, []);
 
   useEffect(() => {
@@ -144,6 +146,7 @@ export default function StaffLoginPage() {
                 id="staffName"
                 className="field"
                 value={staffId}
+                disabled={staffLoading || loading}
                 onChange={(e) => {
                   setStaffId(e.target.value);
                   if (error) setError("");
@@ -155,7 +158,7 @@ export default function StaffLoginPage() {
                   appearance: "none"
                 }}
               >
-                <option value="">Pilih nama kamu</option>
+                <option value="">{staffLoading ? "Memuat daftar nama..." : "Pilih nama kamu"}</option>
                 {staff.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
