@@ -309,6 +309,7 @@ export default function AdminPayrollPage() {
             mode={payMode}
             payAmount={payMode === "amount" ? payAmount : (previewAllocation?.totalCovered ?? 0)}
             allocation={previewAllocation}
+            currentBalance={current?.balance}
           />
 
           <div style={{ maxWidth: 480, marginBottom: 16 }}>

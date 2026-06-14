@@ -447,11 +447,13 @@ export type AllocationPreview = {
 export function PayrollPreviewPanel({
   mode,
   payAmount,
-  allocation
+  allocation,
+  currentBalance
 }: {
   mode: "amount" | "dates";
   payAmount: number;
   allocation: AllocationPreview | null;
+  currentBalance?: number;
 }) {
   if (!allocation?.covered.length) {
     return (
@@ -489,12 +491,17 @@ export function PayrollPreviewPanel({
             <p className="v" style={{ color: "#D97706" }}>{rupiah(allocation.overpayment)}</p>
           </div>
         )}
-        {allocation.remainingUnpaidSalary > 0 && (
-          <div className="payroll-preview-stat">
-            <p className="k">Sisa belum bayar</p>
-            <p className="v" style={{ color: "var(--primary)" }}>{rupiah(allocation.remainingUnpaidSalary)}</p>
-          </div>
-        )}
+        {(() => {
+          const afterBalance = currentBalance !== undefined
+            ? Math.max(0, currentBalance - payAmount)
+            : allocation.remainingUnpaidSalary;
+          return afterBalance > 0 ? (
+            <div className="payroll-preview-stat">
+              <p className="k">Sisa belum bayar</p>
+              <p className="v" style={{ color: "var(--primary)" }}>{rupiah(afterBalance)}</p>
+            </div>
+          ) : null;
+        })()}
       </div>
 
       <div className="payroll-split-grid" style={{ gap: 10 }}>
