@@ -46,6 +46,14 @@ export function photoUploadEndpoint() {
   );
 }
 
+// Secret bersama untuk menandatangani upload foto (HMAC) ke hosting PHP.
+// HARUS sama dengan PHOTO_UPLOAD_SECRET di photo-hosting/api/upload-laporan-area.php.
+// Default bawaan dipakai agar absen masuk & laporan tetap jalan tanpa env tambahan.
+// Untuk keamanan lebih tinggi, set PHOTO_UPLOAD_SECRET di Vercel DAN hosting PHP
+// dengan nilai random yang sama, lalu default ini otomatis diabaikan.
+const DEFAULT_PHOTO_UPLOAD_SECRET =
+  "rbn-photo-3f4587808d8a33c7b978899c7a4c36aafe1b281d782bc490377924df11e10fe2";
+
 export function photoUploadSecret() {
-  return secretEnv("PHOTO_UPLOAD_SECRET", "dev-photo-upload-secret-change-me");
+  return process.env.PHOTO_UPLOAD_SECRET || DEFAULT_PHOTO_UPLOAD_SECRET;
 }

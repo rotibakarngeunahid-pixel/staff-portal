@@ -75,7 +75,9 @@ if ((int) $file['size'] <= 0 || (int) $file['size'] > $maxBytes) {
 }
 
 $tmpPath = (string) $file['tmp_name'];
-$secret = getenv('PHOTO_UPLOAD_SECRET') ?: '';
+// HARUS sama dengan PHOTO_UPLOAD_SECRET / DEFAULT_PHOTO_UPLOAD_SECRET di aplikasi Next.js (lib/env.ts).
+// Default bawaan dipakai bila env var tidak diset agar upload tetap jalan tanpa konfigurasi tambahan.
+$secret = getenv('PHOTO_UPLOAD_SECRET') ?: 'rbn-photo-3f4587808d8a33c7b978899c7a4c36aafe1b281d782bc490377924df11e10fe2';
 if ($secret === '') {
     respond(503, ['success' => false, 'error' => 'Upload secret belum dikonfigurasi']);
 }
