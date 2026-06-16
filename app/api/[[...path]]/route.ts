@@ -1735,6 +1735,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
     attendance: rows,
     payments: payments || [],
     summary,
+    staff: { id: staff.id, name: staff.name },
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
       shift2_start: outlet.shift2_start || null

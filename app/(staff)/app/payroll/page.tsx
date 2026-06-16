@@ -10,9 +10,23 @@ import {
   PayrollWorkDaySummary,
   type PayrollSummaryView
 } from "@/components/payroll/payroll-ui";
+import { SaldoTertahanPopup, hasSaldoAck } from "@/components/payroll/saldo-tertahan-popup";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
 import { shiftLabel } from "@/lib/payroll";
+
+const MONTHS_ID = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+  "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+];
+
+/** Label periode gaji berikutnya berdasarkan bulan pembayaran terakhir. */
+function nextPeriodLabel(lastPaidAt: string | null): string {
+  const base = lastPaidAt ? new Date(`${lastPaidAt.slice(0, 10)}T00:00:00`) : null;
+  if (!base || Number.isNaN(base.getTime())) return "periode gaji berikutnya";
+  const next = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+  return `periode gaji berikutnya (${MONTHS_ID[next.getMonth()]} ${next.getFullYear()})`;
+}
 
 type AttendanceRow = {
   id: string;
@@ -31,6 +45,7 @@ type AttendanceRow = {
 type PayrollPayload = {
   ok: true;
   summary: PayrollSummaryView;
+  staff: { id: string; name: string };
   attendance: AttendanceRow[];
   payments: Array<{
     id: string;
@@ -43,6 +58,14 @@ type PayrollPayload = {
   }>;
   outlet: { shift1_start: string | null; shift2_start: string | null } | null;
   config: { lateToleranceMinutes: number; deductionPerMinute: number };
+};
+
+type SaldoPopupState = {
+  staffId: string;
+  staffName: string;
+  saldo: number;
+  periodKey: string;
+  nextLabel: string;
 };
 
 function shiftStartLabel(row: AttendanceRow, outlet: PayrollPayload["outlet"]): string | null {
@@ -107,6 +130,7 @@ export default function StaffPayrollPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
+  const [saldoPopup, setSaldoPopup] = useState<SaldoPopupState | null>(null);
 
   async function load() {
     setLoading(true);
@@ -125,6 +149,37 @@ export default function StaffPayrollPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // Popup saldo tertahan: tampil sekali per periode setelah gaji dibayar,
+  // hanya jika masih ada saldo tertahan (> 0) dan belum di-acknowledge.
+  useEffect(() => {
+    if (!data) return;
+    const saldo = data.summary?.balance ?? 0;
+    if (saldo <= 0) return;                       // tidak ada saldo tertahan
+    const lastPayment = data.payments?.[0];       // sudah terurut paid_at desc
+    if (!lastPayment) return;                     // gaji belum pernah dibayar
+
+    const staffId = data.staff?.id;
+    const staffName = data.staff?.name;
+    if (!staffId || !staffName) {
+      console.warn("[SaldoTertahan] data staff tidak lengkap, popup dilewati");
+      return;
+    }
+    const periodKey = (lastPayment.paid_at || "").slice(0, 7); // YYYY-MM
+    if (!periodKey) {
+      console.warn("[SaldoTertahan] periode pembayaran tidak valid, popup dilewati");
+      return;
+    }
+    if (hasSaldoAck(staffId, periodKey)) return;  // sudah dilihat untuk periode ini
+
+    setSaldoPopup({
+      staffId,
+      staffName,
+      saldo,
+      periodKey,
+      nextLabel: nextPeriodLabel(lastPayment.paid_at)
+    });
+  }, [data]);
 
   const summary = data?.summary;
 
@@ -276,6 +331,17 @@ export default function StaffPayrollPage() {
           </section>
         </div>
       ) : null}
+
+      {saldoPopup && (
+        <SaldoTertahanPopup
+          staffId={saldoPopup.staffId}
+          staffName={saldoPopup.staffName}
+          saldoTertahan={saldoPopup.saldo}
+          periodKey={saldoPopup.periodKey}
+          nextPeriodLabel={saldoPopup.nextLabel}
+          onClose={() => setSaldoPopup(null)}
+        />
+      )}
     </StaffPage>
   );
 }
