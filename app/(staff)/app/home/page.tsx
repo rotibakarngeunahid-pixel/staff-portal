@@ -910,8 +910,8 @@ export default function StaffHomePage() {
       const baseName = `${safe || "foto"}-${Date.now()}`;
       const photo = await photoFromFile(file, {
         baseName,
-        maxDimension: 1600,
-        quality: 0.8,
+        maxDimension: 2048,
+        quality: 0.85,
         preferredType: "image/webp",
         onDraw: (ctx, w, h) => drawWatermark(ctx, w, h, watermarkOpts)
       });

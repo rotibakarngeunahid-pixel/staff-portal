@@ -300,8 +300,8 @@ export function CameraCapture({
     try {
       const photo = await photoFromCanvas(canvas, {
         baseName: photoFileBaseName(title || (facing === "user" ? "selfie" : "foto")),
-        maxDimension: facing === "user" ? 1280 : 1600,
-        quality: facing === "user" ? 0.78 : 0.8,
+        maxDimension: facing === "user" ? 1440 : 2048,
+        quality: 0.85,
         preferredType: "image/webp"
       });
       if (previewRef.current) revokePhoto(previewRef.current);

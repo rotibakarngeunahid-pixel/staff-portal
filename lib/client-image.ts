@@ -12,7 +12,11 @@ export type CapturedPhoto = {
 
 type ImageFormat = "image/webp" | "image/jpeg";
 
-const MAX_UPLOAD_BYTES = 1 * 1024 * 1024; // 1 MB
+// Target kompresi (bukan batas keras). Foto sebesar apa pun tetap diterima:
+// jika hasil kompinya di bawah target, kualitas penuh dipertahankan; jika tidak,
+// kompresi otomatis menurunkan kualitas/dimensi seperlunya — tidak pernah ditolak.
+// Tetap di bawah ~4.5 MB agar aman melewati batas request Vercel.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4 MB
 
 function extensionFor(mimeType: string) {
   return mimeType === "image/webp" ? "webp" : "jpg";
@@ -73,8 +77,8 @@ export async function photoFromCanvas(
   }
 ): Promise<CapturedPhoto> {
   const preferredType = options.preferredType ?? "image/webp";
-  const initialMaxDim = options.maxDimension ?? 1600;
-  const initialQuality = options.quality ?? 0.78;
+  const initialMaxDim = options.maxDimension ?? 2048;
+  const initialQuality = options.quality ?? 0.85;
 
   // Urutan percobaan: kurangi quality dulu, lalu kurangi dimensi
   const attempts: Array<{ dim: number; q: number }> = [
