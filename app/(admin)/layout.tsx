@@ -1,17 +1,36 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { apiFetch } from "@/lib/client-api";
 
 export default function AdminRootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
   const pathname = usePathname();
+  const [authReady, setAuthReady] = useState(pathname === "/admin/login");
 
   useEffect(() => {
-    if (pathname !== "/admin/login" && !localStorage.getItem("rbn_admin_token")) {
-      router.replace("/admin/login");
+    let cancelled = false;
+    if (pathname === "/admin/login") {
+      setAuthReady(true);
+      return () => { cancelled = true; };
     }
+    setAuthReady(false);
+    apiFetch<{ ok: true; session: { role: string } }>("/api/auth/session?role=admin", {
+      role: "admin",
+      redirectOnUnauthorized: false
+    })
+      .then((payload) => {
+        if (cancelled) return;
+        if (payload.session.role !== "admin") router.replace("/admin/login");
+        else setAuthReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) router.replace("/admin/login");
+      });
+    return () => { cancelled = true; };
   }, [pathname, router]);
 
+  if (!authReady) return null;
   return <>{children}</>;
 }

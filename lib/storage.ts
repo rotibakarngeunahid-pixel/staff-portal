@@ -1,4 +1,5 @@
-import { photoStorageBaseUrl, photoUploadEndpoint } from "@/lib/env";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+import { photoStorageBaseUrl, photoUploadEndpoint, photoUploadSecret } from "@/lib/env";
 
 type StorageClient = ReturnType<typeof import("@/lib/supabase/server").supabaseAdmin>;
 type UploadResult = {
@@ -21,9 +22,33 @@ function dataUrlToBytes(dataUrl: string) {
   };
 }
 
+function uploadScope(path: string) {
+  return String(path || "general")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean)
+    .slice(0, 6)
+    .join("/") || "general";
+}
+
+function signedUploadHeaders(scope: string, contentHash: string) {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = randomUUID();
+  const payload = [timestamp, nonce, scope, contentHash].join("\n");
+  const signature = createHmac("sha256", photoUploadSecret()).update(payload).digest("hex");
+  return {
+    "X-RBN-Upload-Timestamp": timestamp,
+    "X-RBN-Upload-Nonce": nonce,
+    "X-RBN-Upload-Scope": scope,
+    "X-RBN-Content-SHA256": contentHash,
+    "X-RBN-Upload-Signature": signature
+  };
+}
+
 export async function uploadImage(
   _db: StorageClient,
-  _path: string,
+  path: string,
   input: unknown,
   fallbackContentType = "image/jpeg"
 ) {
@@ -59,9 +84,13 @@ export async function uploadImage(
 
   const formData = new FormData();
   formData.append("foto", file, fileName);
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const contentHash = createHash("sha256").update(bytes).digest("hex");
+  const scope = uploadScope(path);
 
   const response = await fetch(photoUploadEndpoint(), {
     method: "POST",
+    headers: signedUploadHeaders(scope, contentHash),
     body: formData
   });
 

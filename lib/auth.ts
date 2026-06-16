@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { jwtSecret, pinSecret } from "@/lib/env";
 import type { Role, SessionPayload } from "@/types/domain";
@@ -7,6 +7,49 @@ const encoder = new TextEncoder();
 
 export function hashPin(pin: string, secret = pinSecret()) {
   return createHash("sha256").update(String(pin) + secret).digest("hex");
+}
+
+const SCRYPT_PARAMS = {
+  N: 16384,
+  r: 8,
+  p: 1,
+  keyLen: 32
+};
+
+export function hashPinSecure(pin: string) {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = scryptSync(String(pin) + pinSecret(), salt, SCRYPT_PARAMS.keyLen, {
+    N: SCRYPT_PARAMS.N,
+    r: SCRYPT_PARAMS.r,
+    p: SCRYPT_PARAMS.p
+  }).toString("base64url");
+  return `scrypt$${SCRYPT_PARAMS.N}$${SCRYPT_PARAMS.r}$${SCRYPT_PARAMS.p}$${salt}$${hash}`;
+}
+
+function verifyScryptPin(pin: string, storedHash: string) {
+  const parts = storedHash.split("$");
+  if (parts.length !== 6 || parts[0] !== "scrypt") return false;
+  const [, nRaw, rRaw, pRaw, salt, expectedRaw] = parts;
+  const N = Number(nRaw);
+  const r = Number(rRaw);
+  const p = Number(pRaw);
+  if (!Number.isFinite(N) || !Number.isFinite(r) || !Number.isFinite(p) || !salt || !expectedRaw) {
+    return false;
+  }
+  const expected = Buffer.from(expectedRaw, "base64url");
+  const actual = scryptSync(String(pin) + pinSecret(), salt, expected.length, { N, r, p });
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+export function verifyPin(pin: string, storedHash?: string | null) {
+  const value = String(storedHash || "");
+  if (!value) return false;
+  if (value.startsWith("scrypt$")) return verifyScryptPin(pin, value);
+  return value === hashPin(pin);
+}
+
+export function needsPinRehash(storedHash?: string | null) {
+  return !String(storedHash || "").startsWith("scrypt$");
 }
 
 export async function createSessionToken(payload: SessionPayload, hours = 8) {

@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { hashPin, createSessionToken, publicStaff, verifySessionToken } from "@/lib/auth";
+import {
+  createSessionToken,
+  hashPinSecure,
+  needsPinRehash,
+  publicStaff,
+  verifyPin,
+  verifySessionToken
+} from "@/lib/auth";
 import {
   addDays,
   calculateSalary,
@@ -70,6 +77,20 @@ type ShiftTypeValue = "SHIFT_1" | "SHIFT_2" | "FULL_SHIFT";
 
 const ACTIVE_ASSIGNMENT_STATUSES = ["confirmed", "admin_override", "auto_cover", "locked", "completed"] as const;
 const MUTABLE_ASSIGNMENT_STATUSES = ["confirmed", "admin_override", "auto_cover"] as const;
+const STAFF_CONFIG_ALLOWLIST = [
+  "late_tolerance_minutes",
+  "deduction_per_minute",
+  "early_checkout_tolerance",
+  "company_name"
+] as const;
+const SENSITIVE_CONFIG_KEYS = new Set([
+  "admin_pin_hash",
+  "pin_secret",
+  "jwt_secret",
+  "service_role_key",
+  "supabase_service_role_key",
+  "photo_upload_secret"
+]);
 
 class HttpError extends Error {
   status: number;
@@ -137,6 +158,52 @@ async function configMap(db: Db): Promise<ConfigMap> {
 function configNumber(cfg: ConfigMap, key: string, fallback: number) {
   const value = Number(cfg[key]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function publicStaffConfig(cfg: ConfigMap) {
+  return Object.fromEntries(STAFF_CONFIG_ALLOWLIST.map((key) => [key, cfg[key] ?? ""])) as Partial<ConfigMap>;
+}
+
+function publicAdminConfig(cfg: ConfigMap) {
+  return Object.fromEntries(
+    Object.entries(cfg).filter(([key]) => !SENSITIVE_CONFIG_KEYS.has(key.toLowerCase()))
+  );
+}
+
+function clientIp(request: NextRequest) {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "local"
+  );
+}
+
+function deviceFingerprint(request: NextRequest) {
+  const ua = request.headers.get("user-agent") || "";
+  const lang = request.headers.get("accept-language") || "";
+  return `${ua.slice(0, 120)}|${lang.slice(0, 80)}`.slice(0, 220);
+}
+
+function setCsrfCookie(response: NextResponse, token = crypto.randomUUID()) {
+  response.cookies.set("rbn_csrf_token", token, {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 8 * 3600,
+    path: "/"
+  });
+}
+
+function ensureCsrf(request: NextRequest, method: string, path: string) {
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+  if (path === "/auth/login" || path === "/auth/admin-login" || path === "/auth/logout") return;
+  if (request.headers.get("authorization")?.startsWith("Bearer ")) return;
+
+  const cookieToken = request.cookies.get("rbn_csrf_token")?.value || "";
+  const headerToken = request.headers.get("x-csrf-token") || "";
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    throw new HttpError("Request ditolak. Muat ulang halaman lalu coba lagi.", 403, "CSRF_INVALID");
+  }
 }
 
 function tokenFromRequest(request: NextRequest, role?: "staff" | "admin") {
@@ -505,6 +572,35 @@ async function consumeNonce(db: Db, nonce?: string) {
   if (error) throw new HttpError("Request duplikat terdeteksi", 409, "DUPLICATE_NONCE");
 }
 
+async function claimShiftSlotAtomic(db: Db, params: {
+  outletId: string;
+  date: string;
+  shift: 1 | 2;
+  staffId: string;
+  staffName: string;
+  createdBy: string;
+}) {
+  const { data, error } = await db.rpc("claim_shift_atomic", {
+    p_outlet_id: params.outletId,
+    p_date: params.date,
+    p_shift: params.shift,
+    p_staff_id: params.staffId,
+    p_staff_name: params.staffName,
+    p_created_by: params.createdBy
+  });
+  if (error) {
+    const message = String((error as any).message || "");
+    if (message.includes("SHIFT_OFF")) {
+      throw new HttpError("Shift ini sedang libur", 400, "SHIFT_OFF");
+    }
+    if (message.includes("SHIFT_TAKEN")) {
+      throw new HttpError("Shift sudah diambil staff lain", 409, "SHIFT_TAKEN");
+    }
+    throw error;
+  }
+  return data;
+}
+
 function numberBody(body: Body, key: string, fallback = 0) {
   const value = Number(body[key]);
   return Number.isFinite(value) ? value : fallback;
@@ -550,13 +646,16 @@ async function dispatch(request: NextRequest, context: RouteContext) {
   try {
     const params = await paramsFrom(context);
     const path = `/${(params.path || []).join("/")}`;
+    ensureCsrf(request, request.method, path);
     const body = await readBody(request);
     const db = supabaseAdmin();
 
     if (request.method === "GET" && path === "/staff/list") return await getStaffList(db);
-    if (request.method === "POST" && path === "/auth/login") return await staffLogin(db, body);
+    if (request.method === "GET" && path === "/auth/session") return await currentSession(request);
+    if (request.method === "POST" && path === "/auth/login") return await staffLogin(db, request, body);
     if (request.method === "POST" && path === "/auth/admin-login") return await adminLogin(db, request, body);
     if (request.method === "POST" && path === "/auth/logout") return logout();
+    if (request.method === "POST" && path === "/upload/photo") return await uploadPhoto(db, request, body);
 
     if (request.method === "GET" && path === "/attendance/status") return await staffAttendanceStatus(db, request, body);
     if (request.method === "POST" && path === "/attendance/checkin") return await checkin(db, request, body);
@@ -617,7 +716,48 @@ async function getStaffList(db: Db) {
   return ok({ staff });
 }
 
-async function staffLogin(db: Db, body: Body) {
+async function countStaffFailedAttempts(db: Db, loginKey: string, ipAddress: string, fingerprint: string, since: string) {
+  const { data: successRows, error: successError } = await db
+    .from("staff_login_attempts")
+    .select("attempt_at")
+    .eq("login_key", loginKey)
+    .eq("ip_address", ipAddress)
+    .eq("device_fingerprint", fingerprint)
+    .eq("success", true)
+    .gte("attempt_at", since)
+    .order("attempt_at", { ascending: false })
+    .limit(1);
+
+  const effectiveSince = !successError && successRows?.[0]?.attempt_at ? successRows[0].attempt_at : since;
+  const { data, error } = await db
+    .from("staff_login_attempts")
+    .select("id")
+    .eq("login_key", loginKey)
+    .eq("ip_address", ipAddress)
+    .eq("device_fingerprint", fingerprint)
+    .eq("success", false)
+    .gte("attempt_at", effectiveSince);
+  if (error) return 0;
+  return (data || []).length;
+}
+
+async function recordStaffLoginAttempt(
+  db: Db,
+  request: NextRequest,
+  loginKey: string,
+  staffId: string | null,
+  success: boolean
+) {
+  await db.from("staff_login_attempts").insert({
+    staff_id: staffId,
+    login_key: loginKey,
+    ip_address: clientIp(request),
+    device_fingerprint: deviceFingerprint(request),
+    success
+  });
+}
+
+async function staffLogin(db: Db, request: NextRequest, body: Body) {
   const schema = z
     .object({
       staffId: z.string().uuid().optional(),
@@ -628,6 +768,17 @@ async function staffLogin(db: Db, body: Body) {
       message: "Pilih nama staff"
     });
   const parsed = schema.parse(body);
+  const cfg = await configMap(db);
+  const maxAttempts = configNumber(cfg, "max_login_attempts", 5);
+  const lockoutMinutes = configNumber(cfg, "lockout_minutes", 15);
+  const loginKey = parsed.staffId || String(parsed.name || "").trim().toLowerCase();
+  const ipAddress = clientIp(request);
+  const fingerprint = deviceFingerprint(request);
+  const since = new Date(Date.now() - lockoutMinutes * 60000).toISOString();
+  const failedAttempts = await countStaffFailedAttempts(db, loginKey, ipAddress, fingerprint, since);
+  if (failedAttempts >= maxAttempts) {
+    throw new HttpError(`Terlalu banyak percobaan. Coba lagi ${lockoutMinutes} menit lagi.`, 429, "LOCKED");
+  }
 
   let query = db
     .from("staff")
@@ -639,29 +790,39 @@ async function staffLogin(db: Db, body: Body) {
   const { data, error } = await query.limit(2);
   if (error) throw error;
   const staff = data && data.length === 1 ? data[0] : null;
-  if (!staff || staff.pin_hash !== hashPin(parsed.pin)) {
+  const success = Boolean(staff && verifyPin(parsed.pin, staff.pin_hash));
+  await recordStaffLoginAttempt(db, request, loginKey, staff?.id || null, success).catch(() => undefined);
+  if (!success || !staff) {
     throw new HttpError("Nama atau PIN tidak sesuai", 401, "INVALID_STAFF_LOGIN");
   }
   if (staff.deleted_at || staff.outlets?.active === false) {
     throw new HttpError("Akun atau outlet staff sudah nonaktif. Hubungi admin.", 403, "STAFF_INACTIVE");
   }
+  if (needsPinRehash(staff.pin_hash)) {
+    try {
+      await db.from("staff").update({ pin_hash: hashPinSecure(parsed.pin) }).eq("id", staff.id);
+    } catch {
+      // Login tetap berhasil; rehash bisa dicoba pada login berikutnya.
+    }
+  }
 
-  const cfg = await configMap(db);
   const hours = configNumber(cfg, "token_hours", 8);
   const token = await createSessionToken(
     { sub: staff.id, role: "staff", name: staff.name, outlet_id: staff.outlet_id },
     hours
   );
   await logAudit(db, "staff_login", staff.name, { staffId: staff.id });
-  const response = ok({ token, staff: publicStaff(staff), outlet: staff.outlets ? toOutlet(staff.outlets) : null });
+  const response = ok({ staff: publicStaff(staff), outlet: staff.outlets ? toOutlet(staff.outlets) : null });
   setSessionCookie(response, "staff", token, hours);
+  setCsrfCookie(response);
   return response;
 }
 
-async function countAdminFailedAttempts(db: Db, since: string) {
+async function countAdminFailedAttempts(db: Db, ipAddress: string, since: string) {
   const { data: successRows, error: successError } = await db
     .from("admin_login_attempts")
     .select("attempt_at")
+    .eq("ip_address", ipAddress)
     .eq("success", true)
     .gte("attempt_at", since)
     .order("attempt_at", { ascending: false })
@@ -671,6 +832,7 @@ async function countAdminFailedAttempts(db: Db, since: string) {
   const { data, error } = await db
     .from("admin_login_attempts")
     .select("id")
+    .eq("ip_address", ipAddress)
     .eq("success", false)
     .gte("attempt_at", effectiveSince);
 
@@ -681,21 +843,19 @@ async function countAdminFailedAttempts(db: Db, since: string) {
 async function recordAdminLoginAttempt(db: Db, request: NextRequest, success: boolean) {
   await db.from("admin_login_attempts").insert({
     success,
-    ip_address: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "local"
+    ip_address: clientIp(request)
   });
 }
 
 function initialAdminPin() {
   const value = process.env.ADMIN_INITIAL_PIN?.trim();
-  if (value) return value;
-  if (process.env.NODE_ENV === "production") {
-    throw new HttpError(
-      "Password admin awal belum dikonfigurasi. Set ADMIN_INITIAL_PIN di environment atau isi admin_pin_hash di tabel config.",
-      503,
-      "ADMIN_PIN_NOT_CONFIGURED"
-    );
-  }
-  return "admin1234";
+  const bootstrapAllowed = process.env.ALLOW_ADMIN_BOOTSTRAP === "true";
+  if (bootstrapAllowed && value) return value;
+  throw new HttpError(
+    "Password admin awal belum dikonfigurasi. Isi admin_pin_hash atau aktifkan bootstrap eksplisit dengan ALLOW_ADMIN_BOOTSTRAP=true dan ADMIN_INITIAL_PIN.",
+    503,
+    "ADMIN_PIN_NOT_CONFIGURED"
+  );
 }
 
 async function adminLogin(db: Db, request: NextRequest, body: Body) {
@@ -705,25 +865,47 @@ async function adminLogin(db: Db, request: NextRequest, body: Body) {
   const maxAttempts = configNumber(cfg, "max_login_attempts", 5);
   const lockoutMinutes = configNumber(cfg, "lockout_minutes", 15);
   const since = new Date(Date.now() - lockoutMinutes * 60000).toISOString();
-  const failedAttempts = await countAdminFailedAttempts(db, since);
+  const failedAttempts = await countAdminFailedAttempts(db, clientIp(request), since);
   if (failedAttempts >= maxAttempts) {
     throw new HttpError(`Terlalu banyak percobaan. Coba lagi ${lockoutMinutes} menit lagi.`, 429, "LOCKED");
   }
 
   const configuredAdminHash = cfg.admin_pin_hash?.trim();
-  const expected = configuredAdminHash || hashPin(initialAdminPin());
-  const success = expected === hashPin(pin);
+  const expected = configuredAdminHash || hashPinSecure(initialAdminPin());
+  const success = verifyPin(pin, expected);
   await recordAdminLoginAttempt(db, request, success).catch(() => undefined);
   if (!success) throw new HttpError("Password salah, silakan coba lagi.", 401, "INVALID_ADMIN_PASSWORD");
 
   if (!configuredAdminHash) {
     await db.from("config").upsert({ key: "admin_pin_hash", value: expected });
+  } else if (needsPinRehash(configuredAdminHash)) {
+    try {
+      await db.from("config").upsert({ key: "admin_pin_hash", value: hashPinSecure(pin) });
+    } catch {
+      // Login tetap berhasil; rehash bisa dicoba pada login berikutnya.
+    }
   }
   const hours = configNumber(cfg, "token_hours", 8);
   const token = await createSessionToken({ sub: "admin", role: "admin", name: "Admin" }, hours);
   await logAudit(db, "admin_login", "Admin", "Login admin berhasil");
-  const response = ok({ token });
+  const response = ok({});
   setSessionCookie(response, "admin", token, hours);
+  setCsrfCookie(response);
+  return response;
+}
+
+async function currentSession(request: NextRequest) {
+  const requestedRole = request.nextUrl.searchParams.get("role");
+  const role = requestedRole === "staff" || requestedRole === "admin" ? requestedRole : undefined;
+  const session = await requireSession(request, role);
+  const response = ok({
+    session: {
+      role: session.role,
+      name: session.name || null,
+      outlet_id: session.outlet_id || null
+    }
+  });
+  setCsrfCookie(response, request.cookies.get("rbn_csrf_token")?.value || crypto.randomUUID());
   return response;
 }
 
@@ -731,7 +913,18 @@ function logout() {
   const response = ok({ loggedOut: true });
   response.cookies.delete("rbn_staff_token");
   response.cookies.delete("rbn_admin_token");
+  response.cookies.delete("rbn_csrf_token");
   return response;
+}
+
+async function uploadPhoto(db: Db, request: NextRequest, body: Body) {
+  const session = await requireSession(request);
+  const file = body.foto || body.file || body.photo;
+  if (!file) throw new HttpError("File foto wajib dikirim", 400, "PHOTO_REQUIRED");
+  const rawScope = stringBody(body, "scope", "general");
+  const scope = `${session.role}/${session.sub}/${rawScope || "general"}`;
+  const url = await uploadImage(db, scope, file);
+  return ok({ success: true, foto_url: url, url });
 }
 
 async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
@@ -926,7 +1119,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   return ok({
     staff: publicStaff(staff),
     outlet,
-    config: cfg,
+    config: publicStaffConfig(cfg),
     date: effective,
     shift: effectiveShift,
     isFullShift,
@@ -1149,6 +1342,17 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Alasan keterlambatan wajib diisi karena kamu terlambat masuk shift ini.", 400, "LATE_REASON_REQUIRED");
   }
 
+  if (outlet.shift_mode === 2 && (shift === 1 || shift === 2)) {
+    await claimShiftSlotAtomic(db, {
+      outletId: outlet.id,
+      date,
+      shift,
+      staffId: staff.id,
+      staffName: staff.name,
+      createdBy: "checkin"
+    });
+  }
+
   const selfie = body.selfie || body.photo;
   const selfieUrl = await uploadImage(db, `selfies/checkin/${staff.id}/${date}_${shift}.jpg`, selfie);
   if (!selfieUrl) throw new HttpError("Selfie absen masuk wajib diupload");
@@ -1185,22 +1389,13 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     })
     .select("*")
     .single();
-  if (error) throw error;
-
-  if (outlet.shift_mode === 2 && shift !== 0) {
-    await db.from("shift_schedule").upsert(
-      {
-        outlet_id: outlet.id,
-        date,
-        shift,
-        staff_id: staff.id,
-        staff_name: staff.name,
-        status: "claimed",
-        requested_at: now.toISOString(),
-        created_by: "checkin"
-      },
-      { onConflict: "outlet_id,date,shift" }
-    );
+  if (error) {
+    const message = String((error as any).message || "");
+    const code = String((error as any).code || "");
+    if (code === "23505" || message.includes("SHIFT_ALREADY_TAKEN")) {
+      throw new HttpError("Shift ini sudah diisi staff lain. Muat ulang status lalu coba lagi.", 409, "SHIFT_ALREADY_TAKEN");
+    }
+    throw error;
   }
 
   // Kunci assignment agar tidak bisa dibatalkan setelah absen masuk
@@ -1719,8 +1914,16 @@ async function staffPayroll(db: Db, request: NextRequest) {
     { staff, outlet },
     cfg
   ] = await Promise.all([
-    db.from("attendance").select("*").eq("staff_id", session.sub).order("date", { ascending: false }),
-    db.from("payments").select("*").eq("staff_id", session.sub).order("paid_at", { ascending: false }),
+    db
+      .from("attendance")
+      .select("id,date,shift,checkin_time,checkout_time,status,late_minutes,deduction,final_salary,paid_status,flags")
+      .eq("staff_id", session.sub)
+      .order("date", { ascending: false }),
+    db
+      .from("payments")
+      .select("id,paid_at,amount,note,proof_url,date_from,date_to")
+      .eq("staff_id", session.sub)
+      .order("paid_at", { ascending: false }),
     getStaffWithOutlet(db, session.sub),
     configMap(db)
   ]);
@@ -1732,10 +1935,10 @@ async function staffPayroll(db: Db, request: NextRequest) {
   const summary = buildPayrollSummary(rows, payments || []);
 
   return ok({
+    staff: publicStaff(staff),
     attendance: rows,
     payments: payments || [],
     summary,
-    staff: { id: staff.id, name: staff.name },
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
       shift2_start: outlet.shift2_start || null
@@ -1907,37 +2110,14 @@ async function claimShift(db: Db, request: NextRequest, body: Body) {
     .maybeSingle();
   if (off) throw new HttpError("Shift ini sedang libur");
 
-  const { data: existing } = await db
-    .from("shift_schedule")
-    .select("*")
-    .eq("outlet_id", outlet.id)
-    .eq("date", date)
-    .eq("shift", shift)
-    .maybeSingle();
-  if (existing?.staff_id && existing.staff_id !== staff.id && existing.status === "claimed") {
-    throw new HttpError("Shift sudah diambil staff lain", 409, "SHIFT_TAKEN");
-  }
-
-  const { data, error } = await db
-    .from("shift_schedule")
-    .upsert(
-      {
-        outlet_id: outlet.id,
-        date,
-        shift,
-        staff_id: staff.id,
-        staff_name: staff.name,
-        status: "claimed",
-        requested_at: new Date().toISOString(),
-        cancelled_at: null,
-        cancel_reason: null,
-        created_by: "staff"
-      },
-      { onConflict: "outlet_id,date,shift" }
-    )
-    .select("*")
-    .single();
-  if (error) throw error;
+  const data = await claimShiftSlotAtomic(db, {
+    outletId: outlet.id,
+    date,
+    shift,
+    staffId: staff.id,
+    staffName: staff.name,
+    createdBy: "staff"
+  });
   await logAudit(db, "claim_shift", staff.name, { date, shift });
   return ok({ schedule: data });
 }
@@ -2289,7 +2469,7 @@ async function adminStaff(db: Db, method: string, body: Body) {
       .from("staff")
       .insert({
         name: parsed.name,
-        pin_hash: hashPin(parsed.pin),
+        pin_hash: hashPinSecure(parsed.pin),
         outlet_id: parsed.outlet_id || null,
         salary_per_shift: parsed.salary_per_shift,
         phone: parsed.phone || null,
@@ -2328,7 +2508,7 @@ async function adminStaff(db: Db, method: string, body: Body) {
     ].forEach((key) => {
       if (body[key] !== undefined) updates[key] = body[key];
     });
-    if (body.pin) updates.pin_hash = hashPin(String(body.pin));
+    if (body.pin) updates.pin_hash = hashPinSecure(String(body.pin));
     if (body.photo) updates.photo_url = await uploadImage(db, `staff/photos/${staffId}.jpg`, body.photo);
     if (body.ktp_photo) updates.ktp_photo_url = await uploadImage(db, `staff/ktp/${staffId}.jpg`, body.ktp_photo);
     if (updates.outlet_id) {
@@ -2815,8 +2995,8 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     const [{ data: staff, error: staffError }, { data: attendance, error: attError }, { data: payments, error: payError }] =
       await Promise.all([
         db.from("staff").select("id,name,active,salary_per_shift,outlet_id").order("name"),
-        db.from("attendance").select("*").order("date", { ascending: false }),
-        db.from("payments").select("*").order("paid_at", { ascending: false })
+        db.from("attendance").select("id,staff_id,date,shift,final_salary,paid_status").order("date", { ascending: false }),
+        db.from("payments").select("id,staff_id,paid_at,amount,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
       ]);
     if (staffError) throw staffError;
     if (attError) throw attError;
@@ -2954,11 +3134,26 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     if (error) throw error;
 
     const ids = covered.map((row) => row.id);
-    const { error: updateError } = await db
+    const { data: paidRows, error: updateError } = await db
       .from("attendance")
       .update({ paid_status: true, payment_id: payment.id })
-      .in("id", ids);
+      .eq("staff_id", staffId)
+      .eq("paid_status", false)
+      .in("id", ids)
+      .select("id");
     if (updateError) throw updateError;
+    if ((paidRows || []).length !== ids.length) {
+      try {
+        await db.from("payments").delete().eq("id", payment.id);
+      } catch {
+        // Payment tanpa attendance akan terlihat di audit data; konflik tetap harus dikembalikan.
+      }
+      throw new HttpError(
+        "Sebagian shift sudah dibayar oleh request lain. Muat ulang payroll lalu proses ulang.",
+        409,
+        "PAYROLL_CONFLICT"
+      );
+    }
 
     await logAudit(db, "admin_process_payment", "Admin", {
       staffId,
@@ -3685,7 +3880,7 @@ async function adminDayoff(db: Db, method: string, body: Body) {
 
 async function adminConfig(db: Db, method: string, body: Body) {
   if (method === "GET") {
-    return ok({ config: await configMap(db) });
+    return ok({ config: publicAdminConfig(await configMap(db)) });
   }
 
   if (method === "PUT") {
@@ -3695,7 +3890,7 @@ async function adminConfig(db: Db, method: string, body: Body) {
       let value = stringBody(body, "value");
       if (key === "admin_pin" || key === "admin_pin_hash") {
         if (key === "admin_pin" && value.length < 4) throw new HttpError("PIN admin minimal 4 digit");
-        entries.push({ key: "admin_pin_hash", value: key === "admin_pin" ? hashPin(value) : value });
+        entries.push({ key: "admin_pin_hash", value: key === "admin_pin" ? hashPinSecure(value) : value });
       } else {
         entries.push({ key, value });
       }
@@ -3712,7 +3907,7 @@ async function adminConfig(db: Db, method: string, body: Body) {
     const { error } = await db.from("config").upsert(entries);
     if (error) throw error;
     await logAudit(db, "admin_update_config", "Admin", entries.map((entry) => entry.key).join(","));
-    return ok({ config: await configMap(db) });
+    return ok({ config: publicAdminConfig(await configMap(db)) });
   }
 
   throw new HttpError("Method config tidak valid", 405);
@@ -3825,7 +4020,13 @@ async function selectShift(db: Db, request: NextRequest, body: Body) {
     })
     .select("*")
     .single();
-  if (error) throw error;
+  if (error) {
+    const code = String((error as any).code || "");
+    if (code === "23505") {
+      throw new HttpError("Jadwal sudah diambil atau kamu sudah memiliki jadwal aktif pada tanggal ini.", 409, "SHIFT_TAKEN");
+    }
+    throw error;
+  }
 
   await logAudit(db, "schedule_select", staff.name, { date, shiftType, assignmentId: assignment.id });
   return ok({ assignment });

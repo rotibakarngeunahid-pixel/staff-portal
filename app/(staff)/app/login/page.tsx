@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { loginErrorMessage } from "@/lib/login-errors";
-import { useSessionStore } from "@/stores/session";
 
 const PIN_LEN = 4;
 
@@ -14,7 +13,6 @@ type StaffOption = { id: string; name: string; outlet_id: string | null };
 
 export default function StaffLoginPage() {
   const router = useRouter();
-  const setStaffToken = useSessionStore((state) => state.setStaffToken);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [staffLoading, setStaffLoading] = useState(true);
   const [staffId, setStaffId] = useState("");
@@ -88,11 +86,10 @@ export default function StaffLoginPage() {
     setError("");
     setSuccess("");
     try {
-      const payload = await apiFetch<{ ok: true; token: string }>("/api/auth/login", {
+      await apiFetch<{ ok: true }>("/api/auth/login", {
         method: "POST",
         body: { staffId, pin }
       });
-      setStaffToken(payload.token);
       setSuccess("Login berhasil. Membuka halaman Beranda...");
       redirectTimerRef.current = setTimeout(() => {
         router.replace("/app/home");

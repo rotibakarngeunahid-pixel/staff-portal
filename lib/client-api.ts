@@ -26,9 +26,17 @@ export class ApiError extends Error {
   }
 }
 
-function tokenFor(role?: "staff" | "admin") {
-  if (typeof window === "undefined" || !role) return null;
-  return localStorage.getItem(role === "admin" ? "rbn_admin_token" : "rbn_staff_token");
+function cookieValue(name: string) {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  const raw = document.cookie.split("; ").find((part) => part.startsWith(prefix));
+  return raw ? decodeURIComponent(raw.slice(prefix.length)) : null;
+}
+
+function clearLegacyAuthTokens() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("rbn_staff_token");
+  localStorage.removeItem("rbn_admin_token");
 }
 
 async function readPayload(response: Response): Promise<ApiPayload> {
@@ -70,8 +78,10 @@ function errorCode(data: ApiPayload, fallback: string) {
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const method = options.method || "GET";
   const headers = new Headers();
-  const token = tokenFor(options.role);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (method !== "GET") {
+    const csrfToken = cookieValue("rbn_csrf_token");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
 
   let body: BodyInit | undefined;
   let url = path;
@@ -102,8 +112,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   if (response.status === 401) {
     const shouldRedirect = options.redirectOnUnauthorized ?? !isLoginEndpoint(path);
     if (shouldRedirect && typeof window !== "undefined") {
-      localStorage.removeItem("rbn_staff_token");
-      localStorage.removeItem("rbn_admin_token");
+      clearLegacyAuthTokens();
       const isAdmin = window.location.pathname.startsWith("/admin");
       window.location.replace(isAdmin ? "/admin/login" : "/app/login");
     }
@@ -121,6 +130,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
       errorCode(data, response.ok ? "REQUEST_FAILED" : `HTTP_${response.status}`)
     );
   }
+  clearLegacyAuthTokens();
   return data as T;
 }
 

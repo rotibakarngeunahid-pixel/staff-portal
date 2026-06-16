@@ -5,10 +5,6 @@ import { AlertTriangle, ChevronDown, ChevronUp, ImageIcon, Loader2, Plus, Save, 
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 
-const PHOTO_UPLOAD_ENDPOINT =
-  process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
-  "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
-
 type Outlet = { id: string; name: string; active?: boolean };
 type PhotoMode = "realtime" | "upload";
 
@@ -120,17 +116,12 @@ export default function AdminReportCfgPage() {
     try {
       const fd = new FormData();
       fd.append("foto", file, file.name);
-      let res: Response;
-      try {
-        res = await fetch(PHOTO_UPLOAD_ENDPOINT, { method: "POST", body: fd });
-      } catch {
-        throw new Error("Upload gagal. Pastikan koneksi internet stabil lalu coba lagi.");
-      }
-      let result: { success?: boolean; foto_url?: string; error?: string } | null = null;
-      try { result = await res.json(); } catch { /* ignore */ }
-      if (!res.ok || !result?.success || !result.foto_url) {
-        throw new Error(result?.error || "Upload foto contoh gagal. Coba lagi.");
-      }
+      fd.append("scope", "report-cfg/example");
+      const result = await apiFetch<{ ok: true; foto_url: string }>("/api/upload/photo", {
+        method: "POST",
+        role: "admin",
+        body: fd
+      });
       // Simpan URL hasil upload, kosongkan example_photo agar backend tidak re-upload
       update(index, { example_photo: "", example_photo_url: result.foto_url });
       setMessage("Foto contoh berhasil diunggah ✓"); setMsgType("ok");

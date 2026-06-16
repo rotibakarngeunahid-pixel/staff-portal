@@ -6,11 +6,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { loginErrorMessage } from "@/lib/login-errors";
-import { useSessionStore } from "@/stores/session";
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const setAdminToken = useSessionStore((state) => state.setAdminToken);
   const [pin, setPin] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -35,8 +33,7 @@ export default function AdminLoginPage() {
     setError("");
     setSuccess("");
     try {
-      const payload = await apiFetch<{ ok: true; token: string }>("/api/auth/admin-login", { method: "POST", body: { pin } });
-      setAdminToken(payload.token);
+      await apiFetch<{ ok: true }>("/api/auth/admin-login", { method: "POST", body: { pin } });
       setSuccess("Login berhasil. Membuka dashboard...");
       redirectTimerRef.current = setTimeout(() => {
         router.replace("/admin/dashboard");

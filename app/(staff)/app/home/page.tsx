@@ -48,7 +48,7 @@ type OutletInfo = {
 
 type StatusPayload = {
   ok: true;
-  staff: { name: string };
+  staff: { id: string; name: string };
   outlet: OutletInfo;
   config?: Record<string, string>;
   date: string;
@@ -296,21 +296,7 @@ export default function StaffHomePage() {
   const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
   const pendingDraftRef = useRef<Record<string, RestoredPhoto> | null>(null);
 
-  /* ─── Staff ID dari JWT (konstan selama sesi) ─── */
-  const staffId = useMemo<string>(() => {
-    if (typeof window === "undefined") return "unknown";
-    try {
-      const token = localStorage.getItem("rbn_staff_token");
-      if (!token) return "unknown";
-      const parts = token.split(".");
-      if (parts.length !== 3) return "unknown";
-      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-      const payload = JSON.parse(atob(b64)) as { sub?: string };
-      return String(payload.sub || "unknown");
-    } catch {
-      return "unknown";
-    }
-  }, []);
+  const staffId = status?.staff?.id || "unknown";
 
   useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
@@ -708,12 +694,6 @@ export default function StaffHomePage() {
     setReportBusy(true);
     setReportError("");
     try {
-      // Upload setiap foto langsung ke PHP server (bypass Vercel payload limit).
-      // Payload ke API route hanya berisi URL kecil, bukan blob besar.
-      const uploadEndpoint =
-        process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
-        "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
-
       const itemsWithPhoto = effectiveReportItems.filter((item) => reportPhotos[item.label]);
       const photoUrls: Record<string, string> = {};
 
@@ -724,24 +704,12 @@ export default function StaffHomePage() {
 
         const fd = new FormData();
         fd.append("foto", photo.blob, photo.fileName);
-
-        let uploadRes: Response;
-        try {
-          uploadRes = await fetch(uploadEndpoint, { method: "POST", body: fd });
-        } catch {
-          throw new Error("Upload foto gagal. Pastikan koneksi internet stabil lalu coba lagi.");
-        }
-
-        let result: { success?: boolean; foto_url?: string; error?: string } | null = null;
-        try { result = await uploadRes.json(); } catch { /* ignore parse error */ }
-
-        if (!uploadRes.ok || !result?.success || !result.foto_url) {
-          const serverMsg = result?.error || "";
-          if (serverMsg.includes("10MB") || serverMsg.includes("besar") || uploadRes.status === 413) {
-            throw new Error("Foto terlalu besar meski sudah dikompres. Coba ambil foto ulang dengan pencahayaan lebih baik.");
-          }
-          throw new Error("Upload foto gagal. Pastikan koneksi stabil lalu coba lagi.");
-        }
+        fd.append("scope", `report/${type}/${status?.date || "today"}`);
+        const result = await apiFetch<{ ok: true; foto_url: string }>("/api/upload/photo", {
+          method: "POST",
+          role: "staff",
+          body: fd
+        });
 
         photoUrls[item.label] = result.foto_url;
       }

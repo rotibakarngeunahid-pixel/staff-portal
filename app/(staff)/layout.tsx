@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { apiFetch } from "@/lib/client-api";
 
 export default function StaffLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
   const pathname = usePathname();
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
+  const [authReady, setAuthReady] = useState(pathname === "/app/login");
 
   useEffect(() => {
     function check() {
@@ -19,13 +21,29 @@ export default function StaffLayout({ children }: Readonly<{ children: React.Rea
   }, []);
 
   useEffect(() => {
-    if (pathname !== "/app/login" && !localStorage.getItem("rbn_staff_token")) {
-      router.replace("/app/login");
+    let cancelled = false;
+    if (pathname === "/app/login") {
+      setAuthReady(true);
+      return () => { cancelled = true; };
     }
+    setAuthReady(false);
+    apiFetch<{ ok: true; session: { role: string } }>("/api/auth/session?role=staff", {
+      role: "staff",
+      redirectOnUnauthorized: false
+    })
+      .then((payload) => {
+        if (cancelled) return;
+        if (payload.session.role !== "staff") router.replace("/app/login");
+        else setAuthReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) router.replace("/app/login");
+      });
+    return () => { cancelled = true; };
   }, [pathname, router]);
 
   // Tunggu hingga ukuran layar diketahui sebelum render apapun
-  if (isMobile === null) return null;
+  if (isMobile === null || !authReady) return null;
 
   if (!isMobile) {
     return (

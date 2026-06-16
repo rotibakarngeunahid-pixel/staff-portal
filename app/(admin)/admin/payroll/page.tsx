@@ -22,10 +22,6 @@ import {
   allocatePaymentByDates
 } from "@/lib/payroll";
 
-const PHOTO_UPLOAD_ENDPOINT =
-  process.env.NEXT_PUBLIC_PHOTO_UPLOAD_ENDPOINT ||
-  "https://foto-laporan-area.rotibakarngeunah.my.id/api/upload-laporan-area.php";
-
 type PaymentRecord = {
   id: string;
   paid_at: string;
@@ -133,16 +129,16 @@ export default function AdminPayrollPage() {
     setMsgType("info");
     const fd = new FormData();
     fd.append("foto", file, file.name);
-    fetch(PHOTO_UPLOAD_ENDPOINT, { method: "POST", body: fd })
-      .then((res) => res.json())
-      .then((result: { success?: boolean; foto_url?: string; error?: string }) => {
-        if (result?.success && result.foto_url) {
-          setProof(result.foto_url);
-          setMessage("Bukti berhasil diunggah");
-          setMsgType("ok");
-        } else {
-          throw new Error(result?.error || "Upload bukti gagal");
-        }
+    fd.append("scope", "payroll/proof");
+    apiFetch<{ ok: true; foto_url: string }>("/api/upload/photo", {
+      method: "POST",
+      role: "admin",
+      body: fd
+    })
+      .then((result) => {
+        setProof(result.foto_url);
+        setMessage("Bukti berhasil diunggah");
+        setMsgType("ok");
       })
       .catch((err: unknown) => {
         setProof("");
