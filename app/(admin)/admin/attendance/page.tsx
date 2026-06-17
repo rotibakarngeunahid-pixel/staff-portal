@@ -610,7 +610,6 @@ export default function AdminAttendancePage() {
                 <th>Alasan Terlambat</th>
                 <th>Gaji</th>
                 <th>Status Bayar</th>
-                <th>Status Izin</th>
                 <th>Foto / GPS</th>
                 <th>Aksi</th>
               </tr>
@@ -619,18 +618,20 @@ export default function AdminAttendancePage() {
               {loading ? (
                 [1, 2, 3, 4].map((i) => (
                   <tr key={i}>
-                    {[60, 90, 80, 40, 40, 40, 40, 100, 60, 55, 70, 50, 80].map((w, j) => (
+                    {[60, 90, 80, 40, 40, 40, 40, 100, 60, 55, 50, 80].map((w, j) => (
                       <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
                     ))}
                   </tr>
                 ))
               ) : rows.length === 0 ? (
-                <tr><td colSpan={13} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+                <tr><td colSpan={12} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
               ) : rows.map((row) => {
                 const gps = parseCheckoutGps(row.flags);
                 const hasSelfie = row.selfie_in || row.selfie_out;
                 const perm = row.early_checkout_permission;
-                const earlyEligible = Boolean(row.checkin_time) && !row.checkout_time && !row.paid_status;
+                // Izin pulang awal hanya untuk staff yang bertugas hari ini (sudah check-in, belum pulang, belum dibayar)
+                const createEligible =
+                  Boolean(row.checkin_time) && !row.checkout_time && !row.paid_status && row.date === todayWita();
                 return (
                   <tr key={row.id}>
                     <td>{formatDateID(row.date)}</td>
@@ -655,19 +656,6 @@ export default function AdminAttendancePage() {
                     </td>
                     <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
                     <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
-                    <td>
-                      {perm?.status === "active" ? (
-                        <span className="status-pill" style={{ background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", fontSize: 11 }} title={perm.reason}>
-                          ⏰ Pulang awal aktif
-                        </span>
-                      ) : perm?.status === "used" ? (
-                        <span className="status-pill" style={{ background: "#EDE9FE", color: "#6D28D9", border: "1px solid #DDD6FE", fontSize: 11 }} title={perm.reason}>
-                          ✓ Dipakai
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--muted-light)", fontSize: 11 }}>—</span>
-                      )}
-                    </td>
                     <td>
                       <div style={{ display: "flex", gap: 4 }}>
                         {hasSelfie && (
@@ -698,29 +686,43 @@ export default function AdminAttendancePage() {
                       </div>
                     </td>
                     <td>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {earlyEligible && perm?.status === "active" ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", alignItems: "center" }}>
+                        {perm?.status === "active" ? (
                           <button
-                            className="btn btn-soft"
-                            style={{ fontSize: 12, padding: "6px 10px", color: "#B45309", whiteSpace: "nowrap" }}
-                            title="Batalkan izin pulang awal"
+                            type="button"
+                            style={{
+                              background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A",
+                              borderRadius: 999, fontSize: 11, fontWeight: 700, padding: "4px 9px",
+                              whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3
+                            }}
+                            title={`Izin pulang awal aktif: ${perm.reason} — klik untuk batalkan`}
                             onClick={() => openCancel(row)}
                           >
-                            <Ban size={13} /> Batalkan Izin
+                            <Ban size={12} /> Batalkan
                           </button>
-                        ) : earlyEligible && !perm ? (
+                        ) : perm?.status === "used" ? (
+                          <span
+                            style={{
+                              background: "#EDE9FE", color: "#6D28D9", border: "1px solid #DDD6FE",
+                              borderRadius: 999, fontSize: 11, fontWeight: 700, padding: "4px 9px", whiteSpace: "nowrap"
+                            }}
+                            title={perm.reason}
+                          >
+                            ✓ Dipakai
+                          </span>
+                        ) : createEligible ? (
                           <button
                             className="btn btn-soft"
-                            style={{ fontSize: 12, padding: "6px 10px", color: "#B45309", whiteSpace: "nowrap" }}
+                            style={{ fontSize: 12, padding: "6px 9px", color: "#B45309", whiteSpace: "nowrap" }}
                             title="Izinkan staff pulang lebih awal"
                             onClick={() => openEarly(row)}
                           >
-                            <Clock size={13} /> Izinkan Pulang
+                            <Clock size={13} /> Izinkan
                           </button>
                         ) : null}
                         <button
                           className="btn btn-soft"
-                          style={{ fontSize: 12, padding: "6px 10px" }}
+                          style={{ fontSize: 12, padding: "6px 9px" }}
                           title="Revisi data absen"
                           onClick={() => openRevise(row)}
                         >
@@ -728,7 +730,7 @@ export default function AdminAttendancePage() {
                         </button>
                         <button
                           className="btn btn-soft"
-                          style={{ fontSize: 12, padding: "6px 10px", color: "var(--danger)" }}
+                          style={{ fontSize: 12, padding: "6px 9px", color: "var(--danger)" }}
                           title="Hapus absen"
                           onClick={() => setDeleteTarget(row)}
                         >
