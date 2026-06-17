@@ -55,7 +55,7 @@ import {
 } from "@/lib/payroll";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { uploadImage } from "@/lib/storage";
-import type { ConfigMap, Outlet, SessionPayload, Staff } from "@/types/domain";
+import type { ConfigMap, EarlyCheckoutPermission, Outlet, SessionPayload, Staff } from "@/types/domain";
 import {
   addDateDays,
   buildHistoricalPeriods,
@@ -485,6 +485,20 @@ function checkoutGpsFromFlags(flags?: string | null) {
 
 function isClosingShift(shift: 0 | 1 | 2, flags?: string | null) {
   return shift === 0 || shift === 2 || String(flags || "").includes("FULL_SHIFT_2X");
+}
+
+// PRD Izin Pulang Awal — ambil izin pulang awal yang masih aktif untuk satu attendance
+async function getActiveEarlyCheckoutPermission(
+  db: Db,
+  attendanceId: string
+): Promise<EarlyCheckoutPermission | null> {
+  const { data } = await db
+    .from("early_checkout_permissions")
+    .select("*")
+    .eq("attendance_id", attendanceId)
+    .eq("status", "active")
+    .maybeSingle();
+  return (data as EarlyCheckoutPermission | null) ?? null;
 }
 
 function workMinutes(checkinTime?: string | null, checkoutTime?: string | null) {
@@ -1059,6 +1073,12 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   const hasBuka = (reports || []).some((r: any) => r.type === "BUKA");
   const hasTutup = (reports || []).some((r: any) => r.type === "TUTUP");
 
+  // PRD Izin Pulang Awal — cek izin aktif untuk attendance yang belum checkout
+  const earlyCheckoutPermission =
+    attendance?.id && !attendance.checkout_time
+      ? await getActiveEarlyCheckoutPermission(db, attendance.id)
+      : null;
+
   let scheduleState: string;
   let nextStep: string;
   let requiredReports: string[] = [];
@@ -1111,6 +1131,21 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     else if (effectiveShift === 2) requiredReports = ["TUTUP"];
   }
 
+  // PRD Izin Pulang Awal — izin aktif memaksa Laporan Tutup Toko wajib dikirim
+  // sebelum checkout, walau shift normalnya tidak butuh TUTUP (mis. shift 1).
+  if (
+    earlyCheckoutPermission?.require_tutup_report &&
+    attendance?.checkin_time &&
+    !attendance.checkout_time &&
+    !staffDayoffRow &&
+    !approvedLeaveRow
+  ) {
+    if (!requiredReports.includes("TUTUP")) requiredReports = [...requiredReports, "TUTUP"];
+    if (requiredReports.includes("BUKA") && !hasBuka) nextStep = "report_buka";
+    else if (!hasTutup) nextStep = "report_tutup";
+    else nextStep = "checkout";
+  }
+
   // Cek apakah staff datang terlalu awal (sebelum window H-1 jam dari jadwal shift)
   const checkinTooEarly = !attendance?.checkin_time && !isFullShift && (effectiveShift === 1 || effectiveShift === 2)
     ? isCheckinTooEarly(outlet, effectiveShift)
@@ -1137,6 +1172,9 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     requiredReports,
     shift1WaitingInfo,
     checkinTooEarly,
+    // PRD Izin Pulang Awal
+    earlyCheckoutPermission,
+    earlyCheckoutAllowed: Boolean(earlyCheckoutPermission),
     serverTime: new Date().toISOString()
   });
 }
@@ -1568,10 +1606,14 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if (!attendance?.checkin_time) throw new HttpError("Belum ada absen masuk untuk shift ini", 400, "NO_CHECKIN");
   if (attendance.checkout_time) throw new HttpError("Absen pulang sudah tercatat", 409, "ALREADY_CHECKED_OUT");
 
+  // PRD Izin Pulang Awal — izin aktif membuka blokir jam checkout secara terkontrol
+  const earlyCheckoutPermission = await getActiveEarlyCheckoutPermission(db, attendance.id);
+
   // Validasi waktu: jangan boleh absen keluar sebelum jam selesai shift
   const now = new Date();
   const endTime = shiftEndTime(outlet, shift);
-  if (endTime && !isCheckoutTimeReached(endTime, now)) {
+  const checkoutTooEarly = Boolean(endTime) && !isCheckoutTimeReached(endTime, now);
+  if (checkoutTooEarly && !earlyCheckoutPermission) {
     const formattedEnd = String(endTime).slice(0, 5);
     throw new HttpError(
       `Absen keluar belum tersedia. Shift selesai pukul ${formattedEnd}. Silakan tunggu hingga waktu shift selesai.`,
@@ -1612,9 +1654,16 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const hasTutup = (reports || []).some((report) => report.type === "TUTUP");
   if ((shift === 0 || shift === 1) && !hasBuka) throw new HttpError("Laporan Buka Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_BUKA");
   if ((shift === 0 || shift === 2) && !hasTutup) throw new HttpError("Laporan Tutup Toko wajib dikirim sebelum absen keluar", 400, "MISSING_REPORT_TUTUP");
+  // PRD Izin Pulang Awal — pulang awal selalu berarti penutupan toko, jadi TUTUP wajib walau shift 1
+  if (earlyCheckoutPermission?.require_tutup_report && !hasTutup) {
+    throw new HttpError("Laporan Tutup Toko wajib dikirim sebelum absen pulang lebih awal", 400, "MISSING_REPORT_TUTUP");
+  }
 
-  // Inventori hanya mengunci alur tutup toko: Shift 2 atau Full Shift.
-  if (outlet.inventory_branch_id && isClosingShift(shift, attendance.flags)) {
+  // Inventori mengunci alur tutup toko: Shift 2, Full Shift, atau attendance dengan izin pulang awal.
+  const requiresInventory =
+    isClosingShift(shift, attendance.flags) ||
+    Boolean(earlyCheckoutPermission?.require_inventory_check);
+  if (outlet.inventory_branch_id && requiresInventory) {
     const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
     if (!inventoryStatus.can_checkout) {
       throw new HttpError(inventoryStatus.message || "Laporan inventori belum selesai. Selesaikan laporan inventori sebelum absen keluar.", 400, "INVENTORY_NOT_COMPLETE");
@@ -1635,6 +1684,11 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const checkoutGpsFlag = `CHECKOUT_GPS:${checkoutLat.toFixed(6)}:${checkoutLng.toFixed(6)}:${Math.round(checkoutAcc)}`;
   if (checkoutGpsLowAccuracy) existingFlags.push("CHECKOUT_GPS_LOW_ACC");
   existingFlags.push(checkoutGpsFlag);
+  // PRD Izin Pulang Awal — tandai attendance bahwa checkout terjadi dengan izin pulang awal
+  if (earlyCheckoutPermission) {
+    if (!existingFlags.includes("EARLY_CHECKOUT_APPROVED")) existingFlags.push("EARLY_CHECKOUT_APPROVED");
+    existingFlags.push(`EARLY_CHECKOUT_PERMISSION:${earlyCheckoutPermission.id}`);
+  }
   const newFlags = existingFlags.join(",");
 
   // Tandai assignment sebagai completed
@@ -1656,10 +1710,28 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     .select("*")
     .single();
   if (error) throw error;
+
+  // PRD Izin Pulang Awal — tandai izin sebagai dipakai setelah attendance terupdate
+  if (earlyCheckoutPermission) {
+    await db
+      .from("early_checkout_permissions")
+      .update({ status: "used", used_at: now.toISOString() })
+      .eq("id", earlyCheckoutPermission.id)
+      .eq("status", "active");
+    await logAudit(db, "early_checkout_used", staff.name, {
+      permissionId: earlyCheckoutPermission.id,
+      attendanceId: attendance.id,
+      date,
+      shift,
+      earlyCheckout: checkoutTooEarly
+    });
+  }
+
   await logAudit(db, "checkout", staff.name, {
     date, shift, durationMin,
     checkoutDist: Math.round(checkoutDist),
-    checkoutGpsLowAccuracy
+    checkoutGpsLowAccuracy,
+    earlyCheckout: Boolean(earlyCheckoutPermission)
   });
   // Kirim setelah checkout agar email tutup toko memuat selfie dan GPS keluar.
   const emailSent = await sendClosingReportAfterCheckout(db, staff, outlet, date, updated);
@@ -1708,9 +1780,22 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     .eq("date", date)
     .not("checkin_time", "is", null);
   if (attCheckError) throw attCheckError;
+  // PRD Izin Pulang Awal — izin aktif membuka TUTUP lebih awal (termasuk untuk shift 1)
+  let earlyTutupPermission: { id: string; attendance_id: string } | null = null;
+  if (type === "TUTUP" && (checkinRows || []).length > 0) {
+    const attendanceIds = (checkinRows || []).map((row) => row.id);
+    const { data: perm } = await db
+      .from("early_checkout_permissions")
+      .select("id,attendance_id")
+      .in("attendance_id", attendanceIds)
+      .eq("status", "active")
+      .maybeSingle();
+    earlyTutupPermission = (perm as { id: string; attendance_id: string } | null) ?? null;
+  }
+
   const hasEligibleCheckin = (checkinRows || []).some((row) =>
     allowedShifts.includes(Number(row.shift)) || String(row.flags || "").includes("FULL_SHIFT_2X")
-  );
+  ) || Boolean(earlyTutupPermission);
   if (!hasEligibleCheckin) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
@@ -1731,7 +1816,8 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
   const submittedAt = new Date();
   const submissionStatus = reportSubmissionStatus(outlet, type, submittedAt);
-  if (!submissionStatus.canSubmit) {
+  // Izin pulang awal membuka window TUTUP lebih awal; tanpa izin, window normal tetap berlaku.
+  if (!submissionStatus.canSubmit && !earlyTutupPermission) {
     throw new HttpError(
       `Laporan ${type} belum bisa dikirim. Tersedia mulai pukul ${submissionStatus.start.slice(0, 5)}.`,
       400,
@@ -1889,8 +1975,13 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
       emailSent = await sendClosingReportAfterCheckout(db, staff, outlet, date, attData as Body);
     }
   }
-  await logAudit(db, "submit_report", staff.name, { date, type, outletId: outlet.id });
-  return ok({ report, reportId: report.id, emailSent });
+  await logAudit(db, "submit_report", staff.name, {
+    date,
+    type,
+    outletId: outlet.id,
+    earlyCheckoutPermissionId: earlyTutupPermission?.id ?? undefined
+  });
+  return ok({ report, reportId: report.id, emailSent, earlyCheckoutPermissionId: earlyTutupPermission?.id ?? null });
 }
 
 async function staffInventoryStatus(db: Db, request: NextRequest) {
@@ -2285,6 +2376,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/attendance-import/preview" && method === "POST") return adminAttendanceImportPreview(db, body);
   if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
   if (path === "/admin/attendance") return adminAttendance(db, method, body);
+  if (path === "/admin/early-checkout") return adminEarlyCheckout(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
   if (path === "/admin/payroll-projection" && method === "GET") return adminPayrollProjection(db, body);
   if (path === "/admin/payroll-projection/detail" && method === "GET") return adminPayrollProjectionDetail(db, body);
@@ -2673,7 +2765,31 @@ async function adminAttendance(db: Db, method: string, body: Body) {
     if (body.dateTo) query = query.lte("date", body.dateTo);
     const { data, error } = await query.limit(500);
     if (error) throw error;
-    return ok({ attendance: data || [] });
+
+    // PRD Izin Pulang Awal — lampirkan izin aktif/terpakai per attendance untuk badge admin
+    const rows = data || [];
+    const attendanceIds = rows.map((row: any) => row.id);
+    let permsByAttendance = new Map<string, any>();
+    if (attendanceIds.length > 0) {
+      const { data: perms } = await db
+        .from("early_checkout_permissions")
+        .select("*")
+        .in("attendance_id", attendanceIds)
+        .in("status", ["active", "used"])
+        .order("created_at", { ascending: false });
+      // Prioritaskan izin 'active' di atas 'used' jika keduanya ada untuk satu attendance
+      for (const perm of perms || []) {
+        const existing = permsByAttendance.get(perm.attendance_id);
+        if (!existing || (existing.status !== "active" && perm.status === "active")) {
+          permsByAttendance.set(perm.attendance_id, perm);
+        }
+      }
+    }
+    const attendance = rows.map((row: any) => ({
+      ...row,
+      early_checkout_permission: permsByAttendance.get(row.id) ?? null
+    }));
+    return ok({ attendance });
   }
 
   if (method === "POST") {
@@ -2856,6 +2972,129 @@ async function adminAttendance(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method attendance tidak valid", 405);
+}
+
+// PRD Izin Pulang Awal — admin kelola izin pulang awal (list / create / cancel)
+async function adminEarlyCheckout(db: Db, method: string, body: Body) {
+  if (method === "GET") {
+    let query = db
+      .from("early_checkout_permissions")
+      .select("*, staff(name), outlets(name)")
+      .order("created_at", { ascending: false });
+    if (body.date) query = query.eq("date", body.date);
+    if (body.outletId) query = query.eq("outlet_id", body.outletId);
+    if (body.staffId) query = query.eq("staff_id", body.staffId);
+    if (body.status) query = query.eq("status", body.status);
+    const { data, error } = await query.limit(500);
+    if (error) throw error;
+    const permissions = (data || []).map((row: any) => {
+      const { staff, outlets, ...rest } = row;
+      return {
+        ...rest,
+        staff_name: staff?.name ?? null,
+        outlet_name: outlets?.name ?? null
+      };
+    });
+    return ok({ permissions });
+  }
+
+  if (method === "POST") {
+    const attendanceId = stringBody(body, "attendanceId") || stringBody(body, "id");
+    const reason = stringBody(body, "reason");
+    const note = stringBody(body, "note");
+    if (!attendanceId) throw new HttpError("Attendance wajib dipilih", 400, "ATTENDANCE_REQUIRED");
+    if (reason.length < 5) throw new HttpError("Alasan izin wajib diisi minimal 5 karakter", 400, "REASON_REQUIRED");
+
+    const { data: attendance, error: attError } = await db
+      .from("attendance")
+      .select("*")
+      .eq("id", attendanceId)
+      .maybeSingle();
+    if (attError) throw attError;
+    if (!attendance) throw new HttpError("Data absensi tidak ditemukan", 404, "ATTENDANCE_NOT_FOUND");
+    if (!attendance.checkin_time) throw new HttpError("Staff belum absen masuk", 400, "NO_CHECKIN");
+    if (attendance.checkout_time) throw new HttpError("Staff sudah absen pulang", 400, "ALREADY_CHECKED_OUT");
+    if (attendance.paid_status) throw new HttpError("Absensi sudah dibayar, izin tidak bisa dibuat", 400, "ATTENDANCE_PAID");
+
+    const existingActive = await getActiveEarlyCheckoutPermission(db, attendanceId);
+    if (existingActive) throw new HttpError("Sudah ada izin pulang awal aktif untuk absensi ini", 409, "PERMISSION_EXISTS");
+
+    const { data: permission, error: insertError } = await db
+      .from("early_checkout_permissions")
+      .insert({
+        attendance_id: attendance.id,
+        staff_id: attendance.staff_id,
+        outlet_id: attendance.outlet_id,
+        date: attendance.date,
+        shift: attendance.shift,
+        reason,
+        note: note || null,
+        created_by: "Admin"
+      })
+      .select("*")
+      .single();
+    if (insertError) throw insertError;
+
+    await logAudit(db, "admin_create_early_checkout_permission", "Admin", {
+      permissionId: permission.id,
+      attendanceId: attendance.id,
+      staffId: attendance.staff_id,
+      staffName: attendance.staff_name,
+      date: attendance.date,
+      shift: attendance.shift,
+      reason
+    });
+    return ok({ permission });
+  }
+
+  if (method === "PUT") {
+    const permissionId = stringBody(body, "permissionId") || stringBody(body, "id");
+    const action = stringBody(body, "action") || "cancel";
+    const cancelReason = stringBody(body, "cancelReason");
+    if (!permissionId) throw new HttpError("Permission ID wajib diisi", 400, "PERMISSION_REQUIRED");
+    if (action !== "cancel") throw new HttpError("Aksi tidak valid", 400, "INVALID_ACTION");
+    if (cancelReason.length < 5) throw new HttpError("Alasan pembatalan wajib diisi minimal 5 karakter", 400, "CANCEL_REASON_REQUIRED");
+
+    const { data: permission, error: permError } = await db
+      .from("early_checkout_permissions")
+      .select("*")
+      .eq("id", permissionId)
+      .maybeSingle();
+    if (permError) throw permError;
+    if (!permission) throw new HttpError("Izin tidak ditemukan", 404, "PERMISSION_NOT_FOUND");
+    if (permission.status !== "active") {
+      throw new HttpError(
+        permission.status === "used"
+          ? "Izin sudah dipakai dan tidak bisa dibatalkan"
+          : "Izin sudah tidak aktif",
+        400,
+        "PERMISSION_NOT_ACTIVE"
+      );
+    }
+
+    const { data: updated, error: updateError } = await db
+      .from("early_checkout_permissions")
+      .update({
+        status: "cancelled",
+        cancelled_at: new Date().toISOString(),
+        cancel_reason: cancelReason
+      })
+      .eq("id", permissionId)
+      .eq("status", "active")
+      .select("*")
+      .single();
+    if (updateError) throw updateError;
+
+    await logAudit(db, "admin_cancel_early_checkout_permission", "Admin", {
+      permissionId,
+      attendanceId: permission.attendance_id,
+      staffId: permission.staff_id,
+      cancelReason
+    });
+    return ok({ permission: updated });
+  }
+
+  throw new HttpError("Method tidak diizinkan", 405);
 }
 
 async function adminAttendanceBulk(db: Db, body: Body) {

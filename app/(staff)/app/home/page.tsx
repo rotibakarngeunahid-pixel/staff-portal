@@ -67,6 +67,15 @@ type StatusPayload = {
   approvedLeave?: { id: string; reason: string | null } | null;
   shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
   checkinTooEarly?: { tooEarly: boolean; windowOpensAt: string | null } | null;
+  earlyCheckoutPermission?: {
+    id: string;
+    reason: string;
+    note: string | null;
+    status: "active" | "used" | "cancelled" | "expired";
+    allowed_from: string;
+    require_tutup_report: boolean;
+  } | null;
+  earlyCheckoutAllowed?: boolean;
 };
 
 type ReportCfgItem = {
@@ -350,6 +359,9 @@ export default function StaffHomePage() {
     return "done";
   }, [reportTypes, status]);
 
+  /* ─── Izin Pulang Awal ─── */
+  const earlyCheckoutActive = status?.earlyCheckoutPermission?.status === "active";
+
   /* ─── Checkout time validation ─── */
   const checkoutAllowed = useMemo(() => {
     if (!status?.outlet) return true;
@@ -359,7 +371,10 @@ export default function StaffHomePage() {
       { shift1_end: outlet.shift1_end, shift2_end: outlet.shift2_end },
       shift
     );
-    return isCheckoutTimeReached(endTime, clockNow);
+    if (isCheckoutTimeReached(endTime, clockNow)) return true;
+    // PRD Izin Pulang Awal — izin aktif + Laporan Tutup Toko sudah terkirim → boleh checkout lebih awal
+    const hasTutup = (status.reports || []).some((r) => r.type === "TUTUP");
+    return status.earlyCheckoutPermission?.status === "active" && hasTutup;
   }, [status, clockNow]);
 
   const checkoutBlockedMsg = useMemo(() => {
@@ -376,7 +391,11 @@ export default function StaffHomePage() {
 
   /* ─── Report window (dipakai sebelum render dan di useEffect inventori) ─── */
   const reportTypeEarly = nextState === "report_buka" ? "BUKA" : "TUTUP";
-  const reportWindowEarly = reportSubmissionStatus(status?.outlet, reportTypeEarly, clockNow);
+  const reportWindowEarlyBase = reportSubmissionStatus(status?.outlet, reportTypeEarly, clockNow);
+  // Izin pulang awal membuka window Laporan Tutup Toko lebih awal
+  const reportWindowEarly = earlyCheckoutActive && reportTypeEarly === "TUTUP"
+    ? { ...reportWindowEarlyBase, canSubmit: true, tooEarly: false }
+    : reportWindowEarlyBase;
 
   /* ─── Load status ─── */
   const load = useCallback(async () => {
@@ -676,8 +695,9 @@ export default function StaffHomePage() {
   async function submitReport() {
     if (reportBusyRef.current || loading || reportItemsLoading) return;
     const type = nextState === "report_buka" ? "BUKA" : "TUTUP";
+    const earlyActive = status?.earlyCheckoutPermission?.status === "active";
     const windowState = reportSubmissionStatus(status?.outlet, type, new Date(Date.now() + serverClockOffsetRef.current));
-    if (!windowState.canSubmit) {
+    if (!windowState.canSubmit && !(earlyActive && type === "TUTUP")) {
       setReportError(`Laporan ${type === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${windowState.start.slice(0, 5)}.`);
       return;
     }
@@ -782,7 +802,11 @@ export default function StaffHomePage() {
   const isReportState = nextState === "report_buka" || nextState === "report_tutup";
   const reportType = nextState === "report_buka" ? "BUKA" : "TUTUP";
   const reportTypeColor = reportType === "BUKA" ? "#2563EB" : "#7C3AED";
-  const reportWindow = reportSubmissionStatus(outlet, reportType, clockNow);
+  const reportWindowBase = reportSubmissionStatus(outlet, reportType, clockNow);
+  // Izin pulang awal membuka window Laporan Tutup Toko lebih awal untuk attendance ini
+  const reportWindow = earlyCheckoutActive && reportType === "TUTUP"
+    ? { ...reportWindowBase, canSubmit: true, tooEarly: false }
+    : reportWindowBase;
   const effectiveReportItems = useMemo<ReportCfgItem[]>(() => {
     if (!isReportState || reportItemsLoading || reportItems.length > 0) return reportItems;
     return [{
@@ -819,6 +843,8 @@ export default function StaffHomePage() {
     ? "Belum Waktunya"
     : !gpsReady
     ? checkinLabel
+    : earlyCheckoutActive
+    ? "Absen Pulang Lebih Awal"
     : "Absen Pulang";
 
   const requiredReportPhotosComplete = effectiveReportItems.every((item) => !item.required || Boolean(reportPhotos[item.label]));
@@ -853,7 +879,8 @@ export default function StaffHomePage() {
       },
       onCapture: (photo) => {
         const latestWindow = reportSubmissionStatus(status?.outlet, reportType, new Date(Date.now() + serverClockOffsetRef.current));
-        if (!latestWindow.canSubmit) {
+        // Izin pulang awal membuka window TUTUP lebih awal — jangan blokir capture
+        if (!latestWindow.canSubmit && !(earlyCheckoutActive && reportType === "TUTUP")) {
           revokePhoto(photo);
           setReportError(`Laporan ${reportType === "BUKA" ? "Buka Toko" : "Tutup Toko"} belum bisa dikirim. Tersedia mulai pukul ${latestWindow.start.slice(0, 5)}.`);
           return;
@@ -1170,6 +1197,31 @@ export default function StaffHomePage() {
                 >
                   <X size={14} />
                 </button>
+              </div>
+            )}
+
+            {/* Banner: izin pulang awal diizinkan admin */}
+            {!loading && earlyCheckoutActive && nextState !== "checkin" && nextState !== "done" && (
+              <div style={{
+                background: "linear-gradient(135deg,#FFFBEB,#FEF3C7)",
+                border: "1.5px solid #FDE68A",
+                borderRadius: 12, padding: "12px 14px",
+                display: "flex", alignItems: "flex-start", gap: 10
+              }}>
+                <span style={{ fontSize: 20, flexShrink: 0, lineHeight: 1.3 }}>⏰</span>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 800, color: "#92400E", margin: 0, marginBottom: 2 }}>
+                    Pulang awal diizinkan
+                  </p>
+                  {status?.earlyCheckoutPermission?.reason && (
+                    <p style={{ fontSize: 12, fontWeight: 600, color: "#B45309", margin: 0, marginBottom: 2 }}>
+                      {status.earlyCheckoutPermission.reason}
+                    </p>
+                  )}
+                  <p style={{ fontSize: 12, fontWeight: 600, color: "#92400E", margin: 0, lineHeight: 1.5 }}>
+                    Isi Laporan Tutup Toko terlebih dahulu sebelum absen pulang.
+                  </p>
+                </div>
               </div>
             )}
 

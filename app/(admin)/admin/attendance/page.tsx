@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X, Clock, Ban } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
 
+type EarlyCheckoutPermission = {
+  id: string;
+  attendance_id: string;
+  status: "active" | "used" | "cancelled" | "expired";
+  reason: string;
+  note: string | null;
+  created_at: string;
+  used_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+};
 type Attendance = {
   id: string;
   staff_id: string;
@@ -26,6 +37,7 @@ type Attendance = {
   flags?: string | null;
   revision_note?: string | null;
   late_reason?: string | null;
+  early_checkout_permission?: EarlyCheckoutPermission | null;
 };
 type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
 type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number; active?: boolean };
@@ -136,6 +148,14 @@ export default function AdminAttendancePage() {
 
   // Photo modal
   const [photoTarget, setPhotoTarget] = useState<Attendance | null>(null);
+
+  // Izin pulang awal modal
+  const [earlyTarget, setEarlyTarget] = useState<Attendance | null>(null);
+  const [earlyForm, setEarlyForm] = useState({ reason: "", note: "" });
+  const [earlySaving, setEarlySaving] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<Attendance | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelSaving, setCancelSaving] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -280,6 +300,64 @@ export default function AdminAttendancePage() {
       setDeleteTarget(null);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  function openEarly(row: Attendance) {
+    setEarlyTarget(row);
+    setEarlyForm({ reason: "", note: "" });
+  }
+
+  async function submitEarly(event: React.FormEvent) {
+    event.preventDefault();
+    if (!earlyTarget) return;
+    if (earlyForm.reason.trim().length < 5) {
+      setMessage("Alasan izin wajib diisi minimal 5 karakter"); setMsgType("err"); return;
+    }
+    setEarlySaving(true);
+    setMessage("Menyimpan izin pulang awal..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/early-checkout", {
+        method: "POST",
+        role: "admin",
+        body: { attendanceId: earlyTarget.id, reason: earlyForm.reason.trim(), note: earlyForm.note.trim() }
+      });
+      await load();
+      setEarlyTarget(null);
+      setMessage("Izin pulang awal tersimpan ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal menyimpan izin"); setMsgType("err");
+    } finally {
+      setEarlySaving(false);
+    }
+  }
+
+  function openCancel(row: Attendance) {
+    setCancelTarget(row);
+    setCancelReason("");
+  }
+
+  async function submitCancel(event: React.FormEvent) {
+    event.preventDefault();
+    if (!cancelTarget?.early_checkout_permission) return;
+    if (cancelReason.trim().length < 5) {
+      setMessage("Alasan pembatalan wajib diisi minimal 5 karakter"); setMsgType("err"); return;
+    }
+    setCancelSaving(true);
+    setMessage("Membatalkan izin..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/early-checkout", {
+        method: "PUT",
+        role: "admin",
+        body: { permissionId: cancelTarget.early_checkout_permission.id, action: "cancel", cancelReason: cancelReason.trim() }
+      });
+      await load();
+      setCancelTarget(null);
+      setMessage("Izin pulang awal dibatalkan ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal membatalkan izin"); setMsgType("err");
+    } finally {
+      setCancelSaving(false);
     }
   }
 
@@ -532,6 +610,7 @@ export default function AdminAttendancePage() {
                 <th>Alasan Terlambat</th>
                 <th>Gaji</th>
                 <th>Status Bayar</th>
+                <th>Status Izin</th>
                 <th>Foto / GPS</th>
                 <th>Aksi</th>
               </tr>
@@ -540,16 +619,18 @@ export default function AdminAttendancePage() {
               {loading ? (
                 [1, 2, 3, 4].map((i) => (
                   <tr key={i}>
-                    {[60, 90, 80, 40, 40, 40, 40, 100, 60, 55, 50, 80].map((w, j) => (
+                    {[60, 90, 80, 40, 40, 40, 40, 100, 60, 55, 70, 50, 80].map((w, j) => (
                       <td key={j}><div style={{ height: 12, width: w, borderRadius: 4, background: "var(--border)", animation: "skeleton-pulse 1.4s ease-in-out infinite" }} /></td>
                     ))}
                   </tr>
                 ))
               ) : rows.length === 0 ? (
-                <tr><td colSpan={12} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
+                <tr><td colSpan={13} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
               ) : rows.map((row) => {
                 const gps = parseCheckoutGps(row.flags);
                 const hasSelfie = row.selfie_in || row.selfie_out;
+                const perm = row.early_checkout_permission;
+                const earlyEligible = Boolean(row.checkin_time) && !row.checkout_time && !row.paid_status;
                 return (
                   <tr key={row.id}>
                     <td>{formatDateID(row.date)}</td>
@@ -574,6 +655,19 @@ export default function AdminAttendancePage() {
                     </td>
                     <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
                     <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
+                    <td>
+                      {perm?.status === "active" ? (
+                        <span className="status-pill" style={{ background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", fontSize: 11 }} title={perm.reason}>
+                          ⏰ Pulang awal aktif
+                        </span>
+                      ) : perm?.status === "used" ? (
+                        <span className="status-pill" style={{ background: "#EDE9FE", color: "#6D28D9", border: "1px solid #DDD6FE", fontSize: 11 }} title={perm.reason}>
+                          ✓ Dipakai
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--muted-light)", fontSize: 11 }}>—</span>
+                      )}
+                    </td>
                     <td>
                       <div style={{ display: "flex", gap: 4 }}>
                         {hasSelfie && (
@@ -604,7 +698,26 @@ export default function AdminAttendancePage() {
                       </div>
                     </td>
                     <td>
-                      <div style={{ display: "flex", gap: 6 }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {earlyEligible && perm?.status === "active" ? (
+                          <button
+                            className="btn btn-soft"
+                            style={{ fontSize: 12, padding: "6px 10px", color: "#B45309", whiteSpace: "nowrap" }}
+                            title="Batalkan izin pulang awal"
+                            onClick={() => openCancel(row)}
+                          >
+                            <Ban size={13} /> Batalkan Izin
+                          </button>
+                        ) : earlyEligible && !perm ? (
+                          <button
+                            className="btn btn-soft"
+                            style={{ fontSize: 12, padding: "6px 10px", color: "#B45309", whiteSpace: "nowrap" }}
+                            title="Izinkan staff pulang lebih awal"
+                            onClick={() => openEarly(row)}
+                          >
+                            <Clock size={13} /> Izinkan Pulang
+                          </button>
+                        ) : null}
                         <button
                           className="btn btn-soft"
                           style={{ fontSize: 12, padding: "6px 10px" }}
@@ -811,6 +924,91 @@ export default function AdminAttendancePage() {
               </div>
             );
           })()}
+        </Modal>
+      )}
+
+      {/* Izinkan Pulang Awal Modal */}
+      {earlyTarget && (
+        <Modal title="Izinkan Pulang Awal" onClose={() => setEarlyTarget(null)} width={500}>
+          <div style={{ background: "var(--surface-soft)", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <span><strong>Staff:</strong> {earlyTarget.staff_name}</span>
+              <span><strong>Outlet:</strong> {earlyTarget.outlet_name}</span>
+              <span><strong>Tanggal:</strong> {formatDateID(earlyTarget.date)}</span>
+              <span><strong>Shift:</strong> {earlyTarget.shift === 0 ? "Full Shift" : `Shift ${earlyTarget.shift}`}</span>
+              <span><strong>Masuk:</strong> {hhmm(earlyTarget.checkin_time) || "—"}</span>
+            </div>
+          </div>
+          <form onSubmit={submitEarly}>
+            <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+              <div>
+                <label className="label">Alasan <span style={{ color: "var(--danger)" }}>*</span></label>
+                <input
+                  className="field"
+                  placeholder="Mis. Roti habis lebih cepat (min. 5 karakter)"
+                  value={earlyForm.reason}
+                  onChange={(e) => setEarlyForm({ ...earlyForm, reason: e.target.value })}
+                  required
+                  minLength={5}
+                />
+              </div>
+              <div>
+                <label className="label">Catatan (opsional)</label>
+                <input
+                  className="field"
+                  placeholder="Mis. Sisa stok kosong jam 15:20"
+                  value={earlyForm.note}
+                  onChange={(e) => setEarlyForm({ ...earlyForm, note: e.target.value })}
+                />
+              </div>
+            </div>
+            <div style={{
+              background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10,
+              padding: "10px 14px", fontSize: 12.5, color: "#92400E", marginBottom: 16, lineHeight: 1.6
+            }}>
+              ⚠️ Staff tetap wajib mengirim Laporan Tutup Toko sebelum absen pulang. Izin ini hanya membuka blokir jam checkout, bukan melewati alur penutupan toko (GPS, selfie, dan inventori tetap wajib).
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={earlySaving}>
+                {earlySaving ? "Menyimpan..." : "Simpan Izin"}
+              </button>
+              <button type="button" className="btn btn-soft" onClick={() => setEarlyTarget(null)}>Batal</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Batalkan Izin Modal */}
+      {cancelTarget && (
+        <Modal title="Batalkan Izin Pulang Awal" onClose={() => setCancelTarget(null)} width={460}>
+          <p style={{ fontSize: 13.5, marginBottom: 12, lineHeight: 1.6 }}>
+            Membatalkan izin pulang awal untuk <strong>{cancelTarget.staff_name}</strong> pada{" "}
+            <strong>{formatDateID(cancelTarget.date)}</strong>. Setelah dibatalkan, staff kembali mengikuti aturan jam checkout normal.
+          </p>
+          {cancelTarget.early_checkout_permission?.reason && (
+            <div style={{ background: "var(--surface-soft)", borderRadius: 10, padding: "8px 12px", marginBottom: 14, fontSize: 12.5 }}>
+              <strong>Alasan izin awal:</strong> {cancelTarget.early_checkout_permission.reason}
+            </div>
+          )}
+          <form onSubmit={submitCancel}>
+            <div style={{ marginBottom: 16 }}>
+              <label className="label">Alasan Pembatalan <span style={{ color: "var(--danger)" }}>*</span></label>
+              <input
+                className="field"
+                placeholder="Mis. Toko lanjut buka karena stok datang lagi (min. 5 karakter)"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                required
+                minLength={5}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" className="btn btn-primary" style={{ fontSize: 13, background: "var(--danger)", borderColor: "var(--danger)" }} disabled={cancelSaving}>
+                {cancelSaving ? "Membatalkan..." : "Batalkan Izin"}
+              </button>
+              <button type="button" className="btn btn-soft" onClick={() => setCancelTarget(null)}>Tutup</button>
+            </div>
+          </form>
         </Modal>
       )}
     </AdminPage>

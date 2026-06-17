@@ -89,6 +89,8 @@ export type Attendance = {
   shift_type?: ShiftType | null;
   client_request_id?: string | null;
   missing_checkout_flag?: boolean;
+  // PRD Izin Pulang Awal — relasi izin pulang awal aktif/terpakai
+  early_checkout_permission?: EarlyCheckoutPermission | null;
 };
 
 export type PhotoMode = "realtime" | "upload";
@@ -159,6 +161,34 @@ export type LeaveRequest = {
   reason: string | null;
   created_at: string;
   cancelled_at: string | null;
+};
+
+// ─── PRD Izin Pulang Awal — early checkout permissions ────────────────────
+
+export type EarlyCheckoutPermissionStatus =
+  | "active"
+  | "used"
+  | "cancelled"
+  | "expired";
+
+export type EarlyCheckoutPermission = {
+  id: string;
+  attendance_id: string;
+  staff_id: string;
+  outlet_id: string;
+  date: string;
+  shift: 0 | 1 | 2;
+  reason: string;
+  note: string | null;
+  allowed_from: string;
+  require_tutup_report: boolean;
+  require_inventory_check: boolean;
+  status: EarlyCheckoutPermissionStatus;
+  created_by: string;
+  created_at: string;
+  used_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
 };
 
 // ─── PRD §8.1 — Jadwal berbasis assignment staff ───────────────────────────
