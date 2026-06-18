@@ -90,7 +90,7 @@ export default function AdminDashboardPage() {
       ) : null}
 
       {/* Metric cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 20 }}>
+      <div className="dash-metric-grid">
         {METRICS.map((metric, i) => (
           <div
             key={metric.key}

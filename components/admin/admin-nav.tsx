@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -14,10 +15,12 @@ import {
   LogOut,
   MailCheck,
   MapPinned,
+  Menu,
   Settings,
   Store,
   TrendingUp,
-  UsersRound
+  UsersRound,
+  X
 } from "lucide-react";
 import { apiFetch } from "@/lib/client-api";
 import { useSessionStore } from "@/stores/session";
@@ -43,6 +46,29 @@ export function AdminNav() {
   const pathname = usePathname();
   const router = useRouter();
   const setAdminToken = useSessionStore((state) => state.setAdminToken);
+  const [open, setOpen] = useState(false);
+
+  const activeItem = items.find((item) => item.href === pathname);
+
+  // Close the drawer whenever the route changes.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // Lock body scroll + allow Escape to close while the drawer is open.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
@@ -51,39 +77,75 @@ export function AdminNav() {
   }
 
   return (
-    <aside className="admin-sidebar">
-      <div className="admin-nav-brand">
-        <p>
-          Admin Portal
-        </p>
-        <h1>Roti Bakar Ngeunah</h1>
-      </div>
+    <>
+      {/* Mobile top bar (hidden on desktop) */}
+      <header className="admin-topbar">
+        <button
+          type="button"
+          className="admin-topbar-menu"
+          onClick={() => setOpen(true)}
+          aria-label="Buka menu navigasi"
+          aria-expanded={open}
+        >
+          <Menu size={22} aria-hidden="true" />
+        </button>
+        <div className="admin-topbar-title">
+          <p>Admin Portal</p>
+          <h1>{activeItem?.label ?? "Roti Bakar Ngeunah"}</h1>
+        </div>
+      </header>
 
-      <nav className="admin-nav-list" aria-label="Navigasi admin">
-        {items.map((item) => {
-          const Icon = item.icon;
-          const active = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`admin-nav-item${active ? " active" : ""}`}
-              aria-current={active ? "page" : undefined}
-            >
-              <Icon size={16} aria-hidden="true" />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Backdrop for the mobile drawer */}
+      <div
+        className={`admin-drawer-backdrop${open ? " show" : ""}`}
+        onClick={() => setOpen(false)}
+        aria-hidden="true"
+      />
 
-      <button
-        onClick={logout}
-        className="admin-nav-logout"
-      >
-        <LogOut size={16} aria-hidden="true" />
-        <span>Keluar</span>
-      </button>
-    </aside>
+      {/* Sidebar — static column on desktop, slide-in drawer on mobile */}
+      <aside className={`admin-sidebar${open ? " open" : ""}`}>
+        <div className="admin-nav-brand">
+          <div className="admin-nav-brand-text">
+            <p>Admin Portal</p>
+            <h1>Roti Bakar Ngeunah</h1>
+          </div>
+          <button
+            type="button"
+            className="admin-drawer-close"
+            onClick={() => setOpen(false)}
+            aria-label="Tutup menu navigasi"
+          >
+            <X size={20} aria-hidden="true" />
+          </button>
+        </div>
+
+        <nav className="admin-nav-list" aria-label="Navigasi admin">
+          {items.map((item) => {
+            const Icon = item.icon;
+            const active = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`admin-nav-item${active ? " active" : ""}`}
+                aria-current={active ? "page" : undefined}
+                onClick={() => setOpen(false)}
+              >
+                <Icon size={16} aria-hidden="true" />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+
+        <button
+          onClick={logout}
+          className="admin-nav-logout"
+        >
+          <LogOut size={16} aria-hidden="true" />
+          <span>Keluar</span>
+        </button>
+      </aside>
+    </>
   );
 }
