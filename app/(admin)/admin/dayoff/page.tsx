@@ -262,16 +262,16 @@ export default function AdminDayoffPage() {
                   <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data libur staff</td></tr>
                 ) : staffDayoffs.map((row) => (
                   <tr key={row.id}>
-                    <td>{formatDateID(row.date)}</td>
-                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
-                    <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
-                    <td>{row.reason || "—"}</td>
-                    <td>
+                    <td data-label="Tanggal">{formatDateID(row.date)}</td>
+                    <td data-label="Outlet">{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
+                    <td data-label="Staff" style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                    <td data-label="Alasan">{row.reason || "—"}</td>
+                    <td data-label="Sumber">
                       <span className={`status-pill ${row.source === "admin" ? "status-warn" : "status-ok"}`}>
                         {row.source === "admin" ? "Admin" : row.source === "staff_request" ? "Request Staff" : row.source}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Aksi">
                       <button
                         className="btn btn-danger"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}
@@ -344,10 +344,10 @@ export default function AdminDayoffPage() {
                   <tr><td colSpan={4} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada hari libur shift</td></tr>
                 ) : shiftDayoffs.map((row) => (
                   <tr key={row.id}>
-                    <td>{formatDateID(row.date)}</td>
-                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id), row.outlet_id)}</td>
-                    <td>Shift {row.shift}</td>
-                    <td>
+                    <td data-label="Tanggal">{formatDateID(row.date)}</td>
+                    <td data-label="Outlet">{outletLabel(outlets.find((o) => o.id === row.outlet_id), row.outlet_id)}</td>
+                    <td data-label="Shift">Shift {row.shift}</td>
+                    <td data-label="Aksi">
                       <button
                         className="btn btn-danger"
                         style={{ fontSize: 12, padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}

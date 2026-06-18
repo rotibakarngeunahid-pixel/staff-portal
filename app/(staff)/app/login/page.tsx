@@ -122,8 +122,28 @@ export default function StaffLoginPage() {
       </header>
 
       {/* Login card */}
-      <main style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 20px" }}>
-        <div style={{ background: "#fff", borderRadius: 20, padding: "28px 22px", width: "100%", boxShadow: "0 2px 16px rgba(0,0,0,.08)" }}>
+      <main style={{
+        flex: 1,
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        overflow: "hidden",
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "24px 20px"
+      }}>
+        <div style={{
+          background: "#fff",
+          borderRadius: 20,
+          padding: "28px 22px",
+          width: "min(100%, 360px)",
+          maxWidth: "100%",
+          minWidth: 0,
+          boxSizing: "border-box",
+          boxShadow: "0 2px 16px rgba(0,0,0,.08)"
+        }}>
           <Image
             src="https://res.cloudinary.com/dckzmg6c3/image/upload/f_auto,q_auto,w_160/v1777572835/Untitled-2_tgjm4u.png"
             alt="Logo"

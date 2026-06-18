@@ -445,19 +445,19 @@ export default function AdminStaffPage() {
                   <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Tidak ada data</td></tr>
                 ) : filtered.map((row) => (
                   <tr key={row.id} style={{ opacity: row.deleted_at ? 0.6 : 1 }}>
-                    <td style={{ fontWeight: 700 }}>
+                    <td data-label="Nama" style={{ fontWeight: 700 }}>
                       {row.name}
                       {row.deleted_at && <span className="status-pill status-danger" style={{ fontSize: 9, marginLeft: 6 }}>Arsip</span>}
                     </td>
-                    <td>{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
-                    <td>{rupiah(row.salary_per_shift)}</td>
-                    <td>{row.phone || "—"}</td>
-                    <td>
+                    <td data-label="Outlet">{outletLabel(outlets.find((o) => o.id === row.outlet_id))}</td>
+                    <td data-label="Gaji/Shift">{rupiah(row.salary_per_shift)}</td>
+                    <td data-label="Telepon">{row.phone || "—"}</td>
+                    <td data-label="Status">
                       <span className={`status-pill ${row.active ? "status-ok" : "status-danger"}`}>
                         {row.active ? "Aktif" : "Nonaktif"}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Aksi">
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button className="btn btn-soft" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => startEdit(row)}>Edit</button>
                         {row.active && (

@@ -507,23 +507,23 @@ export default function AdminAttendancePage() {
                         return (
                           <tr key={entry.staffId}
                             style={result ? { background: result.status === "success" ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)" } : undefined}>
-                            <td>
+                            <td data-label="Pilih">
                               <input type="checkbox" checked={entry.checked}
                                 onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checked: e.target.checked } : x))} />
                             </td>
-                            <td style={{ fontWeight: 700 }}>{entry.staffName}</td>
-                            <td>
+                            <td data-label="Nama Staff" style={{ fontWeight: 700 }}>{entry.staffName}</td>
+                            <td data-label="Jam Masuk">
                               <input className="field" type="time" value={entry.checkin_time} placeholder="Default shift"
                                 onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkin_time: e.target.value } : x))}
                                 style={{ minWidth: 110 }} />
                             </td>
-                            <td>
+                            <td data-label="Jam Pulang">
                               <input className="field" type="time" value={entry.checkout_time}
                                 onChange={(e) => setBulkEntries((prev) => prev.map((x, i) => i === idx ? { ...x, checkout_time: e.target.value } : x))}
                                 style={{ minWidth: 110 }} />
                             </td>
                             {bulkResults && (
-                              <td style={{ fontSize: 12, fontWeight: 600, color: result?.status === "success" ? "var(--success)" : "var(--danger)" }}>
+                              <td data-label="Hasil" style={{ fontSize: 12, fontWeight: 600, color: result?.status === "success" ? "var(--success)" : "var(--danger)" }}>
                                 {result ? (result.status === "success" ? "✓ Tersimpan" : `✗ ${result.message || "Gagal"}`) : "-"}
                               </td>
                             )}
@@ -634,14 +634,14 @@ export default function AdminAttendancePage() {
                   Boolean(row.checkin_time) && !row.checkout_time && !row.paid_status && row.date === todayWita();
                 return (
                   <tr key={row.id}>
-                    <td>{formatDateID(row.date)}</td>
-                    <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
-                    <td>{row.outlet_name}</td>
-                    <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
-                    <td>{hhmm(row.checkin_time)}</td>
-                    <td>{hhmm(row.checkout_time)}</td>
-                    <td>{row.late_minutes} mnt</td>
-                    <td style={{ maxWidth: 160 }}>
+                    <td data-label="Tanggal">{formatDateID(row.date)}</td>
+                    <td data-label="Staff" style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                    <td data-label="Outlet">{row.outlet_name}</td>
+                    <td data-label="Shift">{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                    <td data-label="Masuk">{hhmm(row.checkin_time)}</td>
+                    <td data-label="Pulang">{hhmm(row.checkout_time)}</td>
+                    <td data-label="Telat">{row.late_minutes} mnt</td>
+                    <td data-label="Alasan Terlambat" style={{ maxWidth: 160 }}>
                       {row.status === "late" && row.late_reason ? (
                         <span title={row.late_reason} style={{
                           fontSize: 12, display: "block",
@@ -654,9 +654,9 @@ export default function AdminAttendancePage() {
                         <span style={{ color: "var(--muted-light)", fontSize: 12 }}>—</span>
                       )}
                     </td>
-                    <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
-                    <td><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
-                    <td>
+                    <td data-label="Gaji" style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
+                    <td data-label="Status Bayar"><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
+                    <td data-label="Foto / GPS">
                       <div style={{ display: "flex", gap: 4 }}>
                         {hasSelfie && (
                           <button
@@ -685,7 +685,7 @@ export default function AdminAttendancePage() {
                         )}
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Aksi">
                       <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", alignItems: "center" }}>
                         {perm?.status === "active" ? (
                           <button

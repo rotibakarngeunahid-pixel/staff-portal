@@ -51,17 +51,15 @@ export function AdminNav() {
   }
 
   return (
-    <aside className="admin-sidebar" style={{ display: "flex", flexDirection: "column" }}>
-      {/* Brand */}
-      <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: "1px solid rgba(255,255,255,.08)" }}>
-        <p style={{ fontSize: 9, fontWeight: 800, letterSpacing: "1.2px", textTransform: "uppercase", color: "var(--primary)", marginBottom: 2 }}>
+    <aside className="admin-sidebar">
+      <div className="admin-nav-brand">
+        <p>
           Admin Portal
         </p>
-        <h1 style={{ fontSize: 16, fontWeight: 900, color: "#fff", lineHeight: 1.2 }}>Roti Bakar Ngeunah</h1>
+        <h1>Roti Bakar Ngeunah</h1>
       </div>
 
-      {/* Nav items */}
-      <nav style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+      <nav className="admin-nav-list" aria-label="Navigasi admin">
         {items.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.href;
@@ -69,48 +67,22 @@ export function AdminNav() {
             <Link
               key={item.href}
               href={item.href}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                borderRadius: 10,
-                padding: "9px 12px",
-                fontSize: 13,
-                fontWeight: 700,
-                textDecoration: "none",
-                background: active ? "var(--primary)" : "transparent",
-                color: active ? "#fff" : "var(--admin-sidebar-muted)",
-                transition: "background 0.15s, color 0.15s"
-              }}
+              className={`admin-nav-item${active ? " active" : ""}`}
+              aria-current={active ? "page" : undefined}
             >
-              <Icon size={16} />
-              {item.label}
+              <Icon size={16} aria-hidden="true" />
+              <span>{item.label}</span>
             </Link>
           );
         })}
       </nav>
 
-      {/* Logout */}
       <button
         onClick={logout}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          borderRadius: 10,
-          padding: "9px 12px",
-          fontSize: 13,
-          fontWeight: 700,
-          background: "transparent",
-          color: "var(--admin-sidebar-muted)",
-          border: "none",
-          cursor: "pointer",
-          width: "100%",
-          marginTop: 12
-        }}
+        className="admin-nav-logout"
       >
-        <LogOut size={16} />
-        Keluar
+        <LogOut size={16} aria-hidden="true" />
+        <span>Keluar</span>
       </button>
     </aside>
   );

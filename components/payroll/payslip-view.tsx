@@ -693,9 +693,11 @@ function Metric({
 
 export function PayslipView({ data }: { data: PayslipData }) {
   const slipRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const [dl, setDl] = useState<"img" | "pdf" | null>(null);
   const [logoSrc, setLogoSrc] = useState<string | null>(null);
   const [logoLoaded, setLogoLoaded] = useState(false);
+  const [preview, setPreview] = useState({ scale: 1, height: 0 });
 
   useEffect(() => {
     let mounted = true;
@@ -709,6 +711,31 @@ export function PayslipView({ data }: { data: PayslipData }) {
     };
   }, []);
 
+  useEffect(() => {
+    const shell = previewRef.current;
+    if (!shell) return;
+    const shellNode = shell;
+
+    function updatePreviewSize() {
+      const doc = slipRef.current;
+      const availableWidth = shellNode.clientWidth || 540;
+      const scale = Math.min(1, availableWidth / 540);
+      setPreview({
+        scale,
+        height: doc ? Math.ceil(doc.offsetHeight * scale) : 0,
+      });
+    }
+
+    updatePreviewSize();
+    const observer = new ResizeObserver(updatePreviewSize);
+    observer.observe(shellNode);
+    window.addEventListener("resize", updatePreviewSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePreviewSize);
+    };
+  }, [data, logoSrc]);
+
   const safeName = data.staff.name
     .trim()
     .replace(/\s+/g, "-")
@@ -719,21 +746,36 @@ export function PayslipView({ data }: { data: PayslipData }) {
   async function capture() {
     if (!slipRef.current) throw new Error("Ref not found");
     const html2canvas = (await import("html2canvas")).default;
-    const rect = slipRef.current.getBoundingClientRect();
+    const scaleNode = slipRef.current.parentElement as HTMLDivElement | null;
+    const shell = previewRef.current;
+    const previousTransform = scaleNode?.style.transform ?? "";
+    const previousHeight = shell?.style.height ?? "";
 
-    return html2canvas(slipRef.current, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: "#FFF8F2",
-      logging: false,
-      imageTimeout: 15000,
-      removeContainer: true,
-      width: Math.ceil(rect.width),
-      height: Math.ceil(rect.height),
-      windowWidth: Math.ceil(rect.width),
-      windowHeight: Math.ceil(rect.height),
-    });
+    if (scaleNode) scaleNode.style.transform = "none";
+    if (shell) shell.style.height = "";
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    try {
+      const width = Math.ceil(slipRef.current.offsetWidth);
+      const height = Math.ceil(slipRef.current.offsetHeight);
+
+      return await html2canvas(slipRef.current, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: "#FFF8F2",
+        logging: false,
+        imageTimeout: 15000,
+        removeContainer: true,
+        width,
+        height,
+        windowWidth: width,
+        windowHeight: height,
+      });
+    } finally {
+      if (scaleNode) scaleNode.style.transform = previousTransform;
+      if (shell) shell.style.height = previousHeight;
+    }
   }
 
   async function downloadImage() {
@@ -877,9 +919,18 @@ export function PayslipView({ data }: { data: PayslipData }) {
         </p>
       )}
 
-      <div style={{ overflowX: "auto", paddingBottom: 4 }}>
-        <div ref={slipRef} style={{ display: "inline-block" }}>
-          <PayslipDocument data={data} logoSrc={logoSrc} />
+      <div
+        ref={previewRef}
+        className="payslip-preview-shell"
+        style={{ height: preview.height || undefined }}
+      >
+        <div
+          className="payslip-preview-scale"
+          style={{ transform: `scale(${preview.scale})` }}
+        >
+          <div ref={slipRef} style={{ display: "inline-block" }}>
+            <PayslipDocument data={data} logoSrc={logoSrc} />
+          </div>
         </div>
       </div>
 

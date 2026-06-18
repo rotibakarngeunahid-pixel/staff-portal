@@ -286,24 +286,24 @@ export default function AdminLeavePage() {
                   </tr>
                 ) : leaves.map((leave) => (
                   <tr key={leave.id}>
-                    <td style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{formatDateID(leave.date)}</td>
-                    <td style={{ fontWeight: 700 }}>{leave.staff_name}</td>
-                    <td style={{ color: "var(--muted)", fontSize: 13 }}>{leave.outlet_name || "—"}</td>
-                    <td>
+                    <td data-label="Tanggal Libur" style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{formatDateID(leave.date)}</td>
+                    <td data-label="Staff" style={{ fontWeight: 700 }}>{leave.staff_name}</td>
+                    <td data-label="Outlet" style={{ color: "var(--muted)", fontSize: 13 }}>{leave.outlet_name || "—"}</td>
+                    <td data-label="Status">
                       <span className={`status-pill ${STATUS_COLORS[leave.status] || "status-warn"}`}>
                         {STATUS_ID[leave.status] || leave.status}
                       </span>
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 13, maxWidth: 180 }}>
+                    <td data-label="Alasan Staff" style={{ color: "var(--muted)", fontSize: 13, maxWidth: 180 }}>
                       {leave.reason || <span style={{ color: "var(--border)" }}>—</span>}
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 12, maxWidth: 180, fontStyle: leave.admin_note ? "normal" : "italic" }}>
+                    <td data-label="Catatan Admin" style={{ color: "var(--muted)", fontSize: 12, maxWidth: 180, fontStyle: leave.admin_note ? "normal" : "italic" }}>
                       {leave.admin_note || <span style={{ color: "var(--border)" }}>—</span>}
                     </td>
-                    <td style={{ color: "var(--muted)", fontSize: 12, whiteSpace: "nowrap" }}>
+                    <td data-label="Waktu Request" style={{ color: "var(--muted)", fontSize: 12, whiteSpace: "nowrap" }}>
                       {leave.created_at ? formatDateTime(leave.created_at) : "—"}
                     </td>
-                    <td>
+                    <td data-label="Aksi">
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {/* Setujui — hanya jika belum approved */}
                         {leave.status !== "approved" && (

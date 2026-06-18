@@ -173,17 +173,17 @@ export default function AdminDashboardPage() {
                 <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--muted-light)", fontSize: 13 }}>Belum ada absensi hari ini</td></tr>
               ) : (data?.attendance || []).map((row) => (
                 <tr key={row.id}>
-                  <td style={{ fontWeight: 700 }}>{row.staff_name}</td>
-                  <td>{row.outlet_name}</td>
-                  <td>{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
-                  <td>{hhmm(row.checkin_time)}</td>
-                  <td>{hhmm(row.checkout_time)}</td>
-                  <td>
+                  <td data-label="Staff" style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                  <td data-label="Outlet">{row.outlet_name}</td>
+                  <td data-label="Shift">{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                  <td data-label="Masuk">{hhmm(row.checkin_time)}</td>
+                  <td data-label="Pulang">{hhmm(row.checkout_time)}</td>
+                  <td data-label="Status">
                     <span className={`status-pill ${row.checkout_time ? "status-ok" : "status-warn"}`}>
                       {row.checkout_time ? "Selesai" : "Bertugas"}
                     </span>
                   </td>
-                  <td style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
+                  <td data-label="Gaji" style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
                 </tr>
               ))}
             </tbody>

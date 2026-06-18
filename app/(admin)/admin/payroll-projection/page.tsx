@@ -477,34 +477,34 @@ export default function AdminPayrollProjectionPage() {
                   style={{ cursor: "pointer" }}
                   onClick={() => setSelectedStaffId(proj.staffId)}
                 >
-                  <td style={{ fontWeight: 700 }}>{proj.staffName}</td>
-                  <td style={{ fontSize: 12, color: "var(--muted)" }}>{proj.outletName || "—"}</td>
-                  <td style={{ fontWeight: 700, color: "#2980B9", fontSize: 12 }}>
+                  <td data-label="Staff" style={{ fontWeight: 700 }}>{proj.staffName}</td>
+                  <td data-label="Outlet" style={{ fontSize: 12, color: "var(--muted)" }}>{proj.outletName || "—"}</td>
+                  <td data-label="Gajian" style={{ fontWeight: 700, color: "#2980B9", fontSize: 12 }}>
                     {proj.nextPayday ? formatDateID(proj.nextPayday) : "—"}
                   </td>
-                  <td style={{ textAlign: "center" }}>
+                  <td data-label="Hari Tercatat" style={{ textAlign: "center" }}>
                     {proj.status === "insufficient_data" ? "—" : proj.workedUnitsSoFar}
                   </td>
-                  <td style={{ fontWeight: 700 }}>
+                  <td data-label="Gaji Terbentuk" style={{ fontWeight: 700 }}>
                     {proj.status === "insufficient_data" ? "—" : rupiah(proj.formedSalary)}
                   </td>
-                  <td style={{ fontWeight: 900, color: "#27AE60" }}>
+                  <td data-label="Proyeksi" style={{ fontWeight: 900, color: "#27AE60" }}>
                     {proj.status === "insufficient_data" ? "—" : rupiah(proj.projectedNormal)}
                   </td>
-                  <td style={{ fontSize: 12, color: "#95A5A6" }}>
+                  <td data-label="Rendah" style={{ fontSize: 12, color: "#95A5A6" }}>
                     {proj.status === "insufficient_data" ? "—" : rupiah(proj.projectedLow)}
                   </td>
-                  <td style={{ fontSize: 12, color: "#E67E22" }}>
+                  <td data-label="Tinggi" style={{ fontSize: 12, color: "#E67E22" }}>
                     {proj.status === "insufficient_data" ? "—" : rupiah(proj.projectedHigh)}
                   </td>
-                  <td style={{ fontSize: 12 }}>
+                  <td data-label="Selisih" style={{ fontSize: 12 }}>
                     {proj.differencePercent !== 0 ? (
                       <span style={{ color: proj.differencePercent > 0 ? "#27AE60" : "#C0392B", fontWeight: 700 }}>
                         {proj.differencePercent > 0 ? "+" : ""}{proj.differencePercent}%
                       </span>
                     ) : "—"}
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <span style={{
                       display: "inline-flex", alignItems: "center", gap: 4,
                       fontSize: 11, fontWeight: 700, padding: "3px 8px",
@@ -514,7 +514,7 @@ export default function AdminPayrollProjectionPage() {
                       {proj.statusLabel}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Keyakinan">
                     {proj.status !== "insufficient_data" ? (
                       <ConfidenceBar score={proj.confidenceScore} />
                     ) : "—"}

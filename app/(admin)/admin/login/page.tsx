@@ -48,10 +48,30 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <main style={{ minHeight: "100vh", background: "linear-gradient(135deg, var(--primary-dark), var(--primary))", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <main style={{
+      minHeight: "100vh",
+      width: "100%",
+      maxWidth: "100vw",
+      overflow: "hidden",
+      boxSizing: "border-box",
+      background: "linear-gradient(135deg, var(--primary-dark), var(--primary))",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24
+    }}>
       <form
         onSubmit={submit}
-        style={{ background: "#fff", borderRadius: 20, padding: "28px 24px", width: "100%", maxWidth: 360, boxShadow: "0 8px 40px rgba(0,0,0,.18)" }}
+        style={{
+          background: "#fff",
+          borderRadius: 20,
+          padding: "28px 24px",
+          width: "min(100%, 360px)",
+          maxWidth: "100%",
+          minWidth: 0,
+          boxSizing: "border-box",
+          boxShadow: "0 8px 40px rgba(0,0,0,.18)"
+        }}
       >
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <Image
@@ -62,7 +82,7 @@ export default function AdminLoginPage() {
             style={{ borderRadius: 14, display: "block", margin: "0 auto 12px" }}
           />
           <h1 style={{ fontSize: 20, fontWeight: 900, marginBottom: 4 }}>Admin Portal</h1>
-          <p style={{ fontSize: 12, color: "var(--muted)" }}>Roti Bakar Ngeunah · Masukkan Password Admin</p>
+          <p style={{ fontSize: 12, color: "var(--muted)", overflowWrap: "anywhere" }}>Roti Bakar Ngeunah · Masukkan Password Admin</p>
         </div>
 
         <label className="label" style={{ display: "block", marginBottom: 8 }}>Password Admin</label>

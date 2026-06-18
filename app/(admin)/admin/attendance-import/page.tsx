@@ -304,16 +304,16 @@ export default function AdminAttendanceImportPage() {
               <tbody>
                 {visibleRows.map((row) => (
                   <tr key={row.rowNumber}>
-                    <td>{row.rowNumber}</td>
-                    <td><span className={`status-pill ${statusColors[row.status]}`}>{row.statusLabel}</span></td>
-                    <td style={{ minWidth: 220, color: row.status === "failed" ? "var(--danger)" : "var(--muted)" }}>{row.reason || "-"}</td>
-                    <td style={{ fontWeight: 700 }}>{row.normalized.staffName || "-"}</td>
-                    <td>{row.normalized.outletName || "-"}</td>
-                    <td>{row.normalized.date || "-"}</td>
-                    <td>{row.normalized.shift || "-"}</td>
-                    <td>{row.normalized.checkinTime || "-"}</td>
-                    <td>{row.normalized.checkoutTime || "-"}</td>
-                    <td style={{ fontWeight: 700 }}>{row.normalized.finalSalary ? rupiah(row.normalized.finalSalary) : "-"}</td>
+                    <td data-label="Baris">{row.rowNumber}</td>
+                    <td data-label="Status"><span className={`status-pill ${statusColors[row.status]}`}>{row.statusLabel}</span></td>
+                    <td data-label="Alasan" style={{ minWidth: 220, color: row.status === "failed" ? "var(--danger)" : "var(--muted)" }}>{row.reason || "-"}</td>
+                    <td data-label="Staff" style={{ fontWeight: 700 }}>{row.normalized.staffName || "-"}</td>
+                    <td data-label="Outlet">{row.normalized.outletName || "-"}</td>
+                    <td data-label="Tanggal">{row.normalized.date || "-"}</td>
+                    <td data-label="Shift">{row.normalized.shift || "-"}</td>
+                    <td data-label="Masuk">{row.normalized.checkinTime || "-"}</td>
+                    <td data-label="Pulang">{row.normalized.checkoutTime || "-"}</td>
+                    <td data-label="Gaji" style={{ fontWeight: 700 }}>{row.normalized.finalSalary ? rupiah(row.normalized.finalSalary) : "-"}</td>
                   </tr>
                 ))}
               </tbody>

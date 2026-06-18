@@ -316,22 +316,22 @@ export default function AdminEmailPage() {
                     return (
                       <Fragment key={log.id}>
                         <tr key={log.id}>
-                          <td>{formatDateTime(log.sent_at || log.updated_at || log.created_at)}</td>
-                          <td>
+                          <td data-label="Waktu">{formatDateTime(log.sent_at || log.updated_at || log.created_at)}</td>
+                          <td data-label="Jenis">
                             <div style={{ fontWeight: 800 }}>{labelFor(log.notification_type)}</div>
                             <div style={{ fontSize: 11, color: "var(--muted)" }}>{log.subject}</div>
                           </td>
-                          <td style={{ fontWeight: 700 }}>{log.recipient}</td>
-                          <td>
+                          <td data-label="Penerima" style={{ fontWeight: 700 }}>{log.recipient}</td>
+                          <td data-label="Staff / Outlet">
                             <div style={{ fontWeight: 700 }}>{log.staff_name || "-"}</div>
                             <div style={{ fontSize: 11, color: "var(--muted)" }}>{log.outlet_name || log.activity_type || "-"}</div>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <span className={`status-pill ${meta.cls}`} style={{ gap: 5 }}>
                               {meta.icon} {meta.label}
                             </span>
                           </td>
-                          <td>
+                          <td data-label="Aksi">
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button
                                 className="btn btn-soft"
