@@ -51,6 +51,8 @@ type PayrollPayload = {
     id: string;
     paid_at: string;
     amount: number;
+    bonus?: number;
+    bonus_note?: string | null;
     note: string | null;
     proof_url: string | null;
     date_from: string | null;
@@ -223,6 +225,8 @@ export default function StaffPayrollPage() {
                     key={payment.id}
                     paidAt={payment.paid_at}
                     amount={payment.amount}
+                    bonus={payment.bonus}
+                    bonusNote={payment.bonus_note}
                     dateFrom={payment.date_from}
                     dateTo={payment.date_to}
                     note={payment.note}

@@ -281,6 +281,8 @@ export function PayrollProofPanel({ payments }: { payments: PaymentProofItem[] }
 export function PayrollPaymentCard({
   paidAt,
   amount,
+  bonus = 0,
+  bonusNote,
   dateFrom,
   dateTo,
   note,
@@ -290,6 +292,8 @@ export function PayrollPaymentCard({
 }: {
   paidAt: string;
   amount: number;
+  bonus?: number;
+  bonusNote?: string | null;
   dateFrom: string | null;
   dateTo: string | null;
   note: string | null;
@@ -324,6 +328,12 @@ export function PayrollPaymentCard({
             </p>
           ) : null}
           <p className="payroll-payment-amount">{rupiah(amount)}</p>
+          {bonus > 0 && (
+            <p style={{ fontSize: 11, fontWeight: 700, color: "#B45309", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
+              <Sparkles size={11} style={{ flexShrink: 0 }} />
+              + Bonus {rupiah(bonus)}{bonusNote ? ` — ${bonusNote}` : ""}
+            </p>
+          )}
         </div>
         {proofUrl && (
           <button
@@ -448,12 +458,16 @@ export function PayrollPreviewPanel({
   mode,
   payAmount,
   allocation,
-  currentBalance
+  currentBalance,
+  bonus = 0,
+  bonusNote
 }: {
   mode: "amount" | "dates";
   payAmount: number;
   allocation: AllocationPreview | null;
   currentBalance?: number;
+  bonus?: number;
+  bonusNote?: string;
 }) {
   if (!allocation?.covered.length) {
     return (
@@ -485,6 +499,20 @@ export function PayrollPreviewPanel({
           <p className="k">Gaji shift</p>
           <p className="v" style={{ color: "#16A34A" }}>{rupiah(allocation.totalCovered)}</p>
         </div>
+        {bonus > 0 && (
+          <div className="payroll-preview-stat">
+            <p className="k">Bonus</p>
+            <p className="v" style={{ color: "#D97706" }}>{rupiah(bonus)}</p>
+          </div>
+        )}
+        {bonus > 0 && (
+          <div className="payroll-preview-stat">
+            <p className="k">Total transfer</p>
+            <p className="v" style={{ color: "#C8202B" }}>
+              {rupiah((mode === "amount" ? payAmount : allocation.totalCovered) + bonus)}
+            </p>
+          </div>
+        )}
         {allocation.overpayment > 0 && (
           <div className="payroll-preview-stat">
             <p className="k">Lebih bayar</p>
@@ -503,6 +531,12 @@ export function PayrollPreviewPanel({
           ) : null;
         })()}
       </div>
+
+      {bonus > 0 && bonusNote ? (
+        <p className="payroll-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+          Keterangan bonus: {bonusNote}
+        </p>
+      ) : null}
 
       <div className="payroll-split-grid" style={{ gap: 10 }}>
         <PayrollShiftPanel title="Akan ditandai lunas" shifts={allocation.covered} variant="paid" />

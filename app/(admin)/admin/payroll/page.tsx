@@ -26,6 +26,8 @@ type PaymentRecord = {
   id: string;
   paid_at: string;
   amount: number;
+  bonus?: number;
+  bonus_note?: string | null;
   note: string | null;
   proof_url: string | null;
   date_from: string | null;
@@ -52,6 +54,8 @@ export default function AdminPayrollPage() {
   const [payMode, setPayMode] = useState<PayMode>("amount");
   const [amountInput, setAmountInput] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bonusInput, setBonusInput] = useState("");
+  const [bonusNote, setBonusNote] = useState("");
   const [note, setNote] = useState("");
   const [proof, setProof] = useState<string>("");
   const [proofName, setProofName] = useState("");
@@ -84,6 +88,8 @@ export default function AdminPayrollPage() {
   useEffect(() => {
     setSelectedIds([]);
     setAmountInput("");
+    setBonusInput("");
+    setBonusNote("");
   }, [selected, payMode]);
 
   const current = useMemo(() => payroll.find((item) => item.id === selected) || null, [payroll, selected]);
@@ -107,6 +113,7 @@ export default function AdminPayrollPage() {
 
   const payments = current?.payments || [];
   const payAmount = Number(amountInput) || 0;
+  const bonusAmount = Math.max(0, Number(bonusInput) || 0);
 
   const previewAllocation = useMemo(() => {
     if (!unpaid.length) return null;
@@ -157,6 +164,17 @@ export default function AdminPayrollPage() {
   async function pay(event: React.FormEvent) {
     event.preventDefault();
     if (!selected || !previewAllocation?.covered.length) return;
+    const rawBonus = Number(bonusInput);
+    if (bonusInput.trim() && (!Number.isFinite(rawBonus) || rawBonus < 0)) {
+      setMessage("Bonus tidak valid. Masukkan angka 0 atau lebih.");
+      setMsgType("err");
+      return;
+    }
+    if (bonusInput.trim() && !Number.isInteger(rawBonus)) {
+      setMessage("Bonus harus berupa angka bulat (rupiah tanpa desimal).");
+      setMsgType("err");
+      return;
+    }
     setSubmitting(true);
     setMessage("Memproses pembayaran...");
     setMsgType("info");
@@ -168,6 +186,10 @@ export default function AdminPayrollPage() {
       };
       if (payMode === "amount") body.amount = payAmount;
       else body.attendanceIds = selectedIds;
+      if (bonusAmount > 0) {
+        body.bonus = bonusAmount;
+        if (bonusNote.trim()) body.bonusNote = bonusNote.trim();
+      }
       if (proof) body.proof = proof;
 
       const payload = await apiFetch<{
@@ -178,6 +200,8 @@ export default function AdminPayrollPage() {
 
       setAmountInput("");
       setSelectedIds([]);
+      setBonusInput("");
+      setBonusNote("");
       setNote("");
       setProof("");
       setProofName("");
@@ -187,6 +211,7 @@ export default function AdminPayrollPage() {
       const covered = payload.allocation?.coveredShiftCount ?? previewAllocation.paidShiftCount;
       const sisa = payload.allocation?.remainingUnpaidSalary ?? previewAllocation.remainingUnpaidSalary;
       let msg = `Pembayaran tersimpan. ${covered} shift ditandai lunas.`;
+      if (bonusAmount > 0) msg += ` Bonus ${rupiah(bonusAmount)} ditambahkan.`;
       if (payload.overpayment > 0) msg += ` Lebih bayar ${rupiah(payload.overpayment)}.`;
       else if (sisa > 0) msg += ` Sisa ${rupiah(sisa)}.`;
       setMessage(msg);
@@ -301,11 +326,40 @@ export default function AdminPayrollPage() {
             </div>
           )}
 
+          <div style={{ marginBottom: 16 }}>
+            <label className="label">Bonus (opsional)</label>
+            <div className="payroll-amount-input-wrap" style={{ maxWidth: 480 }}>
+              <span className="payroll-amount-prefix">Rp</span>
+              <input
+                className="payroll-amount-input"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="0"
+                value={bonusInput}
+                onChange={(e) => setBonusInput(e.target.value)}
+              />
+            </div>
+            <input
+              className="field"
+              style={{ maxWidth: 480, marginTop: 8 }}
+              placeholder="Keterangan bonus (mis. Lembur proyek X)"
+              value={bonusNote}
+              onChange={(e) => setBonusNote(e.target.value)}
+              disabled={bonusAmount <= 0}
+            />
+            <p className="payroll-hint" style={{ marginTop: 8 }}>
+              Bonus adalah tambahan di atas gaji shift — tidak mengurangi saldo gaji tertahan, dan muncul terpisah di slip gaji.
+            </p>
+          </div>
+
           <PayrollPreviewPanel
             mode={payMode}
             payAmount={payMode === "amount" ? payAmount : (previewAllocation?.totalCovered ?? 0)}
             allocation={previewAllocation}
             currentBalance={current?.balance}
+            bonus={bonusAmount}
+            bonusNote={bonusNote.trim() || undefined}
           />
 
           <div style={{ maxWidth: 480, marginBottom: 16 }}>
@@ -362,6 +416,8 @@ export default function AdminPayrollPage() {
                 <PayrollPaymentCard
                   paidAt={payment.paid_at}
                   amount={payment.amount}
+                  bonus={payment.bonus}
+                  bonusNote={payment.bonus_note}
                   dateFrom={payment.date_from}
                   dateTo={payment.date_to}
                   note={payment.note}

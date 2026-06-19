@@ -2012,7 +2012,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
       .order("date", { ascending: false }),
     db
       .from("payments")
-      .select("id,paid_at,amount,note,proof_url,date_from,date_to")
+      .select("id,paid_at,amount,bonus,bonus_note,note,proof_url,date_from,date_to")
       .eq("staff_id", session.sub)
       .order("paid_at", { ascending: false }),
     getStaffWithOutlet(db, session.sub),
@@ -3235,7 +3235,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       await Promise.all([
         db.from("staff").select("id,name,active,salary_per_shift,outlet_id").order("name"),
         db.from("attendance").select("id,staff_id,date,shift,final_salary,paid_status").order("date", { ascending: false }),
-        db.from("payments").select("id,staff_id,paid_at,amount,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
+        db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
       ]);
     if (staffError) throw staffError;
     if (attError) throw attError;
@@ -3324,11 +3324,22 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     const dateFrom = covered[0]?.date || null;
     const dateTo = covered[covered.length - 1]?.date || null;
 
+    // Bonus = tambahan di atas gaji shift. Tidak ikut alokasi FIFO maupun saldo gaji.
+    const bonus = numberBody(body, "bonus", 0);
+    if (!Number.isFinite(bonus) || bonus < 0) {
+      throw new HttpError("Bonus tidak valid. Masukkan angka 0 atau lebih.", 400, "INVALID_BONUS");
+    }
+    if (!Number.isInteger(bonus)) {
+      throw new HttpError("Bonus harus berupa angka bulat (rupiah tanpa desimal).", 400, "INVALID_BONUS");
+    }
+    const bonusNote = stringBody(body, "bonusNote") || null;
+
     if (preview) {
       return ok({
         preview: true,
         mode,
         amount: payAmount,
+        bonus,
         allocation: {
           covered: covered.map((row) => ({
             id: row.id,
@@ -3363,6 +3374,8 @@ async function adminPayroll(db: Db, method: string, body: Body) {
         staff_id: staffId,
         staff_name: staff.name,
         amount: payAmount,
+        bonus,
+        bonus_note: bonusNote,
         date_from: dateFrom,
         date_to: dateTo,
         proof_url: proofUrl || null,
@@ -3398,6 +3411,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       staffId,
       mode,
       amount: payAmount,
+      bonus,
       dateFrom,
       dateTo,
       overpayment,
@@ -4903,6 +4917,8 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
       id: payment.id,
       paid_at: payment.paid_at,
       amount: normalizeCurrency(payment.amount),
+      bonus: normalizeCurrency(payment.bonus),
+      bonus_note: payment.bonus_note || null,
       note: payment.note || null,
       date_from: payment.date_from || null,
       date_to: payment.date_to || null,
@@ -4937,6 +4953,7 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
       totalPaid,
       balance,
       thisPaymentAmount: normalizeCurrency(payment.amount),
+      thisPaymentBonus: normalizeCurrency(payment.bonus),
       coveredShiftCount: (shifts || []).length,
       paymentNumber: (allPayments || []).findIndex((p: any) => p.id === paymentId) + 1,
       totalPayments: (allPayments || []).length

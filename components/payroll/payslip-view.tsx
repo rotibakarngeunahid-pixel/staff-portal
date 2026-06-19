@@ -27,6 +27,8 @@ export type PayslipData = {
     id: string;
     paid_at: string;
     amount: number;
+    bonus: number;
+    bonus_note: string | null;
     note: string | null;
     date_from: string | null;
     date_to: string | null;
@@ -50,6 +52,7 @@ export type PayslipData = {
     totalPaid: number;
     balance: number;
     thisPaymentAmount: number;
+    thisPaymentBonus: number;
     coveredShiftCount: number;
     paymentNumber: number;
     totalPayments: number;
@@ -120,6 +123,10 @@ export function PayslipDocument({
 }) {
   const { payment, staff, outlet, shifts, summary } = data;
   const note = cleanNote(payment.note);
+  const bonus = summary.thisPaymentBonus || payment.bonus || 0;
+  const bonusNote = payment.bonus_note?.trim() || null;
+  // Total yang benar-benar diterima pada transfer ini = gaji shift + bonus.
+  const thisPaymentGross = summary.thisPaymentAmount + bonus;
   const denseRows = shifts.length >= 20;
   const font = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
   const grid = "95px 76px 112px minmax(0,1fr)";
@@ -492,6 +499,29 @@ export function PayslipDocument({
         </div>
       </Sect>
 
+      {bonus > 0 && (
+        <Sect>
+          <SecLabel>Bonus</SecLabel>
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: 11,
+              overflow: "hidden",
+              border: "1.5px solid #E9CDB9",
+            }}
+          >
+            <BreakRow label="Gaji shift dibayar" value={rupiah(summary.thisPaymentAmount)} />
+            <BreakRow
+              label={bonusNote ? `Bonus — ${bonusNote}` : "Bonus"}
+              value={`+ ${rupiah(bonus)}`}
+              tone="bonus"
+              borderTop
+            />
+            <BreakRow label="Total diterima" value={rupiah(thisPaymentGross)} tone="total" borderTop />
+          </div>
+        </Sect>
+      )}
+
       <Sect>
         <SecLabel>Ringkasan Pembayaran</SecLabel>
         <div
@@ -504,7 +534,7 @@ export function PayslipDocument({
             gridTemplateColumns: "1fr 1fr",
           }}
         >
-          <Metric label="Nilai pembayaran ini" value={rupiah(summary.thisPaymentAmount)} tone="primary" />
+          <Metric label="Nilai pembayaran ini" value={rupiah(thisPaymentGross)} tone="primary" />
           <Metric label="Total gaji kumulatif" value={rupiah(summary.totalEarned)} />
           <Metric label="Total sudah dibayarkan" value={rupiah(summary.totalPaid)} borderTop />
           <Metric
@@ -634,6 +664,59 @@ function SecLabel({ children }: { children: ReactNode }) {
     >
       {children}
     </p>
+  );
+}
+
+function BreakRow({
+  label,
+  value,
+  tone = "default",
+  borderTop = false,
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "bonus" | "total";
+  borderTop?: boolean;
+}) {
+  const valueColor = tone === "bonus" ? "#13803A" : tone === "total" ? "#C8202B" : "#1C0A00";
+  const isTotal = tone === "total";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        padding: "7px 11px",
+        borderTop: borderTop ? "1px solid #F1E3D9" : "none",
+        background: isTotal ? "#FEF0E8" : "#FFFFFF",
+      }}
+    >
+      <p
+        style={{
+          fontSize: isTotal ? 10.5 : 10,
+          fontWeight: isTotal ? 900 : 700,
+          color: "#3D1A08",
+          margin: 0,
+          lineHeight: 1.25,
+          overflowWrap: "anywhere",
+        }}
+      >
+        {label}
+      </p>
+      <p
+        style={{
+          fontSize: isTotal ? 12.5 : 11,
+          fontWeight: 900,
+          color: valueColor,
+          margin: 0,
+          lineHeight: 1.1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {value}
+      </p>
+    </div>
   );
 }
 
