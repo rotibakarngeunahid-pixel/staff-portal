@@ -16,9 +16,10 @@ import {
   timeMakassar
 } from "@/lib/business";
 import { CapturedPhoto, isValidImageFile, photoFromFile, revokePhoto } from "@/lib/client-image";
-import { drawWatermark } from "@/components/staff/camera-capture";
+import { drawWatermark, FACE_CONFIDENCE_THRESHOLD, type FaceVerification } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
+import { loadFaceDetector } from "@/lib/face-detection";
 import { useSessionStore } from "@/stores/session";
 import { saveDraft, loadDraft, clearDraft, type RestoredPhoto } from "@/lib/report-draft";
 
@@ -106,13 +107,14 @@ type CameraSlot = {
   facing: "user" | "environment";
   title: string;
   allowTorch?: boolean;
+  requireFace?: boolean; // BARU: wajib deteksi wajah (selfie absensi masuk/pulang)
   watermarkOverride?: {
     outletName?: string | null;
     staffName?: string | null;
     lat?: number | null;
     lng?: number | null;
   };
-  onCapture: (photo: CapturedPhoto) => void;
+  onCapture: (photo: CapturedPhoto, faceMeta?: FaceVerification) => void;
 };
 
 type ReportPhoto = CapturedPhoto & { label: string };
@@ -289,6 +291,8 @@ export default function StaffHomePage() {
 
   /* ─── Late reason modal ─── */
   const [pendingCheckinPhoto, setPendingCheckinPhoto] = useState<CapturedPhoto | null>(null);
+  // BARU: simpan status verifikasi wajah selfie checkin yang menunggu alasan telat.
+  const pendingCheckinFaceRef = useRef<FaceVerification | undefined>(undefined);
   const [showLateReasonModal, setShowLateReasonModal] = useState(false);
   const [lateReason, setLateReason] = useState("");
   const [lateReasonError, setLateReasonError] = useState("");
@@ -306,6 +310,14 @@ export default function StaffHomePage() {
   const pendingDraftRef = useRef<Record<string, RestoredPhoto> | null>(null);
 
   const staffId = status?.staff?.id || "unknown";
+
+  // BARU: warm-up MediaPipe Face Detector di background saat halaman mount, agar
+  // shutter sudah siap instan saat staff tap "Absen Masuk"/"Absen Pulang" (tidak
+  // menunggu model load beberapa detik). Non-blocking & silent — kegagalan di sini
+  // diabaikan; penanganannya saat user benar-benar buka kamera (fallback + audit).
+  useEffect(() => {
+    loadFaceDetector(FACE_CONFIDENCE_THRESHOLD).catch(() => undefined);
+  }, []);
 
   useEffect(() => { reportPhotosRef.current = reportPhotos; }, [reportPhotos]);
   useEffect(() => {
@@ -585,7 +597,7 @@ export default function StaffHomePage() {
   function closeCamera() { setCamera(null); }
 
   /* ─── Checkin / Checkout ─── */
-  async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto, reason?: string) {
+  async function runAttendance(action: "checkin" | "checkout", selfie: CapturedPhoto, reason?: string, faceMeta?: FaceVerification) {
     if (attendanceBusyRef.current) return; // anti double-submit
     setError("");
     if (action === "checkin" && (gps.lat === null || gps.lng === null)) {
@@ -615,6 +627,11 @@ export default function StaffHomePage() {
       body.append("lng", String(gps.lng));
       body.append("accuracy", String(gps.accuracy));
       if (reason) body.append("lateReason", reason);
+      // BARU: audit trail verifikasi wajah (hanya untuk selfie absensi).
+      if (faceMeta?.status) {
+        body.append("faceVerificationStatus", faceMeta.status);
+        if (faceMeta.confidence != null) body.append("faceConfidence", String(faceMeta.confidence));
+      }
       setBusy(action === "checkin" ? "Menyimpan absen masuk..." : "Menyimpan absen pulang...");
       const result = await apiFetch<{ ok: true; praise_message?: string | null }>(`/api/attendance/${action}`, { method: "POST", role: "staff", body });
       if (action === "checkin" && result.praise_message) setPraiseMessage(result.praise_message);
@@ -625,6 +642,7 @@ export default function StaffHomePage() {
       // jangan buang foto agar staff tidak terkunci dari absen masuk.
       if (action === "checkin" && err instanceof ApiError && err.code === "LATE_REASON_REQUIRED") {
         setPendingCheckinPhoto(selfie);
+        pendingCheckinFaceRef.current = faceMeta; // BARU: pertahankan status verifikasi
         setLateReason(reason || "");
         setLateReasonError("");
         setShowLateReasonModal(true);
@@ -658,16 +676,17 @@ export default function StaffHomePage() {
     return nowMin > startMin + toleranceMinutes;
   }
 
-  function handleCheckinCapture(photo: CapturedPhoto) {
+  function handleCheckinCapture(photo: CapturedPhoto, faceMeta?: FaceVerification) {
     const now = new Date(Date.now() + serverClockOffsetRef.current);
     const tolerance = Number(status?.config?.late_tolerance_minutes ?? 10) || 0;
     if (isLikelyLate(status?.outlet, status?.shift ?? 0, now, tolerance)) {
       setPendingCheckinPhoto(photo);
+      pendingCheckinFaceRef.current = faceMeta; // BARU: bawa status verifikasi ke alur alasan telat
       setLateReason("");
       setLateReasonError("");
       setShowLateReasonModal(true);
     } else {
-      runAttendance("checkin", photo);
+      runAttendance("checkin", photo, undefined, faceMeta);
     }
   }
 
@@ -678,7 +697,8 @@ export default function StaffHomePage() {
     }
     if (!pendingCheckinPhoto) return;
     setShowLateReasonModal(false);
-    runAttendance("checkin", pendingCheckinPhoto, lateReason.trim());
+    runAttendance("checkin", pendingCheckinPhoto, lateReason.trim(), pendingCheckinFaceRef.current);
+    pendingCheckinFaceRef.current = undefined;
     setPendingCheckinPhoto(null);
     setLateReason("");
   }
@@ -686,6 +706,7 @@ export default function StaffHomePage() {
   function cancelLateReason() {
     setShowLateReasonModal(false);
     if (pendingCheckinPhoto) revokePhoto(pendingCheckinPhoto);
+    pendingCheckinFaceRef.current = undefined;
     setPendingCheckinPhoto(null);
     setLateReason("");
     setLateReasonError("");
@@ -967,6 +988,7 @@ export default function StaffHomePage() {
           facing={camera.facing}
           title={camera.title}
           allowTorch={camera.allowTorch}
+          requireFace={camera.requireFace}
           watermark={camera.watermarkOverride ?? {
             outletName: outlet?.name,
             staffName: status?.staff?.name,
@@ -1350,13 +1372,14 @@ export default function StaffHomePage() {
                   onClick={() => openCamera({
                     facing: "user",
                     title: "📸 Selfie Absen Masuk",
+                    requireFace: true, // BARU: wajib ada wajah di foto absen masuk
                     watermarkOverride: {
                       outletName: outlet?.name,
                       staffName: status?.staff?.name,
                       lat: gps.lat,
                       lng: gps.lng
                     },
-                    onCapture: (photo) => handleCheckinCapture(photo)
+                    onCapture: (photo, faceMeta) => handleCheckinCapture(photo, faceMeta)
                   })}
                   disabled={checkinDisabled}
                 >
@@ -1373,13 +1396,14 @@ export default function StaffHomePage() {
                     openCamera({
                       facing: "user",
                       title: "📸 Selfie Absen Pulang",
+                      requireFace: true, // BARU: wajib ada wajah di foto absen pulang
                       watermarkOverride: {
                         outletName: outlet?.name,
                         staffName: status?.staff?.name,
                         lat: gps.lat,
                         lng: gps.lng
                       },
-                      onCapture: (photo) => runAttendance("checkout", photo)
+                      onCapture: (photo, faceMeta) => runAttendance("checkout", photo, undefined, faceMeta)
                     });
                   }}
                   disabled={checkoutDisabled}

@@ -626,6 +626,37 @@ function stringBody(body: Body, key: string, fallback = "") {
   return String(value).trim();
 }
 
+// BARU (face detection gate): nilai status verifikasi wajah yang valid.
+const FACE_VERIFICATION_STATUSES = new Set([
+  "passed",
+  "bypassed_model_error",
+  "bypassed_low_confidence_retry_exhausted"
+]);
+
+// BARU: simpan audit verifikasi wajah secara BEST-EFFORT, terpisah dari insert/update
+// absensi utama. Tujuannya: kalau migrasi 0014 belum diterapkan di DB (kolom belum
+// ada) — sesuai pola "migrasi bisa lag di prod" — absensi TIDAK ikut gagal; audit
+// hanya di-skip diam-diam sampai migrasi diterapkan. TIDAK menyimpan data wajah,
+// hanya status enum + skor confidence (angka) untuk tuning threshold.
+async function recordFaceVerification(db: Db, attendanceId: string, body: Body) {
+  if (!attendanceId) return;
+  const status = stringBody(body, "faceVerificationStatus");
+  if (!status || !FACE_VERIFICATION_STATUSES.has(status)) return;
+  const updates: Body = { face_verification_status: status };
+  const rawConf = body.faceConfidence;
+  if (rawConf !== undefined && rawConf !== null && rawConf !== "") {
+    const conf = Number(rawConf);
+    if (Number.isFinite(conf)) updates.face_confidence = conf;
+  }
+  try {
+    // .update() mengembalikan { error } (tidak throw) bila kolom belum ada →
+    // diabaikan. try/catch hanya jaga-jaga error tak terduga (mis. jaringan).
+    await db.from("attendance").update(updates).eq("id", attendanceId);
+  } catch {
+    /* abaikan — jangan pernah mengganggu alur absensi */
+  }
+}
+
 function reportType(body: Body) {
   const type = String(body.type || "").toUpperCase();
   if (type !== "BUKA" && type !== "TUTUP") throw new HttpError("Tipe laporan tidak valid");
@@ -1436,6 +1467,9 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     throw error;
   }
 
+  // BARU: audit verifikasi wajah (best-effort, tidak memblokir absen masuk)
+  await recordFaceVerification(db, inserted.id, body);
+
   // Kunci assignment agar tidak bisa dibatalkan setelah absen masuk
   const assignmentLockUpdates: Body = {
     status: "locked",
@@ -1710,6 +1744,9 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     .select("*")
     .single();
   if (error) throw error;
+
+  // BARU: audit verifikasi wajah (best-effort, tidak memblokir absen pulang)
+  await recordFaceVerification(db, updated.id, body);
 
   // PRD Izin Pulang Awal — tandai izin sebagai dipakai setelah attendance terupdate
   if (earlyCheckoutPermission) {
