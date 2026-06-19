@@ -53,6 +53,8 @@ type PayrollPayload = {
     amount: number;
     bonus?: number;
     bonus_note?: string | null;
+    deduction?: number;
+    deduction_note?: string | null;
     note: string | null;
     proof_url: string | null;
     date_from: string | null;
@@ -227,6 +229,8 @@ export default function StaffPayrollPage() {
                     amount={payment.amount}
                     bonus={payment.bonus}
                     bonusNote={payment.bonus_note}
+                    deduction={payment.deduction}
+                    deductionNote={payment.deduction_note}
                     dateFrom={payment.date_from}
                     dateTo={payment.date_to}
                     note={payment.note}

@@ -28,6 +28,8 @@ type PaymentRecord = {
   amount: number;
   bonus?: number;
   bonus_note?: string | null;
+  deduction?: number;
+  deduction_note?: string | null;
   note: string | null;
   proof_url: string | null;
   date_from: string | null;
@@ -56,6 +58,8 @@ export default function AdminPayrollPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bonusInput, setBonusInput] = useState("");
   const [bonusNote, setBonusNote] = useState("");
+  const [deductionInput, setDeductionInput] = useState("");
+  const [deductionNote, setDeductionNote] = useState("");
   const [note, setNote] = useState("");
   const [proof, setProof] = useState<string>("");
   const [proofName, setProofName] = useState("");
@@ -90,6 +94,8 @@ export default function AdminPayrollPage() {
     setAmountInput("");
     setBonusInput("");
     setBonusNote("");
+    setDeductionInput("");
+    setDeductionNote("");
   }, [selected, payMode]);
 
   const current = useMemo(() => payroll.find((item) => item.id === selected) || null, [payroll, selected]);
@@ -114,6 +120,7 @@ export default function AdminPayrollPage() {
   const payments = current?.payments || [];
   const payAmount = Number(amountInput) || 0;
   const bonusAmount = Math.max(0, Number(bonusInput) || 0);
+  const deductionAmount = Math.max(0, Number(deductionInput) || 0);
 
   const previewAllocation = useMemo(() => {
     if (!unpaid.length) return null;
@@ -126,6 +133,11 @@ export default function AdminPayrollPage() {
     if (!result.covered.length) return null;
     return result;
   }, [payMode, payAmount, selectedIds, unpaid]);
+
+  // Potongan tidak boleh melebihi total yang ditransfer (gaji shift + bonus).
+  const transferShiftAmount = payMode === "amount" ? payAmount : (previewAllocation?.totalCovered ?? 0);
+  const maxDeduction = transferShiftAmount + bonusAmount;
+  const deductionExceeds = deductionAmount > maxDeduction;
 
   function onProofChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -175,6 +187,22 @@ export default function AdminPayrollPage() {
       setMsgType("err");
       return;
     }
+    const rawDeduction = Number(deductionInput);
+    if (deductionInput.trim() && (!Number.isFinite(rawDeduction) || rawDeduction < 0)) {
+      setMessage("Potongan tidak valid. Masukkan angka 0 atau lebih.");
+      setMsgType("err");
+      return;
+    }
+    if (deductionInput.trim() && !Number.isInteger(rawDeduction)) {
+      setMessage("Potongan harus berupa angka bulat (rupiah tanpa desimal).");
+      setMsgType("err");
+      return;
+    }
+    if (deductionExceeds) {
+      setMessage("Potongan tidak boleh melebihi total (gaji shift + bonus).");
+      setMsgType("err");
+      return;
+    }
     setSubmitting(true);
     setMessage("Memproses pembayaran...");
     setMsgType("info");
@@ -190,6 +218,10 @@ export default function AdminPayrollPage() {
         body.bonus = bonusAmount;
         if (bonusNote.trim()) body.bonusNote = bonusNote.trim();
       }
+      if (deductionAmount > 0) {
+        body.deduction = deductionAmount;
+        if (deductionNote.trim()) body.deductionNote = deductionNote.trim();
+      }
       if (proof) body.proof = proof;
 
       const payload = await apiFetch<{
@@ -202,6 +234,8 @@ export default function AdminPayrollPage() {
       setSelectedIds([]);
       setBonusInput("");
       setBonusNote("");
+      setDeductionInput("");
+      setDeductionNote("");
       setNote("");
       setProof("");
       setProofName("");
@@ -212,6 +246,7 @@ export default function AdminPayrollPage() {
       const sisa = payload.allocation?.remainingUnpaidSalary ?? previewAllocation.remainingUnpaidSalary;
       let msg = `Pembayaran tersimpan. ${covered} shift ditandai lunas.`;
       if (bonusAmount > 0) msg += ` Bonus ${rupiah(bonusAmount)} ditambahkan.`;
+      if (deductionAmount > 0) msg += ` Potongan ${rupiah(deductionAmount)} diterapkan.`;
       if (payload.overpayment > 0) msg += ` Lebih bayar ${rupiah(payload.overpayment)}.`;
       else if (sisa > 0) msg += ` Sisa ${rupiah(sisa)}.`;
       setMessage(msg);
@@ -353,6 +388,40 @@ export default function AdminPayrollPage() {
             </p>
           </div>
 
+          <div style={{ marginBottom: 16 }}>
+            <label className="label">Potongan (opsional)</label>
+            <div className="payroll-amount-input-wrap" style={{ maxWidth: 480 }}>
+              <span className="payroll-amount-prefix">Rp</span>
+              <input
+                className="payroll-amount-input"
+                type="number"
+                min="0"
+                max={maxDeduction || undefined}
+                step="1"
+                placeholder="0"
+                value={deductionInput}
+                onChange={(e) => setDeductionInput(e.target.value)}
+              />
+            </div>
+            <input
+              className="field"
+              style={{ maxWidth: 480, marginTop: 8 }}
+              placeholder="Alasan potongan (mis. Kasbon, ganti barang) — terlihat oleh staff"
+              value={deductionNote}
+              onChange={(e) => setDeductionNote(e.target.value)}
+              disabled={deductionAmount <= 0}
+            />
+            {deductionExceeds ? (
+              <p className="payroll-hint" style={{ marginTop: 8, color: "var(--danger)", fontWeight: 700 }}>
+                Potongan melebihi total transfer (gaji shift + bonus = {rupiah(maxDeduction)}).
+              </p>
+            ) : (
+              <p className="payroll-hint" style={{ marginTop: 8 }}>
+                Potongan mengurangi nominal yang ditransfer (tidak mengubah saldo gaji shift). Alasan akan tampil di slip gaji & riwayat staff.
+              </p>
+            )}
+          </div>
+
           <PayrollPreviewPanel
             mode={payMode}
             payAmount={payMode === "amount" ? payAmount : (previewAllocation?.totalCovered ?? 0)}
@@ -360,6 +429,8 @@ export default function AdminPayrollPage() {
             currentBalance={current?.balance}
             bonus={bonusAmount}
             bonusNote={bonusNote.trim() || undefined}
+            deduction={deductionAmount}
+            deductionNote={deductionNote.trim() || undefined}
           />
 
           <div style={{ maxWidth: 480, marginBottom: 16 }}>
@@ -397,7 +468,7 @@ export default function AdminPayrollPage() {
             type="submit"
             className="btn btn-primary"
             style={{ fontSize: 14, padding: "12px 20px" }}
-            disabled={proofUploading || submitting || !previewAllocation?.covered.length}
+            disabled={proofUploading || submitting || !previewAllocation?.covered.length || deductionExceeds}
           >
             <Save size={16} />
             {submitting ? "Memproses..." : "Simpan Pembayaran"}
@@ -418,6 +489,8 @@ export default function AdminPayrollPage() {
                   amount={payment.amount}
                   bonus={payment.bonus}
                   bonusNote={payment.bonus_note}
+                  deduction={payment.deduction}
+                  deductionNote={payment.deduction_note}
                   dateFrom={payment.date_from}
                   dateTo={payment.date_to}
                   note={payment.note}

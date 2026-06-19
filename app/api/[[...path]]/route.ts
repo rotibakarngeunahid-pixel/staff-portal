@@ -2012,7 +2012,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
       .order("date", { ascending: false }),
     db
       .from("payments")
-      .select("id,paid_at,amount,bonus,bonus_note,note,proof_url,date_from,date_to")
+      .select("id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to")
       .eq("staff_id", session.sub)
       .order("paid_at", { ascending: false }),
     getStaffWithOutlet(db, session.sub),
@@ -3235,7 +3235,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       await Promise.all([
         db.from("staff").select("id,name,active,salary_per_shift,outlet_id").order("name"),
         db.from("attendance").select("id,staff_id,date,shift,final_salary,paid_status").order("date", { ascending: false }),
-        db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
+        db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
       ]);
     if (staffError) throw staffError;
     if (attError) throw attError;
@@ -3334,12 +3334,30 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     }
     const bonusNote = stringBody(body, "bonusNote") || null;
 
+    // Potongan = pengurang di level transfer (simetris dengan bonus). Tidak mengubah saldo gaji.
+    const deduction = numberBody(body, "deduction", 0);
+    if (!Number.isFinite(deduction) || deduction < 0) {
+      throw new HttpError("Potongan tidak valid. Masukkan angka 0 atau lebih.", 400, "INVALID_DEDUCTION");
+    }
+    if (!Number.isInteger(deduction)) {
+      throw new HttpError("Potongan harus berupa angka bulat (rupiah tanpa desimal).", 400, "INVALID_DEDUCTION");
+    }
+    if (deduction > payAmount + bonus) {
+      throw new HttpError(
+        "Potongan tidak boleh melebihi total (gaji shift + bonus).",
+        400,
+        "DEDUCTION_TOO_LARGE"
+      );
+    }
+    const deductionNote = stringBody(body, "deductionNote") || null;
+
     if (preview) {
       return ok({
         preview: true,
         mode,
         amount: payAmount,
         bonus,
+        deduction,
         allocation: {
           covered: covered.map((row) => ({
             id: row.id,
@@ -3376,6 +3394,8 @@ async function adminPayroll(db: Db, method: string, body: Body) {
         amount: payAmount,
         bonus,
         bonus_note: bonusNote,
+        deduction,
+        deduction_note: deductionNote,
         date_from: dateFrom,
         date_to: dateTo,
         proof_url: proofUrl || null,
@@ -3412,6 +3432,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       mode,
       amount: payAmount,
       bonus,
+      deduction,
       dateFrom,
       dateTo,
       overpayment,
@@ -4919,6 +4940,8 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
       amount: normalizeCurrency(payment.amount),
       bonus: normalizeCurrency(payment.bonus),
       bonus_note: payment.bonus_note || null,
+      deduction: normalizeCurrency(payment.deduction),
+      deduction_note: payment.deduction_note || null,
       note: payment.note || null,
       date_from: payment.date_from || null,
       date_to: payment.date_to || null,
@@ -4954,6 +4977,7 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
       balance,
       thisPaymentAmount: normalizeCurrency(payment.amount),
       thisPaymentBonus: normalizeCurrency(payment.bonus),
+      thisPaymentDeduction: normalizeCurrency(payment.deduction),
       coveredShiftCount: (shifts || []).length,
       paymentNumber: (allPayments || []).findIndex((p: any) => p.id === paymentId) + 1,
       totalPayments: (allPayments || []).length

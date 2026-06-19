@@ -29,6 +29,8 @@ export type PayslipData = {
     amount: number;
     bonus: number;
     bonus_note: string | null;
+    deduction: number;
+    deduction_note: string | null;
     note: string | null;
     date_from: string | null;
     date_to: string | null;
@@ -53,6 +55,7 @@ export type PayslipData = {
     balance: number;
     thisPaymentAmount: number;
     thisPaymentBonus: number;
+    thisPaymentDeduction: number;
     coveredShiftCount: number;
     paymentNumber: number;
     totalPayments: number;
@@ -125,8 +128,11 @@ export function PayslipDocument({
   const note = cleanNote(payment.note);
   const bonus = summary.thisPaymentBonus || payment.bonus || 0;
   const bonusNote = payment.bonus_note?.trim() || null;
-  // Total yang benar-benar diterima pada transfer ini = gaji shift + bonus.
-  const thisPaymentGross = summary.thisPaymentAmount + bonus;
+  const deduction = summary.thisPaymentDeduction || payment.deduction || 0;
+  const deductionNote = payment.deduction_note?.trim() || null;
+  const hasAdjustment = bonus > 0 || deduction > 0;
+  // Total yang benar-benar diterima pada transfer ini = gaji shift + bonus − potongan.
+  const thisPaymentGross = summary.thisPaymentAmount + bonus - deduction;
   const denseRows = shifts.length >= 20;
   const font = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
   const grid = "95px 76px 112px minmax(0,1fr)";
@@ -499,9 +505,9 @@ export function PayslipDocument({
         </div>
       </Sect>
 
-      {bonus > 0 && (
+      {hasAdjustment && (
         <Sect>
-          <SecLabel>Bonus</SecLabel>
+          <SecLabel>Rincian Transfer</SecLabel>
           <div
             style={{
               background: "#FFFFFF",
@@ -511,12 +517,22 @@ export function PayslipDocument({
             }}
           >
             <BreakRow label="Gaji shift dibayar" value={rupiah(summary.thisPaymentAmount)} />
-            <BreakRow
-              label={bonusNote ? `Bonus — ${bonusNote}` : "Bonus"}
-              value={`+ ${rupiah(bonus)}`}
-              tone="bonus"
-              borderTop
-            />
+            {bonus > 0 && (
+              <BreakRow
+                label={bonusNote ? `Bonus — ${bonusNote}` : "Bonus"}
+                value={`+ ${rupiah(bonus)}`}
+                tone="bonus"
+                borderTop
+              />
+            )}
+            {deduction > 0 && (
+              <BreakRow
+                label={deductionNote ? `Potongan — ${deductionNote}` : "Potongan"}
+                value={`− ${rupiah(deduction)}`}
+                tone="deduction"
+                borderTop
+              />
+            )}
             <BreakRow label="Total diterima" value={rupiah(thisPaymentGross)} tone="total" borderTop />
           </div>
         </Sect>
@@ -675,10 +691,11 @@ function BreakRow({
 }: {
   label: string;
   value: string;
-  tone?: "default" | "bonus" | "total";
+  tone?: "default" | "bonus" | "deduction" | "total";
   borderTop?: boolean;
 }) {
-  const valueColor = tone === "bonus" ? "#13803A" : tone === "total" ? "#C8202B" : "#1C0A00";
+  const valueColor =
+    tone === "bonus" ? "#13803A" : tone === "deduction" ? "#C8202B" : tone === "total" ? "#C8202B" : "#1C0A00";
   const isTotal = tone === "total";
   return (
     <div

@@ -283,6 +283,8 @@ export function PayrollPaymentCard({
   amount,
   bonus = 0,
   bonusNote,
+  deduction = 0,
+  deductionNote,
   dateFrom,
   dateTo,
   note,
@@ -294,6 +296,8 @@ export function PayrollPaymentCard({
   amount: number;
   bonus?: number;
   bonusNote?: string | null;
+  deduction?: number;
+  deductionNote?: string | null;
   dateFrom: string | null;
   dateTo: string | null;
   note: string | null;
@@ -332,6 +336,12 @@ export function PayrollPaymentCard({
             <p style={{ fontSize: 11, fontWeight: 700, color: "#B45309", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
               <Sparkles size={11} style={{ flexShrink: 0 }} />
               + Bonus {rupiah(bonus)}{bonusNote ? ` — ${bonusNote}` : ""}
+            </p>
+          )}
+          {deduction > 0 && (
+            <p style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
+              <Wallet size={11} style={{ flexShrink: 0 }} />
+              − Potongan {rupiah(deduction)}{deductionNote ? ` — ${deductionNote}` : ""}
             </p>
           )}
         </div>
@@ -460,7 +470,9 @@ export function PayrollPreviewPanel({
   allocation,
   currentBalance,
   bonus = 0,
-  bonusNote
+  bonusNote,
+  deduction = 0,
+  deductionNote
 }: {
   mode: "amount" | "dates";
   payAmount: number;
@@ -468,6 +480,8 @@ export function PayrollPreviewPanel({
   currentBalance?: number;
   bonus?: number;
   bonusNote?: string;
+  deduction?: number;
+  deductionNote?: string;
 }) {
   if (!allocation?.covered.length) {
     return (
@@ -505,11 +519,17 @@ export function PayrollPreviewPanel({
             <p className="v" style={{ color: "#D97706" }}>{rupiah(bonus)}</p>
           </div>
         )}
-        {bonus > 0 && (
+        {deduction > 0 && (
+          <div className="payroll-preview-stat">
+            <p className="k">Potongan</p>
+            <p className="v" style={{ color: "var(--primary)" }}>− {rupiah(deduction)}</p>
+          </div>
+        )}
+        {(bonus > 0 || deduction > 0) && (
           <div className="payroll-preview-stat">
             <p className="k">Total transfer</p>
             <p className="v" style={{ color: "#C8202B" }}>
-              {rupiah((mode === "amount" ? payAmount : allocation.totalCovered) + bonus)}
+              {rupiah((mode === "amount" ? payAmount : allocation.totalCovered) + bonus - deduction)}
             </p>
           </div>
         )}
@@ -535,6 +555,11 @@ export function PayrollPreviewPanel({
       {bonus > 0 && bonusNote ? (
         <p className="payroll-hint" style={{ marginTop: 0, marginBottom: 10 }}>
           Keterangan bonus: {bonusNote}
+        </p>
+      ) : null}
+      {deduction > 0 && deductionNote ? (
+        <p className="payroll-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+          Keterangan potongan: {deductionNote}
         </p>
       ) : null}
 
