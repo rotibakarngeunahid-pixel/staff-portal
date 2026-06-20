@@ -2686,22 +2686,30 @@ async function adminStaff(db: Db, method: string, body: Body) {
     }
 
     if (mode === "hard") {
-      // Dependency check
       const preview = await getStaffDeleteDependencies(db, staffId);
-      if (preview.totalDependencies > 0) {
-        throw new HttpError(
-          `Staff ini memiliki ${preview.totalDependencies} data historis. Gunakan Arsipkan Staff, bukan Hapus Permanen.`,
-          400, "STAFF_HAS_HISTORY"
-        );
-      }
       const { data: staffRow } = await db.from("staff").select("name").eq("id", staffId).maybeSingle();
       const confirmName = stringBody(body, "confirmName");
       if (!staffRow || confirmName !== staffRow.name) {
         throw new HttpError("Nama konfirmasi tidak cocok. Ketik nama staff dengan tepat untuk melanjutkan.", 400, "CONFIRMATION_MISMATCH");
       }
-      await db.from("staff").delete().eq("id", staffId);
-      await logAudit(db, "admin_hard_delete_staff", "Admin", { staffId, staffName: staffRow.name, mode: "hard" });
-      return ok({ deleted: true, mode: "hard" });
+      // Kalau staff masih punya data historis, hapus permanen menghapus SEMUA data
+      // tersebut dan tidak bisa dikembalikan — wajib konfirmasi cascade eksplisit.
+      const confirmCascade = body.confirmCascade === true || body.confirmCascade === "true";
+      if (preview.totalDependencies > 0 && !confirmCascade) {
+        throw new HttpError(
+          `Staff ini memiliki ${preview.totalDependencies} data historis. Centang konfirmasi untuk menghapus permanen beserta seluruh datanya.`,
+          400, "CASCADE_NOT_CONFIRMED"
+        );
+      }
+      await forceHardDeleteStaff(db, staffId);
+      await logAudit(db, "admin_hard_delete_staff", "Admin", {
+        staffId,
+        staffName: staffRow.name,
+        mode: "hard",
+        cascaded: preview.totalDependencies > 0,
+        deletedDependencies: preview.totalDependencies
+      });
+      return ok({ deleted: true, mode: "hard", cascaded: preview.totalDependencies > 0 });
     }
 
     throw new HttpError("Mode delete tidak valid. Pilih: deactivate, archive, atau hard", 400, "INVALID_MODE");
@@ -4431,6 +4439,47 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     totalDependencies,
     canHardDelete: totalDependencies === 0
   };
+}
+
+// Hapus permanen staff BESERTA seluruh data historisnya (cascade manual di app,
+// bukan lewat ON DELETE CASCADE di DB — agar tetap jalan walau migrasi telat di prod).
+// Urutan delete disusun supaya tidak melanggar foreign key. Tabel opsional yang
+// mungkin belum ada di prod dibungkus best-effort agar tidak menggagalkan operasi.
+async function forceHardDeleteStaff(db: Db, staffId: string) {
+  // 1. Assignment milik staff ini bisa direferensikan baris lain (cover libur,
+  //    override, schedule_id di absensi/laporan). Lepas referensi itu dulu
+  //    supaya assignment-nya aman dihapus.
+  const { data: assignments } = await db
+    .from("staff_shift_assignments")
+    .select("id")
+    .eq("staff_id", staffId);
+  const assignmentIds = (assignments || []).map((a: { id: string }) => a.id);
+  if (assignmentIds.length) {
+    await db.from("staff_dayoff").update({ replacement_schedule_id: null }).in("replacement_schedule_id", assignmentIds);
+    await db.from("staff_shift_assignments").update({ overridden_from_id: null }).in("overridden_from_id", assignmentIds);
+    await db.from("attendance").update({ schedule_id: null }).in("schedule_id", assignmentIds);
+    await db.from("reports").update({ schedule_id: null }).in("schedule_id", assignmentIds);
+  }
+
+  // 2. Hapus baris anak milik staff ini.
+  await db.from("early_checkout_permissions").delete().eq("staff_id", staffId);
+  await db.from("attendance").delete().eq("staff_id", staffId);
+  await db.from("reports").delete().eq("staff_id", staffId);
+  await db.from("payments").delete().eq("staff_id", staffId);
+  await db.from("leave_requests").delete().eq("staff_id", staffId);
+  await db.from("staff_dayoff").delete().eq("staff_id", staffId);
+  await db.from("staff_shift_assignments").delete().eq("staff_id", staffId);
+
+  // 3. Referensi nullable: kosongkan slot jadwal, jangan ikut dihapus.
+  await db.from("shift_schedule").update({ staff_id: null, staff_name: null, status: "open" }).eq("staff_id", staffId);
+
+  // 4. Tabel best-effort (mungkin belum ada / kolomnya beda di prod).
+  try { await db.from("staff_login_attempts").delete().eq("staff_id", staffId); } catch { /* abaikan */ }
+  try { await db.from("email_logs").update({ staff_id: null }).eq("staff_id", staffId); } catch { /* abaikan */ }
+
+  // 5. Terakhir: hapus staff-nya.
+  const { error } = await db.from("staff").delete().eq("id", staffId);
+  if (error) throw error;
 }
 
 async function adminStaffDeletePreview(db: Db, body: Body) {

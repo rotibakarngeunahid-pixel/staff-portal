@@ -34,6 +34,7 @@ type DeleteModal = {
   confirmName: string;
   mode: "deactivate" | "archive" | "hard";
   deleteReason: string;
+  cascadeAck: boolean;
 };
 
 const emptyForm = { name: "", pin: "", outlet_id: "", salary_per_shift: "0", phone: "", ktp_no: "", address: "" };
@@ -122,7 +123,8 @@ export default function AdminStaffPage() {
         preview: result,
         confirmName: "",
         mode: result.totalDependencies > 0 ? "archive" : "hard",
-        deleteReason: ""
+        deleteReason: "",
+        cascadeAck: false
       });
       setMessage(""); setMsgType("info");
     } catch (err) {
@@ -132,10 +134,13 @@ export default function AdminStaffPage() {
 
   async function executeDelete() {
     if (!deleteModal) return;
-    const { preview, mode, confirmName, deleteReason } = deleteModal;
+    const { preview, mode, confirmName, deleteReason, cascadeAck } = deleteModal;
 
     if (mode === "hard" && confirmName !== preview.staffName) {
       setMessage("Nama konfirmasi tidak cocok"); setMsgType("err"); return;
+    }
+    if (mode === "hard" && !preview.canHardDelete && !cascadeAck) {
+      setMessage("Centang konfirmasi bahwa seluruh data historis akan ikut terhapus"); setMsgType("err"); return;
     }
 
     setDeleteLoading(true);
@@ -144,7 +149,7 @@ export default function AdminStaffPage() {
       await apiFetch("/api/admin/staff", {
         method: "DELETE",
         role: "admin",
-        body: { staffId: preview.staffId, mode, confirmName, deleteReason }
+        body: { staffId: preview.staffId, mode, confirmName, deleteReason, confirmCascade: mode === "hard" && !preview.canHardDelete ? cascadeAck : undefined }
       });
       setDeleteModal(null);
       await load();
@@ -235,7 +240,7 @@ export default function AdminStaffPage() {
                 </div>
                 {deleteModal.preview.totalDependencies > 0 && (
                   <p style={{ marginTop: 10, fontSize: 11, color: "var(--danger)", fontWeight: 700 }}>
-                    ⚠️ Total {deleteModal.preview.totalDependencies} data historis. Hapus permanen tidak tersedia.
+                    ⚠️ Total {deleteModal.preview.totalDependencies} data historis. Hapus permanen akan menghapus semuanya & tidak bisa dikembalikan.
                   </p>
                 )}
               </div>
@@ -257,14 +262,14 @@ export default function AdminStaffPage() {
                     <p style={{ fontSize: 11, color: "var(--muted)" }}>Hapus akses operasional, tandai sebagai arsip. Data historis tetap ada. Direkomendasikan jika ada data historis.</p>
                   </div>
                 </label>
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${deleteModal.mode === "hard" ? "#DC2626" : "var(--border)"}`, cursor: deleteModal.preview.canHardDelete ? "pointer" : "not-allowed", background: deleteModal.mode === "hard" ? "#FEF2F2" : "#fff", opacity: deleteModal.preview.canHardDelete ? 1 : 0.45 }}>
-                  <input type="radio" name="deleteMode" checked={deleteModal.mode === "hard"} disabled={!deleteModal.preview.canHardDelete} onChange={() => deleteModal.preview.canHardDelete && setDeleteModal((m) => m ? { ...m, mode: "hard" } : null)} style={{ marginTop: 2 }} />
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${deleteModal.mode === "hard" ? "#DC2626" : "var(--border)"}`, cursor: "pointer", background: deleteModal.mode === "hard" ? "#FEF2F2" : "#fff" }}>
+                  <input type="radio" name="deleteMode" checked={deleteModal.mode === "hard"} onChange={() => setDeleteModal((m) => m ? { ...m, mode: "hard" } : null)} style={{ marginTop: 2 }} />
                   <div>
                     <p style={{ fontSize: 13, fontWeight: 800, color: "#DC2626" }}>Hapus Permanen</p>
                     <p style={{ fontSize: 11, color: "var(--muted)" }}>
                       {deleteModal.preview.canHardDelete
-                        ? "Staff tidak memiliki data historis. Hapus permanen tersedia."
-                        : "Tidak tersedia — staff memiliki data historis."}
+                        ? "Staff tidak memiliki data historis. Hapus permanen aman."
+                        : "Hapus staff + SEMUA data historis. Permanen, tidak bisa dikembalikan."}
                     </p>
                   </div>
                 </label>
@@ -283,8 +288,23 @@ export default function AdminStaffPage() {
                 </div>
               )}
 
+              {/* Konfirmasi cascade (hard delete dengan data historis) */}
+              {deleteModal.mode === "hard" && !deleteModal.preview.canHardDelete && (
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 14px", marginBottom: 14, borderRadius: 10, border: "1.5px solid #FCA5A5", background: "#FEF2F2", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={deleteModal.cascadeAck}
+                    onChange={(e) => setDeleteModal((m) => m ? { ...m, cascadeAck: e.target.checked } : null)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span style={{ fontSize: 12, color: "#991B1B", fontWeight: 700 }}>
+                    Saya mengerti {deleteModal.preview.totalDependencies} data historis (absensi, laporan, pembayaran, jadwal, libur) akan ikut terhapus permanen dan tidak bisa dikembalikan.
+                  </span>
+                </label>
+              )}
+
               {/* Konfirmasi nama (hard delete) */}
-              {deleteModal.mode === "hard" && deleteModal.preview.canHardDelete && (
+              {deleteModal.mode === "hard" && (
                 <div style={{ marginBottom: 14 }}>
                   <label className="label">Ketik nama staff untuk konfirmasi</label>
                   <input
@@ -302,7 +322,7 @@ export default function AdminStaffPage() {
                 <button
                   className={deleteModal.mode === "hard" ? "btn btn-danger" : "btn btn-primary"}
                   style={{ flex: 1 }}
-                  disabled={deleteLoading || (deleteModal.mode === "hard" && deleteModal.confirmName !== deleteModal.preview.staffName)}
+                  disabled={deleteLoading || (deleteModal.mode === "hard" && (deleteModal.confirmName !== deleteModal.preview.staffName || (!deleteModal.preview.canHardDelete && !deleteModal.cascadeAck)))}
                   onClick={executeDelete}
                 >
                   <Trash2 size={15} />
