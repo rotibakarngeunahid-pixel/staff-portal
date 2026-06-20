@@ -68,6 +68,7 @@ type StatusPayload = {
   approvedLeave?: { id: string; reason: string | null } | null;
   shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
   checkinTooEarly?: { tooEarly: boolean; windowOpensAt: string | null } | null;
+  tomorrowFullShift?: { date: string; offStaffName: string | null; reason: string | null } | null;
   earlyCheckoutPermission?: {
     id: string;
     reason: string;
@@ -297,6 +298,9 @@ export default function StaffHomePage() {
   const [lateReason, setLateReason] = useState("");
   const [lateReasonError, setLateReasonError] = useState("");
 
+  /* ─── Heads-up "besok kamu full shift" (cover libur partner) ─── */
+  const [showFullShiftNotice, setShowFullShiftNotice] = useState(false);
+
   /* ─── Draft auto-save ─── */
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftHideTimerRef = useRef<number | null>(null);
@@ -426,6 +430,15 @@ export default function StaffHomePage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  /* ─── Popup heads-up full shift: tampil sekali per tanggal (dismiss tersimpan lokal) ─── */
+  useEffect(() => {
+    const tfs = status?.tomorrowFullShift;
+    if (!tfs) { setShowFullShiftNotice(false); return; }
+    let dismissed = false;
+    try { dismissed = window.localStorage.getItem(`rbn_fs_notice_${tfs.date}`) === "1"; } catch { /* ignore */ }
+    setShowFullShiftNotice(!dismissed);
+  }, [status?.tomorrowFullShift]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -710,6 +723,14 @@ export default function StaffHomePage() {
     setPendingCheckinPhoto(null);
     setLateReason("");
     setLateReasonError("");
+  }
+
+  function dismissFullShiftNotice() {
+    const tfs = status?.tomorrowFullShift;
+    if (tfs) {
+      try { window.localStorage.setItem(`rbn_fs_notice_${tfs.date}`, "1"); } catch { /* ignore */ }
+    }
+    setShowFullShiftNotice(false);
   }
 
   /* ─── Submit report ─── */
@@ -1105,6 +1126,56 @@ export default function StaffHomePage() {
                 Batal, Ulangi Foto
               </button>
             </div>
+          </div>
+        </>
+      )}
+
+      {/* ═══ Modal: Heads-up Besok Full Shift (cover libur partner) ═══ */}
+      {showFullShiftNotice && status?.tomorrowFullShift && (
+        <>
+          <div
+            onClick={dismissFullShiftNotice}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 900, backdropFilter: "blur(2px)" }}
+          />
+          <div style={{
+            position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+            width: 360, maxWidth: "calc(100vw - 32px)",
+            background: "#fff", borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.25)",
+            zIndex: 901, padding: 24, display: "flex", flexDirection: "column", gap: 14
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <span style={{ fontSize: 38, lineHeight: 1.2 }}>📢</span>
+              <h2 style={{ fontSize: 18, fontWeight: 900, color: "#7B241C", marginTop: 8, marginBottom: 4 }}>
+                Besok Kamu Full Shift
+              </h2>
+              <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.7, margin: 0 }}>
+                Besok <strong style={{ color: "#7B241C" }}>{formatDateID(status.tomorrowFullShift.date)}</strong>,{" "}
+                {status.tomorrowFullShift.offStaffName
+                  ? <><strong style={{ color: "#7B241C" }}>{status.tomorrowFullShift.offStaffName}</strong> libur.</>
+                  : <>rekan shift kamu libur.</>}
+                {" "}Kamu bertugas <strong>FULL SHIFT</strong> — buka toko &amp; tutup toko sendiri.
+              </p>
+              {status.tomorrowFullShift.reason && (
+                <p style={{ fontSize: 12, color: "var(--muted-light)", lineHeight: 1.6, marginTop: 6 }}>
+                  Alasan libur: {status.tomorrowFullShift.reason}
+                </p>
+              )}
+            </div>
+            <div style={{
+              background: "linear-gradient(135deg,#FEF9C3,#FDE68A)", border: "1.5px solid #FACC15",
+              borderRadius: 12, padding: "12px 14px", textAlign: "center"
+            }}>
+              <p style={{ fontSize: 14, fontWeight: 800, color: "#92400E", margin: 0, lineHeight: 1.5 }}>
+                💰 Bayaran kamu 2x lipat untuk hari itu
+              </p>
+            </div>
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 14, fontWeight: 800, padding: "12px 0" }}
+              onClick={dismissFullShiftNotice}
+            >
+              Siap, Mengerti
+            </button>
           </div>
         </>
       )}

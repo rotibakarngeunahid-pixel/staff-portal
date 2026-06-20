@@ -15,6 +15,7 @@ import {
   detectShift,
   getWorkingDate,
   haversineDistance,
+  hourMakassar,
   isCheckinTooEarly,
   isCheckoutTimeReached,
   normalizeCurrency,
@@ -1182,6 +1183,45 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     ? isCheckinTooEarly(outlet, effectiveShift)
     : { tooEarly: false, windowOpensAt: null };
 
+  // Heads-up "besok kamu full shift" — popup untuk staff yang meng-cover libur partner.
+  // Muncul pada H-1 (mis. tgl 21 untuk full shift tgl 22), mulai jam yang dikonfigurasi (WITA).
+  let tomorrowFullShift:
+    | { date: string; offStaffName: string | null; reason: string | null }
+    | null = null;
+  if (outlet.shift_mode === 2) {
+    const headsUpFromHour = configNumber(cfg, "full_shift_headsup_from_hour", 0);
+    if (headsUpFromHour <= 0 || hourMakassar() >= headsUpFromHour) {
+      const tomorrow = addDays(effective, 1);
+      const { data: tomoAss } = await db
+        .from("staff_shift_assignments")
+        .select("id")
+        .eq("staff_id", staff.id)
+        .eq("date", tomorrow)
+        .eq("shift_type", "FULL_SHIFT")
+        .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"])
+        .maybeSingle();
+      if (tomoAss) {
+        // Hanya tampilkan jika ada partner yang libur (kasus "cover libur"), bukan full shift mandiri.
+        const { data: offRow } = await db
+          .from("staff_dayoff")
+          .select("staff_name,reason")
+          .eq("outlet_id", outlet.id)
+          .eq("date", tomorrow)
+          .eq("status", "active")
+          .neq("staff_id", staff.id)
+          .limit(1)
+          .maybeSingle();
+        if (offRow) {
+          tomorrowFullShift = {
+            date: tomorrow,
+            offStaffName: (offRow as any).staff_name || null,
+            reason: (offRow as any).reason || null
+          };
+        }
+      }
+    }
+  }
+
   return ok({
     staff: publicStaff(staff),
     outlet,
@@ -1203,6 +1243,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     requiredReports,
     shift1WaitingInfo,
     checkinTooEarly,
+    tomorrowFullShift,
     // PRD Izin Pulang Awal
     earlyCheckoutPermission,
     earlyCheckoutAllowed: Boolean(earlyCheckoutPermission),
@@ -2298,6 +2339,9 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
     );
   }
 
+  // Guard "maksimal 1 orang libur per outlet per hari" — blokir request libur kedua.
+  await assertLeaveCoverageAllowed(db, outlet.id, date, staff.id);
+
   // Cek apakah auto-approve aktif (default: aktif)
   const cfg = await configMap(db);
   const autoApprove = cfg["leave_auto_approve"] !== "false";
@@ -2350,7 +2394,25 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
       .in("status", ["confirmed", "admin_override", "auto_cover"]);
   }
 
-  await logAudit(db, "request_leave", staff.name, { date, autoApprove });
+  // Auto-approve: catat libur (staff_dayoff) + assign partner FULL_SHIFT otomatis (gaji 2x).
+  let coverage: Awaited<ReturnType<typeof applyLeaveCoverage>>["coverage"] | null = null;
+  if (autoApprove) {
+    const result = await applyLeaveCoverage(
+      db,
+      {
+        id: data.id,
+        outlet_id: outlet.id,
+        staff_id: staff.id,
+        staff_name: staff.name,
+        date,
+        reason: data.reason
+      },
+      staff.name
+    );
+    coverage = result.coverage;
+  }
+
+  await logAudit(db, "request_leave", staff.name, { date, autoApprove, coverage: coverage?.action });
   const emailSent = await notifySafely(db, "email_leave_request_failed", staff.name, () =>
     sendLeaveRequestEmail(db, {
       leaveId: data.id,
@@ -2366,7 +2428,7 @@ async function requestLeave(db: Db, request: NextRequest, body: Body) {
       to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
     })
   );
-  return ok({ leave: data, autoApproved: autoApprove, emailSent });
+  return ok({ leave: data, autoApproved: autoApprove, coverage, emailSent });
 }
 
 async function cancelLeave(db: Db, request: NextRequest, body: Body) {
@@ -2399,6 +2461,10 @@ async function cancelLeave(db: Db, request: NextRequest, body: Body) {
     .select("*")
     .single();
   if (error) throw error;
+
+  // Rollback coverage: batalkan libur + kembalikan full shift partner (gaji 2x batal).
+  await revertLeaveCoverage(db, leaveId);
+
   await logAudit(db, "cancel_leave", staff.name, { leaveId });
   return ok({ leave: data });
 }
@@ -3803,6 +3869,11 @@ async function adminLeave(db: Db, method: string, body: Body) {
       .single();
     if (leaveError) throw leaveError;
 
+    // Guard "maksimal 1 orang libur per outlet per hari" saat admin menyetujui cuti.
+    if (status === "approved") {
+      await assertLeaveCoverageAllowed(db, leave.outlet_id, leave.date, leave.staff_id);
+    }
+
     const now = new Date();
     const adminNote = stringBody(body, "note") || null;
 
@@ -3847,6 +3918,23 @@ async function adminLeave(db: Db, method: string, body: Body) {
         .eq("staff_id", leave.staff_id)
         .eq("date", leave.date)
         .in("status", ["confirmed", "admin_override", "auto_cover"]);
+
+      // Catat libur + assign partner FULL_SHIFT otomatis (gaji 2x).
+      await applyLeaveCoverage(
+        db,
+        {
+          id: leave.id,
+          outlet_id: leave.outlet_id,
+          staff_id: leave.staff_id,
+          staff_name: leave.staff_name,
+          date: leave.date,
+          reason: leave.reason
+        },
+        "Admin"
+      );
+    } else if (status === "cancelled" || status === "rejected") {
+      // Rollback coverage: kembalikan full shift partner (gaji 2x batal).
+      await revertLeaveCoverage(db, leaveId);
     }
 
     await logAudit(db, "admin_update_leave", "Admin", { leaveId, status, adminNote });
@@ -4583,6 +4671,14 @@ async function adminStaffDayoff(db: Db, method: string, body: Body) {
     // Auto coverage
     const coverage = await computeAutoCoverage(db, outletId, date, staffId);
 
+    // Tautkan assignment cover ke dayoff agar bisa di-rollback saat dayoff dibatalkan.
+    if ((coverage as any).assignmentId) {
+      await db
+        .from("staff_dayoff")
+        .update({ replacement_schedule_id: (coverage as any).assignmentId })
+        .eq("id", (dayoff as any).id);
+    }
+
     await logAudit(db, "admin_staff_dayoff_set", "Admin", {
       staffId,
       staffName: staffRow.name,
@@ -4596,6 +4692,17 @@ async function adminStaffDayoff(db: Db, method: string, body: Body) {
   if (method === "DELETE") {
     const id = stringBody(body, "id");
     if (!id) throw new HttpError("ID dayoff wajib diisi");
+
+    // Kembalikan full shift partner dulu (jika ada) sebelum membatalkan dayoff.
+    const { data: dayoffRow } = await db
+      .from("staff_dayoff")
+      .select("replacement_schedule_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (dayoffRow && (dayoffRow as any).replacement_schedule_id) {
+      await revertCoverAssignment(db, (dayoffRow as any).replacement_schedule_id);
+    }
+
     const { error } = await db
       .from("staff_dayoff")
       .update({
@@ -4655,33 +4762,51 @@ async function computeAutoCoverage(db: Db, outletId: string, date: string, exclu
 
     if (existingAss) {
       if (existingAss.shift_type !== "FULL_SHIFT") {
+        // Simpan shift_type asli agar bisa di-restore saat cuti dibatalkan.
         await db
           .from("staff_shift_assignments")
           .update({
             shift_type: "FULL_SHIFT",
             status: "auto_cover",
             source: "auto_dayoff",
+            auto_cover_prev_shift_type: existingAss.shift_type,
             updated_at: new Date().toISOString()
           })
           .eq("id", existingAss.id);
-        return { action: "upgraded_to_full_shift", staffId: autoStaff.id, staffName: autoStaff.name };
+        return {
+          action: "upgraded_to_full_shift",
+          staffId: autoStaff.id,
+          staffName: autoStaff.name,
+          assignmentId: existingAss.id as string
+        };
       }
+      // Sudah FULL_SHIFT (mis. dipilih sendiri staff) — jangan ditandai sebagai cover
+      // agar pembatalan cuti tidak menghapus full shift yang memang dipilih sendiri.
       return { action: "already_full_shift", staffId: autoStaff.id, staffName: autoStaff.name };
     }
 
-    // Buat assignment baru FULL_SHIFT otomatis
-    await db.from("staff_shift_assignments").insert({
-      outlet_id: outletId,
-      staff_id: autoStaff.id,
-      staff_name: autoStaff.name,
-      date,
-      shift_type: "FULL_SHIFT",
-      status: "auto_cover",
-      source: "auto_dayoff",
-      confirmed_at: new Date().toISOString(),
-      created_by: "system"
-    });
-    return { action: "auto_assigned_full_shift", staffId: autoStaff.id, staffName: autoStaff.name };
+    // Buat assignment baru FULL_SHIFT otomatis (prev shift type tetap NULL → rollback = cancel)
+    const { data: inserted } = await db
+      .from("staff_shift_assignments")
+      .insert({
+        outlet_id: outletId,
+        staff_id: autoStaff.id,
+        staff_name: autoStaff.name,
+        date,
+        shift_type: "FULL_SHIFT",
+        status: "auto_cover",
+        source: "auto_dayoff",
+        confirmed_at: new Date().toISOString(),
+        created_by: "system"
+      })
+      .select("id")
+      .single();
+    return {
+      action: "auto_assigned_full_shift",
+      staffId: autoStaff.id,
+      staffName: autoStaff.name,
+      assignmentId: (inserted as any)?.id as string | undefined
+    };
   }
 
   return {
@@ -4689,6 +4814,229 @@ async function computeAutoCoverage(db: Db, outletId: string, date: string, exclu
     availableCount: available.length,
     message: "Lebih dari satu staff tersedia, assignment pilih manual"
   };
+}
+
+// ─── Libur bergantian + full-shift coverage (cuti staff → libur → cover otomatis) ───
+
+type LeaveRow = {
+  id: string;
+  outlet_id: string;
+  staff_id: string;
+  staff_name: string;
+  date: string;
+  reason?: string | null;
+};
+
+/**
+ * Guard "maksimal 1 orang libur per outlet per hari".
+ * Memblokir libur/cuti jika tidak ada staff lain yang bisa meng-cover outlet di tanggal itu.
+ * - Outlet 1 staff → diizinkan (tidak ada partner; tidak ada full-shift coverage).
+ * - Outlet 2 staff → partner sudah libur ⇒ blokir.
+ * - Outlet >2 staff → tetap wajib menyisakan minimal 1 staff yang bisa buka toko.
+ */
+async function assertLeaveCoverageAllowed(db: Db, outletId: string, date: string, requesterStaffId: string) {
+  const { data: others, error } = await db
+    .from("staff")
+    .select("id,name")
+    .eq("outlet_id", outletId)
+    .eq("active", true)
+    .is("deleted_at", null)
+    .neq("id", requesterStaffId);
+  if (error) throw error;
+  if (!others || others.length === 0) return; // outlet 1 staff → tidak ada coverage, biarkan
+
+  const [{ data: offDayoffs }, { data: offLeaves }] = await Promise.all([
+    db
+      .from("staff_dayoff")
+      .select("staff_id,staff_name")
+      .eq("outlet_id", outletId)
+      .eq("date", date)
+      .eq("status", "active")
+      .neq("staff_id", requesterStaffId),
+    db
+      .from("leave_requests")
+      .select("staff_id,staff_name,status")
+      .eq("outlet_id", outletId)
+      .eq("date", date)
+      .in("status", ["pending", "approved"])
+      .neq("staff_id", requesterStaffId)
+  ]);
+
+  const offIds = new Set<string>([
+    ...((offDayoffs || []).map((d: any) => d.staff_id as string)),
+    ...((offLeaves || []).map((l: any) => l.staff_id as string))
+  ]);
+  const remaining = others.filter((s: any) => !offIds.has(s.id));
+  if (remaining.length === 0) {
+    const offName =
+      (offDayoffs && offDayoffs[0]?.staff_name) ||
+      (offLeaves && offLeaves[0]?.staff_name) ||
+      "rekan kerja";
+    throw new HttpError(
+      `Tidak bisa libur di tanggal ini: ${offName} sudah libur/cuti di outlet yang sama. ` +
+        `Dalam 1 hari hanya boleh 1 orang libur per outlet agar toko tetap ada yang menjaga. ` +
+        `Pilih tanggal lain atau hubungi admin.`,
+      409,
+      "LEAVE_COVERAGE_CONFLICT"
+    );
+  }
+}
+
+/** Upsert satu baris staff_dayoff aktif (hindari ketergantungan ON CONFLICT pada partial index). */
+async function upsertActiveDayoff(
+  db: Db,
+  input: {
+    outletId: string;
+    staffId: string;
+    staffName: string;
+    date: string;
+    source: "admin" | "staff_request" | "migration";
+    leaveRequestId: string | null;
+    reason: string | null;
+    createdBy: string;
+  }
+) {
+  const { data: existing } = await db
+    .from("staff_dayoff")
+    .select("id")
+    .eq("staff_id", input.staffId)
+    .eq("date", input.date)
+    .eq("status", "active")
+    .maybeSingle();
+
+  if (existing) {
+    const { data, error } = await db
+      .from("staff_dayoff")
+      .update({
+        outlet_id: input.outletId,
+        staff_name: input.staffName,
+        source: input.source,
+        leave_request_id: input.leaveRequestId,
+        reason: input.reason,
+        created_by: input.createdBy,
+        cancelled_at: null,
+        cancel_reason: null
+      })
+      .eq("id", (existing as any).id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await db
+    .from("staff_dayoff")
+    .insert({
+      outlet_id: input.outletId,
+      staff_id: input.staffId,
+      staff_name: input.staffName,
+      date: input.date,
+      status: "active",
+      source: input.source,
+      leave_request_id: input.leaveRequestId,
+      reason: input.reason,
+      created_by: input.createdBy
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Terapkan coverage untuk satu cuti yang disetujui:
+ * buat staff_dayoff (tertaut ke leave) + assign partner FULL_SHIFT otomatis (gaji 2x).
+ */
+async function applyLeaveCoverage(db: Db, leave: LeaveRow, createdBy: string) {
+  const dayoff = await upsertActiveDayoff(db, {
+    outletId: leave.outlet_id,
+    staffId: leave.staff_id,
+    staffName: leave.staff_name,
+    date: leave.date,
+    source: "staff_request",
+    leaveRequestId: leave.id,
+    reason: leave.reason ?? null,
+    createdBy
+  });
+
+  const coverage = await computeAutoCoverage(db, leave.outlet_id, leave.date, leave.staff_id);
+
+  // Tautkan assignment cover ke dayoff hanya jika coverage benar-benar membuat/mengubah
+  // assignment partner — agar rollback tidak menyentuh full shift yang dipilih sendiri.
+  if ((coverage as any).assignmentId) {
+    await db
+      .from("staff_dayoff")
+      .update({ replacement_schedule_id: (coverage as any).assignmentId })
+      .eq("id", (dayoff as any).id);
+  }
+
+  return { dayoff, coverage };
+}
+
+/** Kembalikan satu assignment cover ke kondisi semula (restore shift asli atau batalkan). */
+async function revertCoverAssignment(db: Db, assignmentId: string) {
+  const { data: ass } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("id", assignmentId)
+    .maybeSingle();
+  if (!ass) return;
+  // Partner sudah absen masuk (locked/completed) → jangan diutak-atik (gaji sudah berjalan).
+  if ((ass as any).status === "locked" || (ass as any).status === "completed" || (ass as any).status === "cancelled") {
+    return;
+  }
+  const now = new Date().toISOString();
+  const prev = (ass as any).auto_cover_prev_shift_type as ShiftTypeValue | null;
+  if (prev === "SHIFT_1" || prev === "SHIFT_2") {
+    // Partner sebelumnya punya shift ini → kembalikan.
+    await db
+      .from("staff_shift_assignments")
+      .update({
+        shift_type: prev,
+        status: "confirmed",
+        source: "staff",
+        auto_cover_prev_shift_type: null,
+        cancelled_at: null,
+        cancel_reason: null,
+        updated_at: now
+      })
+      .eq("id", assignmentId);
+  } else {
+    // Assignment dibuat khusus untuk cover → batalkan.
+    await db
+      .from("staff_shift_assignments")
+      .update({
+        status: "cancelled",
+        cancelled_at: now,
+        cancel_reason: "Cover dibatalkan: cuti partner dibatalkan",
+        auto_cover_prev_shift_type: null,
+        updated_at: now
+      })
+      .eq("id", assignmentId);
+  }
+}
+
+/**
+ * Rollback coverage saat cuti dibatalkan/ditolak:
+ * batalkan staff_dayoff yang tertaut + kembalikan full shift partner (gaji 2x batal).
+ */
+async function revertLeaveCoverage(db: Db, leaveId: string) {
+  const { data: dayoffs } = await db
+    .from("staff_dayoff")
+    .select("id,replacement_schedule_id")
+    .eq("leave_request_id", leaveId)
+    .eq("status", "active");
+
+  const now = new Date().toISOString();
+  for (const dayoff of dayoffs || []) {
+    if ((dayoff as any).replacement_schedule_id) {
+      await revertCoverAssignment(db, (dayoff as any).replacement_schedule_id);
+    }
+    await db
+      .from("staff_dayoff")
+      .update({ status: "cancelled", cancelled_at: now, cancel_reason: "Cuti dibatalkan" })
+      .eq("id", (dayoff as any).id);
+  }
 }
 
 // ─── Admin Payroll Projection ──────────────────────────────────────────────
