@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, X } from "lucide-react";
+import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, Users, X } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID } from "@/lib/format";
@@ -31,6 +31,7 @@ type Slot = {
 
 type Leave = {
   id: string;
+  staff_id: string;
   staff_name: string;
   status: string;
   reason: string | null;
@@ -55,11 +56,29 @@ type Day = {
   leaves: Leave[];
 };
 
-type SchedulePayload = { ok: true; weekStart: string; days: Day[] };
+type OutletStaff = { id: string; name: string; isMe: boolean };
+
+type SchedulePayload = {
+  ok: true;
+  weekStart: string;
+  dateTo?: string;
+  shiftMode?: 1 | 2;
+  days: Day[];
+  outletStaff?: OutletStaff[];
+};
 type LeaveModalState = { date: string; reason: string } | null;
 
 function isoToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+}
+
+const MONTHS_SHORT_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+/** "24 Jun" — kompak untuk daftar tanggal libur */
+function formatShortID(value: string): string {
+  const d = new Date(`${value.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getDate()} ${MONTHS_SHORT_ID[d.getMonth()]}`;
 }
 
 function shiftLabel(type: ShiftType) {
@@ -90,6 +109,140 @@ function StatusBadge({ status, isMe, shiftType }: { status: string; isMe: boolea
   );
   return (
     <span className="status-pill" style={{ background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}>Tersedia</span>
+  );
+}
+
+// ─── Kartu "Rekan Satu Outlet" ──────────────────────────────────────────────
+// Ringkasan jadwal & libur staff lain di outlet yang sama (scoped per outlet di
+// backend). General untuk N staff: data berasal dari roster outletStaff.
+
+type RekanInfo = {
+  id: string;
+  name: string;
+  todayStatus: "masuk" | "libur" | "pending" | "none" | null;
+  todayShiftLabel: string | null;
+  leaveDates: { date: string; status: string }[];
+};
+
+function RekanSatuOutletCard({
+  days,
+  outletStaff,
+  today
+}: {
+  days: Day[];
+  outletStaff: OutletStaff[];
+  today: string;
+}) {
+  const todayInRange = days.some((d) => d.date === today);
+
+  const rekanList = useMemo<RekanInfo[]>(() => {
+    const others = (outletStaff || []).filter((s) => !s.isMe);
+    return others
+      .map((rekan) => {
+        // Status hari ini (hanya jika hari ini ada di rentang minggu yang dilihat)
+        let todayStatus: RekanInfo["todayStatus"] = todayInRange ? "none" : null;
+        let todayShiftLabel: string | null = null;
+        const todayDay = days.find((d) => d.date === today);
+        if (todayDay) {
+          const lv = todayDay.leaves.find((l) => l.staff_id === rekan.id);
+          const ass = todayDay.assignments.find((a) => a.staff_id === rekan.id);
+          if (lv?.status === "approved") todayStatus = "libur";
+          else if (lv?.status === "pending") todayStatus = "pending";
+          else if (ass) {
+            todayStatus = "masuk";
+            todayShiftLabel = shiftLabel(ass.shift_type);
+          } else todayStatus = "none";
+        }
+
+        // Tanggal libur rekan dalam minggu yang dilihat (approved + pending)
+        const leaveDates: { date: string; status: string }[] = [];
+        for (const d of days) {
+          const lv = d.leaves.find(
+            (l) => l.staff_id === rekan.id && (l.status === "approved" || l.status === "pending")
+          );
+          if (lv) leaveDates.push({ date: d.date, status: lv.status });
+        }
+
+        return { id: rekan.id, name: rekan.name, todayStatus, todayShiftLabel, leaveDates };
+      })
+      // Sembunyikan rekan yang sama sekali tidak ada info relevan minggu ini
+      // (tidak libur & — bila bukan minggu ini — tanpa status hari ini)
+      .filter((r) => r.leaveDates.length > 0 || (r.todayStatus && r.todayStatus !== "none") || todayInRange);
+  }, [days, outletStaff, today, todayInRange]);
+
+  if (!rekanList.length) return null;
+
+  return (
+    <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{
+        padding: "11px 16px",
+        background: "var(--surface-soft)",
+        borderBottom: "1px solid var(--border)",
+        display: "flex", alignItems: "center", gap: 8
+      }}>
+        <Users size={15} style={{ color: "var(--primary)" }} />
+        <h2 style={{ fontSize: 14, fontWeight: 900, fontFamily: "var(--font-nunito,sans-serif)" }}>
+          Rekan Satu Outlet
+        </h2>
+      </div>
+      <div style={{ padding: "8px 14px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {rekanList.map((rekan) => (
+          <div
+            key={rekan.id}
+            style={{
+              padding: "10px 12px",
+              background: "#fafafa",
+              border: "1px solid var(--border)",
+              borderRadius: 12
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, fontWeight: 800 }}>{rekan.name}</span>
+              {rekan.todayStatus === "libur" && (
+                <span className="status-pill status-danger" style={{ fontSize: 10 }}>🏖️ Libur hari ini</span>
+              )}
+              {rekan.todayStatus === "pending" && (
+                <span className="status-pill status-warn" style={{ fontSize: 10 }}>Request libur (menunggu)</span>
+              )}
+              {rekan.todayStatus === "masuk" && (
+                <span className="status-pill status-ok" style={{ fontSize: 10 }}>
+                  🟢 Masuk hari ini{rekan.todayShiftLabel ? ` · ${rekan.todayShiftLabel}` : ""}
+                </span>
+              )}
+              {rekan.todayStatus === "none" && (
+                <span className="status-pill" style={{ fontSize: 10, background: "#F1F5F9", color: "var(--muted)", border: "1px solid var(--border)" }}>
+                  Tidak dijadwalkan
+                </span>
+              )}
+            </div>
+
+            {rekan.leaveDates.length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10.5, color: "var(--muted)", fontWeight: 700 }}>Libur minggu ini:</span>
+                {rekan.leaveDates.map((lv) => (
+                  <span
+                    key={lv.date}
+                    title={lv.status === "approved" ? "Disetujui" : "Menunggu persetujuan admin"}
+                    style={{
+                      fontSize: 10.5, fontWeight: 800, borderRadius: 6, padding: "2px 7px",
+                      ...(lv.status === "approved"
+                        ? { background: "var(--danger-bg)", color: "var(--danger)", border: "1px solid var(--danger-border)" }
+                        : { background: "var(--warning-bg)", color: "var(--warning)", border: "1px solid var(--warning-border)" })
+                    }}
+                  >
+                    {formatShortID(lv.date)}
+                    {lv.status === "pending" && " (menunggu)"}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        <p style={{ fontSize: 10.5, color: "var(--muted)", lineHeight: 1.5, marginTop: 2 }}>
+          ℹ️ Kalau rekan libur dan kamu yang masuk, kamu bertugas <strong>full shift</strong> (buka &amp; tutup toko sendiri, gaji 2×).
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -218,6 +371,32 @@ function RejectedLeaveBanner({ leave }: { leave: Leave }) {
   );
 }
 
+/** Callout saat SAYA harus cover full shift karena rekan libur (outlet 2 shift) */
+function FullShiftCoverBanner({ offPartnerName }: { offPartnerName: string | null }) {
+  return (
+    <div style={{
+      margin: "0 0 2px",
+      padding: "10px 12px",
+      background: "rgba(79,70,229,0.07)",
+      border: "1.5px solid rgba(79,70,229,0.25)",
+      borderRadius: 12,
+      display: "flex", alignItems: "flex-start", gap: 8
+    }}>
+      <span style={{ fontSize: 16, marginTop: 1 }}>🌟</span>
+      <div>
+        <p style={{ fontSize: 12.5, fontWeight: 800, color: "#4338CA" }}>
+          Kamu Full Shift — gaji 2×
+        </p>
+        <p style={{ fontSize: 11, color: "var(--muted)" }}>
+          {offPartnerName
+            ? <><strong>{offPartnerName}</strong> libur, kamu cover buka &amp; tutup toko sendiri.</>
+            : "Kamu bertugas buka & tutup toko sendiri."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function StaffSchedulePage() {
   const [weekStart, setWeekStart] = useState(isoToday());
   const [data, setData] = useState<SchedulePayload | null>(null);
@@ -252,6 +431,8 @@ export default function StaffSchedulePage() {
     date.setUTCDate(date.getUTCDate() + 7);
     return date.toISOString().slice(0, 10);
   }, [weekStart]);
+
+  const shiftMode = data?.shiftMode ?? 2;
 
   async function selectShift(date: string, shiftType: ShiftType) {
     setBusy(`Mengambil ${shiftLabel(shiftType)}...`);
@@ -435,6 +616,15 @@ export default function StaffSchedulePage() {
           </div>
         )}
 
+        {/* Kartu rekan satu outlet (visibilitas jadwal & libur antar staff) */}
+        {!loading && data && (
+          <RekanSatuOutletCard
+            days={data.days}
+            outletStaff={data.outletStaff || []}
+            today={isoToday()}
+          />
+        )}
+
         {/* Loading skeleton */}
         {loading ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -479,6 +669,13 @@ export default function StaffSchedulePage() {
               // Apakah hari ini libur (dayoff atau leave approved)
               const isEffectiveDayoff = isMyDayoff || isLeaveApproved;
 
+              // ── Deteksi: SAYA cover full shift karena rekan libur (outlet 2 shift) ──
+              const iAmCoveringFullShift =
+                shiftMode === 2 &&
+                !isEffectiveDayoff &&
+                day.myAssignment?.shift_type === "FULL_SHIFT";
+              const offPartner = day.leaves.find((l) => !l.isMe && l.status === "approved");
+
               // Opacity card: dayoff / approved leave → sedikit pudar
               const cardOpacity = isPast ? 0.65 : isEffectiveDayoff ? 0.85 : 1;
 
@@ -487,6 +684,7 @@ export default function StaffSchedulePage() {
               if (isToday) cardBorder = "2px solid var(--primary)";
               else if (isLeavePending) cardBorder = "2px solid var(--warning-border)";
               else if (isLeaveApproved || isEffectiveDayoff) cardBorder = "2px solid var(--danger-border)";
+              else if (iAmCoveringFullShift) cardBorder = "2px solid rgba(79,70,229,0.35)";
 
               return (
                 <div
@@ -541,6 +739,11 @@ export default function StaffSchedulePage() {
                       )}
                       {isMyDayoff && !isLeaveApproved && (
                         <span className="status-pill status-danger" style={{ fontSize: 9 }}>Libur</span>
+                      )}
+                      {iAmCoveringFullShift && (
+                        <span className="status-pill" style={{ fontSize: 9, background: "#EEF2FF", color: "#4338CA", border: "1px solid rgba(79,70,229,0.3)" }}>
+                          🌟 Full Shift
+                        </span>
                       )}
                     </div>
 
@@ -599,6 +802,11 @@ export default function StaffSchedulePage() {
                   {/* ── Slot & shift section (hanya jika bukan libur approved/dayoff) ── */}
                   {!isEffectiveDayoff && !isMyDayoff && (
                     <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                      {/* Callout cover full shift karena rekan libur */}
+                      {iAmCoveringFullShift && (
+                        <FullShiftCoverBanner offPartnerName={offPartner?.staff_name || null} />
+                      )}
+
                       {day.slots.map((slot) => {
                         const isOpen = slot.status === "open" || (!slot.assignmentId && !slot.scheduleId && slot.status !== "off" && slot.status !== "single" && slot.status !== "dayoff");
                         const canCancel = isActionable && slot.isMe && (slot.assignmentId || slot.scheduleId) && slot.status !== "locked" && slot.status !== "completed";
@@ -750,12 +958,12 @@ export default function StaffSchedulePage() {
                       <div style={{ padding: "6px 14px 10px", borderTop: "1px solid var(--border)" }}>
                         {otherLeaves.map((leave) => (
                           <div key={leave.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                            <CalendarCheck size={12} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                            <CalendarCheck size={12} style={{ color: leave.status === "approved" ? "var(--danger)" : "var(--warning)", flexShrink: 0 }} />
                             <p style={{ fontSize: 11, color: "var(--muted)" }}>
-                              {leave.staff_name} — Libur
-                              {leave.status === "pending" && (
-                                <span style={{ marginLeft: 4, fontStyle: "italic" }}>(menunggu)</span>
-                              )}
+                              <strong>{leave.staff_name}</strong> — Libur
+                              {leave.status === "pending"
+                                ? <span style={{ marginLeft: 4, fontStyle: "italic", color: "var(--warning)" }}>(menunggu persetujuan)</span>
+                                : <span style={{ marginLeft: 4, color: "var(--danger)" }}>(disetujui)</span>}
                             </p>
                           </div>
                         ))}

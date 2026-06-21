@@ -2141,7 +2141,8 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
     { data: leaves, error: leaveError },
     { data: dayoffs, error: offError },
     { data: assignments, error: assError },
-    { data: staffDayoffs, error: sdError }
+    { data: staffDayoffs, error: sdError },
+    { data: roster, error: rosterError }
   ] =
     await Promise.all([
       db.from("outlets").select("id,shift_mode,active").eq("id", outletId).single(),
@@ -2149,7 +2150,10 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
       db.from("leave_requests").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("shift_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo),
       db.from("staff_shift_assignments").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"]),
-      db.from("staff_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).eq("status", "active")
+      db.from("staff_dayoff").select("*").eq("outlet_id", outletId).gte("date", dateFrom).lte("date", dateTo).eq("status", "active"),
+      // Roster staff aktif se-outlet (read-only) untuk visibilitas jadwal rekan satu outlet.
+      // Scoped ketat ke outletId → tidak bocor ke outlet lain. General untuk N staff.
+      db.from("staff").select("id,name").eq("outlet_id", outletId).eq("active", true).is("deleted_at", null).order("name")
     ]);
   if (outletError) throw outletError;
   if (error) throw error;
@@ -2157,6 +2161,7 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
   if (offError) throw offError;
   if (assError) throw assError;
   if (sdError) throw sdError;
+  if (rosterError) throw rosterError;
   assertOperationalOutlet(outlet, "Jadwal hanya bisa dibuka untuk outlet aktif.");
 
   const shiftNumbers = Number(outlet?.shift_mode) === 2 ? [1, 2] : [0];
@@ -2246,12 +2251,20 @@ async function weeklySchedule(db: Db, outletId: string, dateFrom: string, dateTo
   return ok({
     weekStart: dateFrom,
     dateTo,
+    shiftMode: Number(outlet?.shift_mode) === 2 ? 2 : 1,
     days,
     schedules: schedules || [],
     assignments: assignments || [],
     leaves: leaves || [],
     dayoffs: dayoffs || [],
-    staffDayoffs: staffDayoffs || []
+    staffDayoffs: staffDayoffs || [],
+    // Daftar rekan satu outlet (termasuk diri sendiri, ditandai isMe) untuk kartu
+    // "Rekan Satu Outlet". Frontend memfilter !isMe.
+    outletStaff: (roster || []).map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      isMe: Boolean(staffId && s.id === staffId)
+    }))
   });
 }
 
