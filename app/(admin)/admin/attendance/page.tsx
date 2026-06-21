@@ -43,6 +43,7 @@ type Staff = { id: string; name: string; outlet_id: string | null; active?: bool
 type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number; active?: boolean };
 type BulkEntry = { staffId: string; staffName: string; checked: boolean; checkin_time: string; checkout_time: string };
 type BulkResult = { staffId: string; staffName: string; status: "success" | "error"; message?: string };
+type InventoryOverride = { outletId: string | null; date: string | null; by: string; reason: string; at: string };
 
 /** Tanggal hari ini menurut jam bisnis WITA — toISOString() (UTC) bisa mundur 1 hari sebelum 08:00 WITA */
 function todayWita(): string {
@@ -157,6 +158,55 @@ export default function AdminAttendancePage() {
   const [cancelReason, setCancelReason] = useState("");
   const [cancelSaving, setCancelSaving] = useState(false);
 
+  // Izin darurat inventori (dipakai saat sistem inventori down/timeout)
+  const [invOverrides, setInvOverrides] = useState<InventoryOverride[]>([]);
+  const [invForm, setInvForm] = useState({ outletId: "", date: todayWita(), reason: "" });
+  const [invSaving, setInvSaving] = useState(false);
+
+  async function loadInventoryOverrides() {
+    try {
+      const res = await apiFetch<{ ok: true; overrides: InventoryOverride[] }>(
+        "/api/admin/inventory-override", { role: "admin" }
+      );
+      setInvOverrides(res.overrides);
+    } catch {
+      // non-blocking: daftar izin gagal dimuat tidak menghentikan halaman
+    }
+  }
+
+  async function grantInventoryOverride() {
+    if (!invForm.outletId) { setMessage("Pilih outlet untuk izin darurat inventori"); setMsgType("err"); return; }
+    if (invForm.reason.trim().length < 5) { setMessage("Alasan izin darurat wajib diisi minimal 5 karakter"); setMsgType("err"); return; }
+    setInvSaving(true);
+    setMessage("Menyimpan izin darurat inventori..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/inventory-override", {
+        role: "admin", method: "POST",
+        body: { outletId: invForm.outletId, date: invForm.date, reason: invForm.reason.trim() }
+      });
+      setMessage("Izin darurat inventori diberikan ✓ — staff outlet ini bisa tutup toko & absen keluar tanpa verifikasi inventori untuk tanggal tersebut"); setMsgType("ok");
+      setInvForm({ ...invForm, reason: "" });
+      await loadInventoryOverrides();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memberi izin darurat"); setMsgType("err");
+    } finally {
+      setInvSaving(false);
+    }
+  }
+
+  async function revokeInventoryOverride(outletId: string, date: string) {
+    setMessage("Mencabut izin darurat inventori..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/inventory-override", {
+        role: "admin", method: "DELETE", body: { outletId, date }
+      });
+      setMessage("Izin darurat inventori dicabut ✓"); setMsgType("ok");
+      await loadInventoryOverrides();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal mencabut izin"); setMsgType("err");
+    }
+  }
+
   async function load() {
     setLoading(true);
     try {
@@ -168,6 +218,7 @@ export default function AdminAttendancePage() {
       setRows(attPayload.attendance);
       setStaff(staffPayload.staff);
       setOutlets(outletPayload.outlets);
+      await loadInventoryOverrides();
     } catch (err) {
       setMessage((err as Error).message);
       setMsgType("err");
@@ -589,6 +640,55 @@ export default function AdminAttendancePage() {
             <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "Memuat..." : "Filter"}
           </button>
         </div>
+      </AdminSection>
+
+      {/* Izin Darurat Inventori — dipakai HANYA saat sistem inventori benar-benar down/timeout */}
+      <AdminSection title="🆘 Izin Darurat Inventori">
+        <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.6 }}>
+          Normalnya staff <strong>tidak bisa</strong> tutup toko / absen keluar sebelum laporan inventori selesai.
+          Gunakan tombol ini <strong>hanya saat sistem inventori bermasalah</strong> (down / timeout) agar staff tetap
+          bisa menutup toko. Izin berlaku per outlet untuk tanggal yang dipilih dan tercatat di audit log.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr auto", gap: 12, alignItems: "flex-end" }}>
+          <div>
+            <label className="label">Outlet<span style={{ color: "var(--danger)" }}>*</span></label>
+            <select className="field" value={invForm.outletId} onChange={(e) => setInvForm({ ...invForm, outletId: e.target.value })}>
+              <option value="">Pilih outlet</option>
+              {activeOutlets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Tanggal</label>
+            <input className="field" type="date" value={invForm.date} onChange={(e) => setInvForm({ ...invForm, date: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Alasan<span style={{ color: "var(--danger)" }}>*</span></label>
+            <input className="field" type="text" placeholder="cth: API inventori down, sudah konfirmasi manual ke kasir" value={invForm.reason} onChange={(e) => setInvForm({ ...invForm, reason: e.target.value })} />
+          </div>
+          <button className="btn btn-danger" style={{ fontSize: 13, alignSelf: "flex-end" }} onClick={grantInventoryOverride} disabled={invSaving}>
+            {invSaving ? "Menyimpan..." : "Beri Izin Darurat"}
+          </button>
+        </div>
+
+        {invOverrides.length > 0 && (
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            <p style={{ fontSize: 11, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Izin Darurat Aktif</p>
+            {invOverrides.map((ov, idx) => {
+              const outletName = outlets.find((o) => o.id === ov.outletId)?.name ?? ov.outletId ?? "—";
+              return (
+                <div key={`${ov.outletId}-${ov.date}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "10px 14px" }}>
+                  <div style={{ fontSize: 12, color: "#7F1D1D", lineHeight: 1.5 }}>
+                    <strong>{outletName}</strong> · {ov.date ? formatDateID(ov.date) : "—"}
+                    <span style={{ color: "#991B1B" }}> — {ov.reason}</span>
+                  </div>
+                  <button className="btn btn-soft" style={{ fontSize: 12 }} onClick={() => ov.outletId && ov.date && revokeInventoryOverride(ov.outletId, ov.date)}>
+                    Cabut
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </AdminSection>
 
       {/* Table */}

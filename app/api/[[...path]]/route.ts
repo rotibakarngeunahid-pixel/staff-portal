@@ -1253,11 +1253,17 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
 
 const INVENTORY_API_URL = "https://script.google.com/macros/s/AKfycbxEqwArPOXtQbAOoMSWoYRiUAUHZK3cCRecxxH39_SKpixUEy90WL20q5HqGf6hgFi4/exec";
 
-async function checkInventoryCheckoutStatus(branchId: string, date: string): Promise<{ can_checkout: boolean; message: string }> {
+// Hasil pengecekan inventori. `verified` membedakan jawaban pasti dari sistem
+// inventori (bisa/tidak bisa checkout) dengan kondisi gagal verifikasi (API down,
+// timeout, error, atau belum dikonfigurasi). Gate inventori bersifat FAIL-CLOSED:
+// jika tidak bisa diverifikasi, staff diblokir kecuali admin memberi izin darurat.
+type InventoryGateStatus = { can_checkout: boolean; verified: boolean; message: string };
+
+async function checkInventoryCheckoutStatus(branchId: string, date: string): Promise<InventoryGateStatus> {
   const apiKey = process.env.INVENTORY_API_KEY;
   if (!apiKey) {
-    console.warn("[inventory] INVENTORY_API_KEY tidak dikonfigurasi — melewati pengecekan inventori");
-    return { can_checkout: true, message: "" };
+    console.error("[inventory] INVENTORY_API_KEY tidak dikonfigurasi — checkout diblokir (fail-closed)");
+    return { can_checkout: false, verified: false, message: "Sistem inventori belum dikonfigurasi (INVENTORY_API_KEY). Hubungi admin." };
   }
   const params = new URLSearchParams({
     action: "api.v1.integration.checkout-status",
@@ -1272,22 +1278,68 @@ async function checkInventoryCheckoutStatus(branchId: string, date: string): Pro
       signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) {
-      console.error(`[inventory] API error HTTP ${res.status} — melewati pengecekan`);
-      return { can_checkout: true, message: "" };
+      console.error(`[inventory] API error HTTP ${res.status} — checkout diblokir (fail-closed)`);
+      return { can_checkout: false, verified: false, message: `Tidak dapat menghubungi sistem inventori (HTTP ${res.status}).` };
     }
     const json = await res.json() as { success?: boolean; can_checkout_attendance?: boolean; message?: string };
     if (json.success === false) {
       console.error("[inventory] API mengembalikan success=false:", json.message);
-      return { can_checkout: true, message: "" };
+      return { can_checkout: false, verified: false, message: json.message || "Sistem inventori menolak permintaan verifikasi." };
     }
     return {
       can_checkout: json.can_checkout_attendance !== false,
+      verified: true,
       message: json.message || ""
     };
   } catch (err) {
-    console.error("[inventory] Gagal menghubungi sistem inventori — melewati pengecekan:", err instanceof Error ? err.message : err);
-    return { can_checkout: true, message: "" };
+    console.error("[inventory] Gagal menghubungi sistem inventori — checkout diblokir (fail-closed):", err instanceof Error ? err.message : err);
+    return { can_checkout: false, verified: false, message: "Tidak dapat menghubungi sistem inventori. Coba lagi sebentar." };
   }
+}
+
+// Kunci config untuk izin darurat inventori per outlet+tanggal. Dipakai saat
+// sistem inventori benar-benar tidak bisa diverifikasi (down/timeout) agar admin
+// tetap bisa mengizinkan staff checkout secara terkontrol dan ter-audit.
+function inventoryOverrideKey(outletId: string, date: string) {
+  return `inventory_override:${outletId}:${date}`;
+}
+
+async function getInventoryOverride(
+  db: Db,
+  outletId: string,
+  date: string
+): Promise<{ by: string; reason: string; at: string } | null> {
+  const { data, error } = await db
+    .from("config")
+    .select("value")
+    .eq("key", inventoryOverrideKey(outletId, date))
+    .maybeSingle();
+  if (error || !data?.value) return null;
+  try {
+    const parsed = JSON.parse(String(data.value));
+    if (parsed && typeof parsed === "object" && parsed.reason) return parsed;
+  } catch {
+    // value lama tanpa JSON tetap dianggap aktif
+    return { by: "Admin", reason: String(data.value), at: "" };
+  }
+  return null;
+}
+
+// Resolusi gate inventori lengkap: status dari sistem inventori + izin darurat admin.
+// `allowed` true jika sistem inventori mengizinkan ATAU ada izin darurat aktif.
+async function resolveInventoryGate(
+  db: Db,
+  outletId: string,
+  branchId: string,
+  date: string
+): Promise<InventoryGateStatus & { overridden: boolean }> {
+  const status = await checkInventoryCheckoutStatus(branchId, date);
+  if (status.can_checkout) return { ...status, overridden: false };
+  const override = await getInventoryOverride(db, outletId, date);
+  if (override) {
+    return { can_checkout: true, verified: status.verified, overridden: true, message: status.message };
+  }
+  return { ...status, overridden: false };
 }
 
 async function checkin(db: Db, request: NextRequest, body: Body) {
@@ -1735,14 +1787,20 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   }
 
   // Inventori mengunci alur tutup toko: Shift 2, Full Shift, atau attendance dengan izin pulang awal.
+  // FAIL-CLOSED: jika status inventori tidak bisa diverifikasi, checkout diblokir kecuali ada izin darurat admin.
   const requiresInventory =
     isClosingShift(shift, attendance.flags) ||
     Boolean(earlyCheckoutPermission?.require_inventory_check);
+  let inventoryOverridden = false;
   if (outlet.inventory_branch_id && requiresInventory) {
-    const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
+    const inventoryStatus = await resolveInventoryGate(db, outlet.id, outlet.inventory_branch_id, date);
     if (!inventoryStatus.can_checkout) {
-      throw new HttpError(inventoryStatus.message || "Laporan inventori belum selesai. Selesaikan laporan inventori sebelum absen keluar.", 400, "INVENTORY_NOT_COMPLETE");
+      const baseMsg = inventoryStatus.verified
+        ? (inventoryStatus.message || "Laporan inventori belum selesai. Selesaikan laporan inventori sebelum absen keluar.")
+        : `${inventoryStatus.message || "Status inventori tidak dapat diverifikasi."} Jika sistem inventori bermasalah, minta admin memberi izin darurat.`;
+      throw new HttpError(baseMsg, 400, "INVENTORY_NOT_COMPLETE");
     }
+    inventoryOverridden = inventoryStatus.overridden;
   }
 
   const selfieUrl = await uploadImage(db, `selfies/checkout/${staff.id}/${date}_${shift}.jpg`, body.selfie || body.photo);
@@ -1763,6 +1821,10 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   if (earlyCheckoutPermission) {
     if (!existingFlags.includes("EARLY_CHECKOUT_APPROVED")) existingFlags.push("EARLY_CHECKOUT_APPROVED");
     existingFlags.push(`EARLY_CHECKOUT_PERMISSION:${earlyCheckoutPermission.id}`);
+  }
+  // Tandai checkout yang lolos lewat izin darurat inventori (sistem inventori tidak terverifikasi)
+  if (inventoryOverridden && !existingFlags.includes("INVENTORY_OVERRIDE")) {
+    existingFlags.push("INVENTORY_OVERRIDE");
   }
   const newFlags = existingFlags.join(",");
 
@@ -1878,17 +1940,18 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
-  // Cek inventori wajib selesai sebelum laporan tutup toko bisa dikirim
+  // Cek inventori wajib selesai sebelum laporan tutup toko bisa dikirim.
+  // FAIL-CLOSED: jika status inventori tidak bisa diverifikasi, laporan TUTUP diblokir
+  // kecuali ada izin darurat admin untuk outlet+tanggal ini.
   if (type === "TUTUP" && outlet.inventory_branch_id) {
-    const inventoryStatus = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
+    const inventoryStatus = await resolveInventoryGate(db, outlet.id, outlet.inventory_branch_id, date);
     if (!inventoryStatus.can_checkout) {
-      throw new HttpError(
-        inventoryStatus.message
-          ? `Laporan inventori belum selesai — ${inventoryStatus.message}\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.`
-          : "Laporan inventori belum selesai.\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.",
-        400,
-        "INVENTORY_NOT_COMPLETE"
-      );
+      const detail = inventoryStatus.verified
+        ? (inventoryStatus.message
+            ? `Laporan inventori belum selesai — ${inventoryStatus.message}\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.`
+            : "Laporan inventori belum selesai.\n\nSelesaikan laporan inventori cabang ini terlebih dahulu, lalu kirim ulang laporan tutup toko.")
+        : `${inventoryStatus.message || "Status inventori tidak dapat diverifikasi."}\n\nJika sistem inventori sedang bermasalah, minta admin memberi izin darurat sebelum mengirim laporan tutup toko.`;
+      throw new HttpError(detail, 400, "INVENTORY_NOT_COMPLETE");
     }
   }
 
@@ -2066,11 +2129,20 @@ async function staffInventoryStatus(db: Db, request: NextRequest) {
   const session = await requireSession(request, "staff");
   const { outlet } = await getStaffWithOutlet(db, session.sub);
   if (!outlet?.inventory_branch_id) {
-    return ok({ can_proceed: true, has_mapping: false, message: "" });
+    return ok({ can_proceed: true, has_mapping: false, verified: true, overridden: false, message: "" });
   }
   const date = getWorkingDate().date;
-  const result = await checkInventoryCheckoutStatus(outlet.inventory_branch_id, date);
-  return ok({ can_proceed: result.can_checkout, has_mapping: true, message: result.message });
+  const result = await resolveInventoryGate(db, outlet.id, outlet.inventory_branch_id, date);
+  const message = !result.can_checkout && !result.verified
+    ? `${result.message || "Status inventori tidak dapat diverifikasi."} Jika sistem inventori bermasalah, minta admin memberi izin darurat.`
+    : result.message;
+  return ok({
+    can_proceed: result.can_checkout,
+    has_mapping: true,
+    verified: result.verified,
+    overridden: result.overridden,
+    message
+  });
 }
 
 async function staffPayroll(db: Db, request: NextRequest) {
@@ -2493,6 +2565,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
   if (path === "/admin/attendance") return adminAttendance(db, method, body);
   if (path === "/admin/early-checkout") return adminEarlyCheckout(db, method, body);
+  if (path === "/admin/inventory-override") return adminInventoryOverride(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
   if (path === "/admin/payroll-projection" && method === "GET") return adminPayrollProjection(db, body);
   if (path === "/admin/payroll-projection/detail" && method === "GET") return adminPayrollProjectionDetail(db, body);
@@ -3216,6 +3289,52 @@ async function adminEarlyCheckout(db: Db, method: string, body: Body) {
       cancelReason
     });
     return ok({ permission: updated });
+  }
+
+  throw new HttpError("Method tidak diizinkan", 405);
+}
+
+// Izin darurat inventori per outlet+tanggal. Dipakai admin saat sistem inventori
+// benar-benar tidak bisa diverifikasi (down/timeout) agar staff tetap bisa
+// menutup toko & absen keluar. Disimpan di tabel config (key per outlet+tanggal)
+// sehingga tidak butuh migrasi tambahan, dan otomatis inert untuk tanggal lain.
+async function adminInventoryOverride(db: Db, method: string, body: Body) {
+  const outletId = stringBody(body, "outletId");
+  const date = stringBody(body, "date") || getWorkingDate().date;
+
+  if (method === "GET") {
+    // Daftar semua override aktif (untuk dashboard admin)
+    const { data, error } = await db
+      .from("config")
+      .select("key,value")
+      .like("key", "inventory_override:%");
+    if (error) throw error;
+    const overrides = (data || []).map((row) => {
+      const parts = String(row.key).split(":");
+      let parsed: { by?: string; reason?: string; at?: string } = {};
+      try { parsed = JSON.parse(String(row.value)); } catch { parsed = { reason: String(row.value) }; }
+      return { outletId: parts[1] ?? null, date: parts[2] ?? null, by: parsed.by ?? "Admin", reason: parsed.reason ?? "", at: parsed.at ?? "" };
+    });
+    return ok({ overrides });
+  }
+
+  if (!outletId) throw new HttpError("Outlet wajib dipilih", 400, "OUTLET_REQUIRED");
+
+  if (method === "POST") {
+    const reason = stringBody(body, "reason");
+    if (reason.trim().length < 5) throw new HttpError("Alasan izin darurat wajib diisi minimal 5 karakter", 400, "REASON_REQUIRED");
+    const value = JSON.stringify({ by: "Admin", reason: reason.trim(), at: new Date().toISOString() });
+    const { error } = await db.from("config").upsert({ key: inventoryOverrideKey(outletId, date), value });
+    if (error) throw error;
+    await logAudit(db, "admin_grant_inventory_override", "Admin", { outletId, date, reason: reason.trim() });
+    return ok({ outletId, date, granted: true });
+  }
+
+  if (method === "DELETE") {
+    const { error } = await db.from("config").delete().eq("key", inventoryOverrideKey(outletId, date));
+    if (error) throw error;
+    await logAudit(db, "admin_revoke_inventory_override", "Admin", { outletId, date });
+    return ok({ outletId, date, granted: false });
   }
 
   throw new HttpError("Method tidak diizinkan", 405);

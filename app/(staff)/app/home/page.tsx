@@ -594,7 +594,10 @@ export default function StaffHomePage() {
         setInvBlockMsg(res.message || "");
       }
     } catch {
-      setInvCheck("ok"); // fail-open: jangan blokir jika API error
+      // fail-closed: jika status inventori tak bisa dicek, blokir & beri tombol coba lagi.
+      // Server tetap source of truth, jadi UI tidak boleh diam-diam membuka form.
+      setInvCheck("blocked");
+      setInvBlockMsg("Tidak dapat memeriksa status inventori. Periksa koneksi lalu coba lagi.");
     }
   }, []);
 
