@@ -770,13 +770,9 @@ export default function StaffHomePage() {
         const fd = new FormData();
         fd.append("foto", photo.blob, photo.fileName);
         fd.append("scope", `report/${type}/${status?.date || "today"}`);
-        const result = await apiFetch<{ ok: true; foto_url: string }>("/api/upload/photo", {
-          method: "POST",
-          role: "staff",
-          body: fd
-        });
-
-        photoUrls[item.label] = result.foto_url;
+        // Retry otomatis untuk kegagalan transien (jaringan seluler tidak stabil / timeout / 5xx),
+        // yang jadi penyebab utama "upload gagal random" di HP.
+        photoUrls[item.label] = await uploadReportPhoto(fd);
       }
 
       // Kirim laporan ke API dengan URL foto saja (payload kecil, tidak ada blob)
@@ -1749,7 +1745,61 @@ export default function StaffHomePage() {
   );
 }
 
+/**
+ * Upload satu foto laporan dengan retry untuk kegagalan transien
+ * (jaringan seluler tidak stabil / timeout / 5xx) — penyebab utama "upload gagal random" di HP.
+ * Setiap percobaan menghasilkan file baru di host (hanya URL terakhir yang dipakai), jadi retry aman.
+ * Error yang pasti gagal lagi (sesi habis, format/ukuran foto) TIDAK di-retry.
+ */
+async function uploadReportPhoto(fd: FormData, attempts = 3): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const result = await apiFetch<{ ok: true; foto_url: string }>("/api/upload/photo", {
+        method: "POST",
+        role: "staff",
+        body: fd,
+        timeoutMs: 60000
+      });
+      return result.foto_url;
+    } catch (err) {
+      lastErr = err;
+      if (err instanceof ApiError) {
+        const permanent =
+          err.status === 401 ||
+          err.status === 413 ||
+          err.status === 415 ||
+          err.code === "PHOTO_TOO_LARGE" ||
+          err.code === "PHOTO_FORMAT" ||
+          err.code === "VALIDATION_ERROR";
+        if (permanent) throw err;
+      }
+      if (attempt < attempts) await new Promise((r) => setTimeout(r, 800 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
 function humanError(err: unknown): string {
+  // Pesan spesifik berbasis kode error API (lebih akurat daripada menebak dari teks).
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case "PHOTO_TOO_LARGE":
+        return "Foto terlalu besar. Coba ambil/pilih foto lalu kirim lagi.";
+      case "PHOTO_FORMAT":
+        return "Format foto belum didukung. Gunakan JPG, PNG, atau WebP.";
+      case "SESSION_EXPIRED":
+      case "NO_SESSION":
+      case "UNAUTHORIZED":
+        return "Sesi login habis. Silakan login ulang.";
+      case "TIMEOUT":
+      case "NETWORK_ERROR":
+        return "Koneksi tidak stabil. Periksa internet lalu coba upload ulang.";
+      case "UPLOAD_FAILED":
+      case "UPLOAD_CONFIG":
+        return err.message || "Foto gagal diunggah. Coba lagi.";
+    }
+  }
   if (!(err instanceof Error)) return "Terjadi kesalahan. Coba lagi.";
   const msg = err.message;
   if (msg.includes("PAYLOAD_TOO_LARGE") || msg.includes("Too Large") || msg.includes("413") || msg.includes("Entity Too Large"))

@@ -11,6 +11,25 @@ type UploadResult = {
   error?: string;
 };
 
+// Batas ukuran sisi server. Bukan satu-satunya gerbang (Vercel route handler ~4.5 MB),
+// tapi memberi pesan yang jelas bila foto besar tetap lolos (mis. via data URL).
+export const MAX_UPLOAD_BYTES_SERVER = 9 * 1024 * 1024; // 9 MB (host PHP membatasi 10 MB)
+export const ALLOWED_UPLOAD_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+
+/**
+ * Error upload foto dengan status upstream dari host PHP, agar endpoint pemanggil
+ * bisa memetakan ke pesan/HTTP code yang tepat (413 terlalu besar, 415 format, dst)
+ * alih-alih semuanya jadi 500 generic "Server bermasalah".
+ */
+export class PhotoUploadError extends Error {
+  upstreamStatus: number;
+  constructor(message: string, upstreamStatus = 0) {
+    super(message);
+    this.name = "PhotoUploadError";
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
 function dataUrlToBytes(dataUrl: string) {
   const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
   if (!match) {
@@ -73,26 +92,42 @@ export async function uploadImage(
     return "";
   }
 
-  const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-  if (!allowed.includes(contentType.toLowerCase())) {
-    throw new Error("File harus berupa JPG, PNG, atau WebP");
+  if (!ALLOWED_UPLOAD_MIME.has(contentType.toLowerCase())) {
+    throw new PhotoUploadError("Format foto belum didukung. Gunakan JPG, PNG, atau WebP.", 415);
   }
 
   const formData = new FormData();
   formData.append("foto", file, fileName);
   const bytes = Buffer.from(await file.arrayBuffer());
+  if (bytes.byteLength > MAX_UPLOAD_BYTES_SERVER) {
+    throw new PhotoUploadError("Foto terlalu besar untuk diunggah. Ambil/pilih foto lalu coba lagi.", 413);
+  }
   const contentHash = createHash("sha256").update(bytes).digest("hex");
   const scope = uploadScope(path);
 
-  const response = await fetch(photoUploadEndpoint(), {
-    method: "POST",
-    headers: signedUploadHeaders(scope, contentHash),
-    body: formData
-  });
+  let response: Response;
+  try {
+    response = await fetch(photoUploadEndpoint(), {
+      method: "POST",
+      headers: signedUploadHeaders(scope, contentHash),
+      body: formData
+    });
+  } catch (networkError) {
+    // Host PHP tak terjangkau / koneksi server→host putus (bukan kesalahan staff).
+    console.error(
+      `[uploadImage] network error to photo host scope=${scope} bytes=${bytes.byteLength} type=${contentType}:`,
+      networkError instanceof Error ? networkError.message : networkError
+    );
+    throw new PhotoUploadError("Penyimpanan foto tidak dapat dihubungi. Coba lagi.", 0);
+  }
 
   const result = (await response.json().catch(() => null)) as UploadResult | null;
   if (!response.ok || !result?.success || !result.foto_url) {
-    throw new Error(result?.error || "Gagal upload foto");
+    // Log diagnostik AMAN (tanpa data sensitif/secret): status host + pesan + ukuran + tipe.
+    console.error(
+      `[uploadImage] upstream failed status=${response.status} scope=${scope} bytes=${bytes.byteLength} type=${contentType} error=${result?.error || "(no body)"}`
+    );
+    throw new PhotoUploadError(result?.error || "Gagal upload foto", response.status);
   }
 
   if (result.foto_url.startsWith("http")) return result.foto_url;

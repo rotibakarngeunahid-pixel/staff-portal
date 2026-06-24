@@ -55,7 +55,7 @@ import {
   compareAttendanceChronological
 } from "@/lib/payroll";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { uploadImage } from "@/lib/storage";
+import { ALLOWED_UPLOAD_MIME, MAX_UPLOAD_BYTES_SERVER, PhotoUploadError, uploadImage } from "@/lib/storage";
 import type { ConfigMap, EarlyCheckoutPermission, Outlet, SessionPayload, Staff } from "@/types/domain";
 import {
   addDateDays,
@@ -963,14 +963,50 @@ function logout() {
   return response;
 }
 
+// Diagnostik aman untuk input upload — TIDAK menyentuh isi/secret, hanya metadata.
+function describeUploadInput(input: unknown): { size: number; mime: string } {
+  if (input && typeof input === "object" && "size" in input && "type" in input) {
+    const blob = input as Blob;
+    return { size: Number(blob.size) || 0, mime: String(blob.type || "").toLowerCase() };
+  }
+  if (typeof input === "string") {
+    const match = input.match(/^data:([^;]+);base64,(.*)$/);
+    if (match) return { size: Math.floor(match[2].length * 0.75), mime: match[1].toLowerCase() };
+    return { size: input.length, mime: "" };
+  }
+  return { size: 0, mime: "" };
+}
+
 async function uploadPhoto(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request);
   const file = body.foto || body.file || body.photo;
   if (!file) throw new HttpError("File foto wajib dikirim", 400, "PHOTO_REQUIRED");
+
+  // Validasi lebih awal + diagnostik aman (tanpa data sensitif): ukuran, tipe, scope, role.
+  const meta = describeUploadInput(file);
+  if (meta.size > MAX_UPLOAD_BYTES_SERVER) {
+    throw new HttpError("Foto terlalu besar. Ambil/pilih foto lalu kirim ulang.", 413, "PHOTO_TOO_LARGE");
+  }
+  if (meta.mime && !ALLOWED_UPLOAD_MIME.has(meta.mime)) {
+    throw new HttpError("Format foto belum didukung. Gunakan JPG, PNG, atau WebP.", 415, "PHOTO_FORMAT");
+  }
+
   const rawScope = stringBody(body, "scope", "general");
   const scope = `${session.role}/${session.sub}/${rawScope || "general"}`;
-  const url = await uploadImage(db, scope, file);
-  return ok({ success: true, foto_url: url, url });
+  try {
+    const url = await uploadImage(db, scope, file);
+    return ok({ success: true, foto_url: url, url });
+  } catch (err) {
+    const upstream = err instanceof PhotoUploadError ? err.upstreamStatus : 0;
+    // Log penyebab ASLI di server (aman) supaya bug nyata tidak tersembunyi di balik 500 generic.
+    console.error(
+      `[upload/photo] failed role=${session.role} sub=${session.sub} size=${meta.size} mime=${meta.mime || "?"} upstream=${upstream}: ${err instanceof Error ? err.message : err}`
+    );
+    if (upstream === 413) throw new HttpError("Foto terlalu besar untuk diunggah. Ambil ulang foto lalu kirim lagi.", 413, "PHOTO_TOO_LARGE");
+    if (upstream === 415) throw new HttpError("Format foto belum didukung. Gunakan JPG, PNG, atau WebP.", 415, "PHOTO_FORMAT");
+    if (upstream === 401) throw new HttpError("Konfigurasi penyimpanan foto bermasalah. Hubungi admin.", 502, "UPLOAD_CONFIG");
+    throw new HttpError("Foto gagal diunggah. Periksa koneksi lalu coba upload ulang.", 502, "UPLOAD_FAILED");
+  }
 }
 
 async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {

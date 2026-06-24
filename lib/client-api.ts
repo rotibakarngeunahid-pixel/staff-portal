@@ -5,6 +5,8 @@ type ApiOptions = {
   body?: Record<string, unknown> | FormData;
   role?: "staff" | "admin";
   redirectOnUnauthorized?: boolean;
+  /** Batas waktu request (ms). Berguna untuk upload di koneksi seluler yang bisa menggantung. */
+  timeoutMs?: number;
 };
 
 type ApiPayload = {
@@ -101,10 +103,26 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   }
 
   let response: Response;
+  const controller = options.timeoutMs ? new AbortController() : null;
+  const timeoutTimer =
+    controller && options.timeoutMs
+      ? setTimeout(() => controller.abort(), options.timeoutMs)
+      : null;
   try {
-    response = await fetch(url, { method, headers, body, credentials: "include" });
+    response = await fetch(url, {
+      method,
+      headers,
+      body,
+      credentials: "include",
+      signal: controller?.signal
+    });
   } catch {
+    if (controller?.signal.aborted) {
+      throw new ApiError("Koneksi lambat atau terputus. Coba upload ulang.", 0, "TIMEOUT");
+    }
     throw new ApiError("Tidak bisa terhubung ke server. Periksa koneksi lalu coba lagi.", 0, "NETWORK_ERROR");
+  } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
   }
   const data = (await readPayload(response)) as T & ApiPayload;
 

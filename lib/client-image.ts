@@ -15,8 +15,14 @@ type ImageFormat = "image/webp" | "image/jpeg";
 // Target kompresi (bukan batas keras). Foto sebesar apa pun tetap diterima:
 // jika hasil kompinya di bawah target, kualitas penuh dipertahankan; jika tidak,
 // kompresi otomatis menurunkan kualitas/dimensi seperlunya — tidak pernah ditolak.
-// Tetap di bawah ~4.5 MB agar aman melewati batas request Vercel.
+// Tetap di bawah ~4.5 MB agar aman melewati batas request Vercel (route handler).
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // 4 MB
+
+// Batas aman dimensi sumber sebelum digambar ke canvas. Safari iOS punya batas
+// luas canvas (~16.7 MP / sisi terpanjang). Foto kamera iPhone modern bisa 12–48 MP;
+// menggambarnya pada canvas seukuran aslinya bisa menghasilkan canvas KOSONG (hitam)
+// atau toBlob null tanpa error → upload "gagal misterius". Pre-scale dulu agar aman.
+const MAX_SOURCE_DIMENSION = 4096;
 
 function extensionFor(mimeType: string) {
   return mimeType === "image/webp" ? "webp" : "jpg";
@@ -58,9 +64,25 @@ async function compressCanvas(
   let blob = await canvasToBlob(canvas, preferredType, quality);
   let mimeType: ImageFormat = preferredType;
 
-  if (!blob || blob.size <= 0) {
-    blob = await canvasToBlob(canvas, "image/jpeg", Math.min(0.86, quality + 0.05));
-    mimeType = "image/jpeg";
+  // PENTING (bug utama iPhone/Safari): canvas.toBlob dengan "image/webp" TIDAK
+  // didukung di Safari iOS < 16 dan sebagian besar in-app WebView (WhatsApp/IG).
+  // Sesuai spesifikasi HTML, browser yang tak mendukung tipe yang diminta akan
+  // diam-diam mengembalikan PNG (lossless, ukurannya BISA 3–8 MB) — bukan WebP.
+  // Karena PNG mengabaikan parameter `quality`, loop kompresi tidak pernah berhasil
+  // mengecilkan ukuran, sehingga body upload menembus batas ~4.5 MB Vercel → gagal.
+  // Itulah kenapa error "Server sedang bermasalah" lebih sering muncul di iPhone.
+  // Solusi: jangan percaya tipe yang diminta — periksa tipe blob NYATA; jika browser
+  // tidak benar-benar menghasilkan WebP, paksa ulang ke JPEG (selalu didukung & lossy).
+  const honoredPreferred = !!blob && blob.size > 0 && blob.type === preferredType;
+  if (!blob || blob.size <= 0 || !honoredPreferred) {
+    const jpeg = await canvasToBlob(canvas, "image/jpeg", Math.min(0.86, quality + 0.05));
+    if (jpeg && jpeg.size > 0) {
+      blob = jpeg;
+      mimeType = "image/jpeg";
+    } else if (blob && blob.size > 0) {
+      // JPEG pun gagal (sangat jarang) — pakai blob apa adanya, samakan mime dgn isi.
+      mimeType = blob.type === "image/webp" ? "image/webp" : "image/jpeg";
+    }
   }
   if (!blob || blob.size <= 0) return null;
 
@@ -161,12 +183,16 @@ export async function photoFromFile(
     const img = new Image();
     img.onload = async () => {
       URL.revokeObjectURL(objectUrl);
+      // Pre-scale ke dimensi aman SEBELUM menggambar (lihat MAX_SOURCE_DIMENSION):
+      // foto kamera iPhone bisa terlalu besar untuk canvas Safari iOS dan menghasilkan
+      // canvas kosong/hitam bila digambar seukuran aslinya.
+      const draw = scaledSize(img.naturalWidth || 1, img.naturalHeight || 1, MAX_SOURCE_DIMENSION);
       const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth || 1;
-      canvas.height = img.naturalHeight || 1;
+      canvas.width = draw.width;
+      canvas.height = draw.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) { reject(new Error("Gagal memproses foto")); return; }
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0, draw.width, draw.height);
       if (opts.onDraw) opts.onDraw(ctx, canvas.width, canvas.height);
       try {
         const photo = await photoFromCanvas(canvas, {
