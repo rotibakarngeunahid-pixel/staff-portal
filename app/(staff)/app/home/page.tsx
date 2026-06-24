@@ -253,6 +253,148 @@ function fmtTime(isoString: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/* ─── Tampilan "Shift Selesai" (state done) ───────────────────────────────
+   Pengganti status card lama yang ambigu. Memberi konfirmasi tegas bahwa
+   shift sudah ditutup + ringkasan jam & gaji hari ini, tanpa elemen aksi
+   yang menyesatkan (tombol absen disembunyikan total di state ini). */
+function ShiftDoneCard({
+  att,
+  onViewHistory,
+  onLogout
+}: {
+  att: Attendance;
+  onViewHistory: () => void;
+  onLogout: () => void;
+}) {
+  const isFullShift2x = String(att.flags || "").includes("FULL_SHIFT_2X");
+  const isLate = att.late_minutes > 0;
+  const rowDivider = <div style={{ height: 1, background: "#EDEFEC", margin: "0 -4px" }} />;
+
+  return (
+    <div className="animate-slide-up" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* ─── SUCCESS HERO ─── */}
+      <div style={{
+        background: "#fff", borderRadius: 22, padding: "32px 22px 26px", textAlign: "center",
+        boxShadow: "0 8px 28px rgba(20,80,40,.10)", border: "1px solid #E4EFE7"
+      }}>
+        <div style={{ position: "relative", width: 96, height: 96, margin: "0 auto 18px" }}>
+          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "#1FA85B", animation: "shiftdone-ring 1.8s ease-out infinite" }} />
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: "50%",
+            background: "linear-gradient(135deg,#22B463,#179A4F)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "shiftdone-pop .5s cubic-bezier(.2,1.4,.5,1) both",
+            boxShadow: "0 10px 22px rgba(31,168,91,.4)"
+          }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 12.5l5 5L20 6" style={{ strokeDasharray: 30, strokeDashoffset: 30, animation: "shiftdone-draw .45s .3s ease forwards" }} />
+            </svg>
+          </div>
+        </div>
+        <div style={{
+          display: "inline-flex", alignItems: "center", gap: 6, background: "#E7F6EC", color: "#157A41",
+          fontWeight: 700, fontSize: 11, letterSpacing: ".6px", padding: "5px 12px", borderRadius: 999, marginBottom: 12
+        }}>
+          SHIFT DITUTUP
+        </div>
+        <div style={{ fontSize: 25, fontWeight: 800, color: "#16261C", letterSpacing: "-.5px", fontFamily: "var(--font-nunito, sans-serif)" }}>
+          Shift Selesai
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#1B8C4C", marginTop: 6 }}>
+          Shift kamu sudah berhasil ditutup.
+        </div>
+        <div style={{ fontSize: 13.5, color: "#6B7570", marginTop: 8, lineHeight: 1.5, maxWidth: 260, marginLeft: "auto", marginRight: "auto" }}>
+          Tidak ada aksi lain yang perlu dilakukan. Selamat beristirahat, sampai jumpa besok! 👋
+        </div>
+      </div>
+
+      {/* ─── RINGKASAN ─── */}
+      <div style={{ background: "#fff", borderRadius: 20, padding: "6px 18px", boxShadow: "0 2px 14px rgba(0,0,0,.04)" }}>
+        <div style={{ display: "flex" }}>
+          <div style={{ flex: 1, padding: "18px 8px 16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#8A938E", fontSize: 11, fontWeight: 700, letterSpacing: ".4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22B463", display: "inline-block" }} />JAM MASUK
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#16261C", marginTop: 6, letterSpacing: "-1px", fontFamily: "var(--font-nunito, sans-serif)" }}>
+              {hhmm(att.checkin_time)}
+            </div>
+          </div>
+          <div style={{ width: 1, background: "#EDEFEC", margin: "16px 0" }} />
+          <div style={{ flex: 1, padding: "18px 8px 16px", paddingLeft: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#8A938E", fontSize: 11, fontWeight: 700, letterSpacing: ".4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#C42B22", display: "inline-block" }} />JAM PULANG
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#16261C", marginTop: 6, letterSpacing: "-1px", fontFamily: "var(--font-nunito, sans-serif)" }}>
+              {hhmm(att.checkout_time)}
+            </div>
+          </div>
+        </div>
+
+        {/* Full shift 2x — hanya tampil bila berlaku */}
+        {isFullShift2x && (
+          <>
+            {rowDivider}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 4px", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: "#EEF2FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🌟</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#1F2A24" }}>Full Shift</div>
+                  <div style={{ fontSize: 12, color: "#6366F1", fontWeight: 600 }}>Gaji dihitung 2× hari ini</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#4338CA" }}>2×</div>
+            </div>
+          </>
+        )}
+
+        {/* Keterlambatan — hanya tampil bila telat */}
+        {isLate && (
+          <>
+            {rowDivider}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 4px", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: "#FFF4E0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⏱️</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#1F2A24" }}>Keterlambatan</div>
+                  <div style={{ fontSize: 12, color: "#9A8A55", fontWeight: 600 }}>Telat {att.late_minutes} menit</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#D98324" }}>−{rupiah(att.deduction)}</div>
+            </div>
+          </>
+        )}
+
+        {rowDivider}
+
+        {/* Gaji hari ini */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 4px", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, background: "#E7F6EC", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💰</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#1F2A24" }}>Gaji hari ini</div>
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#157A41", fontFamily: "var(--font-nunito, sans-serif)" }}>
+            {rupiah(att.final_salary)}
+          </div>
+        </div>
+      </div>
+
+      {/* ─── Aksi ─── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
+        <button className="btn btn-primary btn-action" style={{ fontSize: 15 }} onClick={onViewHistory}>
+          Lihat Riwayat Shift
+        </button>
+        <button
+          className="btn btn-soft"
+          style={{ width: "100%", padding: "14px", fontSize: 15, borderRadius: 15 }}
+          onClick={onLogout}
+        >
+          <LogOut size={16} /> Keluar dari Aplikasi
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function StaffHomePage() {
   const router = useRouter();
   const setStaffToken = useSessionStore((s) => s.setStaffToken);
@@ -1247,6 +1389,14 @@ export default function StaffHomePage() {
 
         {/* ═══ ALUR UTAMA ═══ */}
         {!isReportState && status?.scheduleState !== "dayoff" && !requiresScheduleSelection && (
+          !loading && nextState === "done" && att ? (
+            /* ═══ Shift selesai — tampilan tegas & tidak ambigu (pengganti status card lama) ═══ */
+            <ShiftDoneCard
+              att={att}
+              onViewHistory={() => router.push("/app/payroll")}
+              onLogout={logout}
+            />
+          ) : (
           <>
             {/* Status card */}
             {loading ? (
@@ -1483,6 +1633,7 @@ export default function StaffHomePage() {
               )}
             </div>}
           </>
+          )
         )}
 
         {/* ═══ LAPORAN ═══ */}

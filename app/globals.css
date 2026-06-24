@@ -1969,6 +1969,20 @@ img, video, canvas { display: block; max-width: 100%; }
 
 .animate-slide-up { animation: slide-up 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 
+/* ── Shift Selesai (done state) — success hero check + ring + stroke draw ── */
+@keyframes shiftdone-pop {
+  0%   { transform: scale(0); }
+  60%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@keyframes shiftdone-ring {
+  0%   { transform: scale(0.6); opacity: 0.55; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+@keyframes shiftdone-draw {
+  to { stroke-dashoffset: 0; }
+}
+
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.45; }
