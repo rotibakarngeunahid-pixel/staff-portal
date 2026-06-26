@@ -3744,6 +3744,21 @@ async function activeAssignmentsForShift(db: Db, outletId: string, date: string,
   return data || [];
 }
 
+// Semua assignment aktif untuk satu outlet/tanggal (tanpa filter shift). Dipakai saat
+// meng-assign FULL_SHIFT: satu staff menutup Shift 1 + Shift 2, jadi assignment shift apa pun
+// milik staff lain pada tanggal itu harus dibereskan agar tidak melanggar unique index
+// ux_ssa_outlet_shift1/2_active (FULL_SHIFT menempati kedua slot).
+async function activeAssignmentsForDate(db: Db, outletId: string, date: string) {
+  const { data, error } = await db
+    .from("staff_shift_assignments")
+    .select("*")
+    .eq("outlet_id", outletId)
+    .eq("date", date)
+    .in("status", [...ACTIVE_ASSIGNMENT_STATUSES]);
+  if (error) throw error;
+  return data || [];
+}
+
 async function cancelMutableAssignments(db: Db, assignments: Body[], reason: string) {
   const ids = assignments.filter(isMutableAssignment).map((row) => String(row.id || "")).filter(Boolean);
   if (ids.length === 0) return;
@@ -3776,7 +3791,7 @@ async function cancelAdminAssignmentsForShift(db: Db, outletId: string, date: st
 async function syncAdminShiftAssignment(db: Db, params: {
   outletId: string;
   date: string;
-  shift: 1 | 2;
+  shift: 0 | 1 | 2;
   staffId: string;
   staffName: string;
 }) {
@@ -3818,7 +3833,11 @@ async function syncAdminShiftAssignment(db: Db, params: {
     );
   }
 
-  const slotAssignments = await activeAssignmentsForShift(db, outletId, date, shift);
+  // FULL_SHIFT menutup kedua slot → bersihkan SEMUA assignment lain pada tanggal itu.
+  // Shift 1/2 hanya membereskan slot-nya sendiri (termasuk FULL_SHIFT yang menempatinya).
+  const slotAssignments = shift === 0
+    ? await activeAssignmentsForDate(db, outletId, date)
+    : await activeAssignmentsForShift(db, outletId, date, shift);
   const lockedSlot = (slotAssignments as Body[]).find((row) => row.staff_id !== staffId && !isMutableAssignment(row));
   if (lockedSlot) {
     throw new HttpError(
@@ -3888,14 +3907,17 @@ async function adminSchedule(db: Db, method: string, body: Body) {
   if (method === "POST" || method === "PUT") {
     const outletId = stringBody(body, "outletId");
     const date = stringBody(body, "date");
-    const shift = Number(body.shift) as 1 | 2;
-    if (!outletId || !date || ![1, 2].includes(shift)) throw new HttpError("Outlet, tanggal, dan shift wajib diisi");
+    // FULL_SHIFT diset lewat shift=0 atau shiftType="FULL_SHIFT": satu staff menutup Shift 1 + Shift 2 (gaji 2x).
+    const fullShiftRequest = stringBody(body, "shiftType").toUpperCase() === "FULL_SHIFT" || Number(body.shift) === 0;
+    const shift = (fullShiftRequest ? 0 : Number(body.shift)) as 0 | 1 | 2;
+    if (!outletId || !date || ![0, 1, 2].includes(shift)) throw new HttpError("Outlet, tanggal, dan shift wajib diisi");
     const { data: outlet, error: outletError } = await db.from("outlets").select("shift_mode,active").eq("id", outletId).single();
     if (outletError) throw outletError;
     assertOperationalOutlet(outlet, "Jadwal shift hanya untuk outlet aktif");
     if (Number(outlet.shift_mode) !== 2) throw new HttpError("Jadwal shift hanya untuk outlet 2 shift");
 
     if (body.status === "off") {
+      if (shift === 0) throw new HttpError("Full shift tidak bisa ditandai libur. Tandai libur per shift (1 atau 2).");
       // Prevent both shifts from being off on the same date
       const otherShift = shift === 1 ? 2 : 1;
       const { data: otherOff } = await db
@@ -3935,6 +3957,23 @@ async function adminSchedule(db: Db, method: string, body: Body) {
       await db.from("shift_dayoff").upsert({ outlet_id: outletId, date, shift }, { onConflict: "outlet_id,date,shift" });
       await logAudit(db, "admin_schedule_off", "Admin", { outletId, date, shift });
       return ok({ schedule: data });
+    }
+
+    // FULL_SHIFT: satu staff menutup Shift 1 + Shift 2 (gaji 2x), alur laporan BUKA+TUTUP.
+    // Memakai jalur assignment yang sama dengan staff memilih sendiri FULL_SHIFT.
+    if (shift === 0) {
+      const fsStaffId = stringBody(body, "staffId");
+      if (!fsStaffId) throw new HttpError("Staff wajib dipilih");
+      const { data: fsStaff, error: fsStaffError } = await db.from("staff").select("id,name,active,deleted_at").eq("id", fsStaffId).single();
+      if (fsStaffError) throw fsStaffError;
+      assertOperationalStaff(fsStaff, "Jadwal hanya bisa di-assign ke staff aktif.");
+      const assignment = await syncAdminShiftAssignment(db, { outletId, date, shift: 0, staffId: fsStaffId, staffName: fsStaff.name });
+      // Full shift menutup kedua slot → bersihkan jadwal legacy (per-shift) & libur shift untuk
+      // tanggal ini agar tidak ada baris konflik/stale (mis. staff lain ikut "claimed" di shift_schedule).
+      await db.from("shift_schedule").delete().eq("outlet_id", outletId).eq("date", date);
+      await db.from("shift_dayoff").delete().eq("outlet_id", outletId).eq("date", date);
+      await logAudit(db, "admin_override_schedule", "Admin", { outletId, date, shift: 0, staffId: fsStaffId, fullShift: true });
+      return ok({ schedule: null, assignment });
     }
 
     const staffId = stringBody(body, "staffId");

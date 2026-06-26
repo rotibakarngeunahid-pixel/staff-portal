@@ -8,7 +8,7 @@ import { formatDateWithDayID } from "@/lib/format";
 
 type Outlet = { id: string; name: string; shift_mode: number; active?: boolean };
 type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
-type Slot = { shift: number; scheduleId: string | null; staffName: string | null; status: string };
+type Slot = { shift: number; scheduleId: string | null; staffName: string | null; status: string; shiftType?: string };
 type Day = { date: string; slots: Slot[] };
 type AssignTarget = { date: string; shift: number } | null;
 
@@ -137,7 +137,7 @@ export default function AdminSchedulePage() {
 
       {/* Assign panel */}
       {assignTarget ? (
-        <AdminSection title={`Assign Shift ${assignTarget.shift} · ${formatDateWithDayID(assignTarget.date)}`}>
+        <AdminSection title={`Assign ${assignTarget.shift === 0 ? "Full Shift" : `Shift ${assignTarget.shift}`} · ${formatDateWithDayID(assignTarget.date)}`}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "flex-end" }}>
             <div>
               <label className="label">Staff</label>
@@ -166,6 +166,8 @@ export default function AdminSchedulePage() {
           {days.map((day) => {
             const offShifts = new Set(day.slots.filter((s) => s.status === "off").map((s) => s.shift));
             const hasAnyOff = offShifts.size > 0;
+            // Full shift yang sudah di-assign langsung (1 staff menutup Shift 1 + Shift 2).
+            const fullShiftStaff = day.slots.find((s) => s.shiftType === "FULL_SHIFT" && s.staffName)?.staffName || null;
 
             return (
               <div key={day.date} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, padding: 16, boxShadow: "0 2px 10px rgba(0,0,0,.05)" }}>
@@ -173,7 +175,8 @@ export default function AdminSchedulePage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {day.slots.map((slot) => {
                     const isOff = slot.status === "off";
-                    const isFullShift = !isOff && hasAnyOff;
+                    const isAssignedFull = slot.shiftType === "FULL_SHIFT";
+                    const isFullShift = !isOff && (hasAnyOff || isAssignedFull);
                     const offDisabled = !isOff && hasAnyOff;
 
                     return (
@@ -230,6 +233,18 @@ export default function AdminSchedulePage() {
                     );
                   })}
                 </div>
+                {/* Set Full Shift: 1 staff menutup Shift 1 + Shift 2 (gaji 2x). Disembunyikan jika
+                    ada shift yang sudah diliburkan (kasus itu sudah jadi full shift via "Off"). */}
+                {!hasAnyOff ? (
+                  <button
+                    className="btn btn-soft"
+                    style={{ marginTop: 10, width: "100%", fontSize: 11, padding: "7px 10px" }}
+                    onClick={() => { setAssignTarget({ date: day.date, shift: 0 }); setAssignStaffId(""); }}
+                    disabled={actionBusy}
+                  >
+                    {fullShiftStaff ? `Full Shift: ${fullShiftStaff} — Ubah` : "Set Full Shift (1 orang buka & tutup)"}
+                  </button>
+                ) : null}
               </div>
             );
           })}
