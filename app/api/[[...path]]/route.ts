@@ -52,7 +52,8 @@ import {
   allocatePaymentByAmount,
   allocatePaymentByDates,
   buildPayrollSummary,
-  compareAttendanceChronological
+  compareAttendanceChronological,
+  isShiftCounted
 } from "@/lib/payroll";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { ALLOWED_UPLOAD_MIME, MAX_UPLOAD_BYTES_SERVER, PhotoUploadError, uploadImage } from "@/lib/storage";
@@ -3513,7 +3514,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
     const [{ data: staff, error: staffError }, { data: attendance, error: attError }, { data: payments, error: payError }] =
       await Promise.all([
         db.from("staff").select("id,name,active,salary_per_shift,outlet_id").order("name"),
-        db.from("attendance").select("id,staff_id,date,shift,final_salary,paid_status").order("date", { ascending: false }),
+        db.from("attendance").select("id,staff_id,date,shift,checkin_time,checkout_time,final_salary,paid_status").order("date", { ascending: false }),
         db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
       ]);
     if (staffError) throw staffError;
@@ -3547,14 +3548,16 @@ async function adminPayroll(db: Db, method: string, body: Body) {
 
     const { data: unpaidRows, error: rowsError } = await db
       .from("attendance")
-      .select("id,date,shift,final_salary,paid_status")
+      .select("id,date,shift,checkin_time,checkout_time,final_salary,paid_status")
       .eq("staff_id", staffId)
       .eq("paid_status", false)
       .order("date", { ascending: true })
       .order("shift", { ascending: true });
     if (rowsError) throw rowsError;
 
-    const unpaid = (unpaidRows || []).map((row) => ({
+    // Shift tanpa absen masuk+keluar lengkap tidak boleh dibayar (gaji = 0).
+    // Difilter di server agar tidak bisa ditembus dari sisi klien.
+    const unpaid = (unpaidRows || []).filter(isShiftCounted).map((row) => ({
       id: String(row.id),
       date: String(row.date),
       shift: Number(row.shift || 0),
@@ -5274,7 +5277,7 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
     { data: allAssignments, error: assError }
   ] = await Promise.all([
     db.from("attendance")
-      .select("staff_id,date,checkin_time,status,final_salary,paid_status,flags")
+      .select("staff_id,date,checkin_time,checkout_time,status,final_salary,paid_status,flags")
       .gte("date", rangeStart)
       .lte("date", asOfDate)
       .in("staff_id", allStaff.map((s: any) => s.id)),
@@ -5447,7 +5450,7 @@ async function adminPayrollProjectionDetail(db: Db, body: Body) {
     { data: assignmentRows },
     { data: paymentRows }
   ] = await Promise.all([
-    db.from("attendance").select("staff_id,date,checkin_time,status,final_salary,paid_status,flags")
+    db.from("attendance").select("staff_id,date,checkin_time,checkout_time,status,final_salary,paid_status,flags")
       .eq("staff_id", staffId).gte("date", rangeStart).lte("date", asOfDate),
     db.from("staff_dayoff").select("staff_id,date,status").eq("staff_id", staffId).eq("status", "active")
       .gte("date", rangeStart).lte("date", rangeEnd),
@@ -5564,11 +5567,14 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
 
   const { data: allAtt, error: allAttError } = await db
     .from("attendance")
-    .select("id,final_salary,paid_status")
+    .select("id,checkin_time,checkout_time,final_salary,paid_status")
     .eq("staff_id", payment.staff_id);
   if (allAttError) throw allAttError;
 
-  const totalEarned = (allAtt || []).reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
+  // Hanya shift dengan absen masuk+keluar lengkap yang dihitung sebagai gaji terbentuk.
+  const totalEarned = (allAtt || [])
+    .filter(isShiftCounted)
+    .reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
   const totalPaid = (allPayments || []).reduce((s: number, r: any) => s + normalizeCurrency(r.amount), 0);
   const balance = Math.max(0, totalEarned - totalPaid);
 

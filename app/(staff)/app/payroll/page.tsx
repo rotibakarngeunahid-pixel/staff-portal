@@ -13,7 +13,7 @@ import {
 import { SaldoTertahanPopup, hasSaldoAck } from "@/components/payroll/saldo-tertahan-popup";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
-import { shiftLabel } from "@/lib/payroll";
+import { isShiftCounted, shiftLabel } from "@/lib/payroll";
 
 const MONTHS_ID = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
@@ -112,6 +112,43 @@ function LateDetail({
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Indikator transparansi per shift: apakah shift dihitung ke gaji.
+ * Gaji hanya dihitung jika absen masuk + absen keluar lengkap.
+ */
+function CountedBadge({ row }: { row: AttendanceRow }) {
+  let label: string;
+  let tone: "ok" | "danger";
+  if (!row.checkin_time) {
+    label = "Absen Masuk Tidak Tercatat";
+    tone = "danger";
+  } else if (!row.checkout_time) {
+    label = "Tidak Terhitung";
+    tone = "danger";
+  } else {
+    label = "Terhitung";
+    tone = "ok";
+  }
+
+  const colors = tone === "ok"
+    ? { bg: "var(--success-bg)", border: "var(--success-border)", text: "var(--success)" }
+    : { bg: "var(--danger-bg)", border: "var(--danger-border)", text: "var(--danger)" };
+
+  return (
+    <span
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        padding: "3px 9px", borderRadius: 999, marginBottom: 8,
+        background: colors.bg, border: `1px solid ${colors.border}`,
+        fontSize: 11, fontWeight: 800, color: colors.text
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors.text, display: "inline-block" }} />
+      {label}
+    </span>
   );
 }
 
@@ -293,6 +330,10 @@ export default function StaffPayrollPage() {
                         {hhmm(row.checkin_time) || "—"} → {hhmm(row.checkout_time) || "Belum pulang"}
                       </p>
 
+                      <div>
+                        <CountedBadge row={row} />
+                      </div>
+
                       {row.late_minutes > 0 && (
                         <LateDetail row={row} outlet={data!.outlet} config={data!.config} />
                       )}
@@ -324,12 +365,22 @@ export default function StaffPayrollPage() {
 
                       <div className="payroll-salary-bar">
                         <span style={{ fontSize: 12, fontWeight: 700 }}>Gaji shift</span>
-                        <span style={{
-                          fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
-                          color: row.paid_status ? "var(--success)" : "var(--warning)"
-                        }}>
-                          {rupiah(row.final_salary)}
-                        </span>
+                        {isShiftCounted(row) ? (
+                          <span style={{
+                            fontFamily: "var(--font-nunito,sans-serif)", fontSize: 16, fontWeight: 900,
+                            color: row.paid_status ? "var(--success)" : "var(--warning)"
+                          }}>
+                            {rupiah(row.final_salary)}
+                          </span>
+                        ) : (
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: 6,
+                            fontSize: 13, fontWeight: 800, color: "var(--danger)"
+                          }}>
+                            <s style={{ color: "var(--muted)", fontWeight: 700 }}>{rupiah(row.final_salary)}</s>
+                            Tidak dihitung
+                          </span>
+                        )}
                       </div>
                     </article>
                   ))

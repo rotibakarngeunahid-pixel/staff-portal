@@ -6,7 +6,22 @@ export type PayrollShiftRow = {
   shift: number;
   final_salary: number;
   paid_status?: boolean;
+  checkin_time?: string | null;
+  checkout_time?: string | null;
 };
+
+/**
+ * Sebuah shift HANYA dihitung ke gaji jika absen masuk DAN absen keluar lengkap.
+ * Jika salah satu (atau keduanya) tidak tercatat, shift itu tidak menghasilkan gaji.
+ * Aturan ini jadi satu-satunya sumber kebenaran untuk "shift terhitung" di seluruh
+ * kalkulasi payroll (staff & admin) agar konsisten dan tidak bisa dimanipulasi UI.
+ */
+export function isShiftCounted(row: {
+  checkin_time?: string | null;
+  checkout_time?: string | null;
+}): boolean {
+  return Boolean(row.checkin_time) && Boolean(row.checkout_time);
+}
 
 export type PayrollPaymentStatus = "lunas" | "sebagian" | "belum_lunas";
 
@@ -130,12 +145,15 @@ export function buildPayrollSummary(
   payments: Array<{ amount: number }>
 ): PayrollSummary {
   const rows = attendance || [];
-  const totalEarned = rows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
+  // Hanya shift dengan absen masuk + absen keluar lengkap yang menghasilkan gaji.
+  // Shift tak lengkap diabaikan total dari semua angka & rincian payroll.
+  const countedRows = rows.filter(isShiftCounted);
+  const totalEarned = countedRows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
   const totalPaid = (payments || []).reduce((sum, row) => sum + normalizeCurrency(row.amount), 0);
   const balance = Math.max(0, totalEarned - totalPaid);
   const status = resolvePaymentStatus(totalEarned, totalPaid);
 
-  const paidShifts = rows
+  const paidShifts = countedRows
     .filter((row) => row.paid_status)
     .sort(compareAttendanceChronological)
     .map((row) => ({
@@ -145,7 +163,7 @@ export function buildPayrollSummary(
       final_salary: normalizeCurrency(row.final_salary)
     }));
 
-  const unpaidShifts = rows
+  const unpaidShifts = countedRows
     .filter((row) => !row.paid_status)
     .sort(compareAttendanceChronological)
     .map((row) => ({

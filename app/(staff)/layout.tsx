@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
+import PayrollRuleNotice from "@/components/staff/payroll-rule-notice";
 
 export default function StaffLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
@@ -84,5 +85,11 @@ export default function StaffLayout({ children }: Readonly<{ children: React.Rea
     );
   }
 
-  return <div className="app-shell">{children}</div>;
+  return (
+    <div className="app-shell">
+      {/* Hanya untuk staff terautentikasi, bukan halaman login. Admin tidak memakai layout ini. */}
+      {pathname !== "/app/login" && <PayrollRuleNotice />}
+      {children}
+    </div>
+  );
 }

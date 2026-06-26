@@ -17,6 +17,7 @@ export type AttendanceRow = {
   staff_id: string;
   date: string;
   checkin_time: string | null;
+  checkout_time: string | null;
   status: string;
   final_salary: number;
   paid_status: boolean;
@@ -219,7 +220,9 @@ export function buildHistoricalPeriods(
 
 export function isValidAttendanceRow(row: AttendanceRow): boolean {
   return (
+    // Gaji hanya terbentuk jika absen masuk DAN absen keluar lengkap.
     !!row.checkin_time &&
+    !!row.checkout_time &&
     (row.status === "present" || row.status === "late") &&
     row.final_salary > 0
   );

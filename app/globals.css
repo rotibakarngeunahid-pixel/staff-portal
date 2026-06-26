@@ -1136,6 +1136,119 @@ img, video, canvas { display: block; max-width: 100%; }
   box-shadow: none;
 }
 
+/* Payroll rule notice (pop-up aturan penggajian — sekali, kunci 4 detik) */
+.payroll-notice-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.62);
+  backdrop-filter: blur(2px);
+  animation: fade-in 0.2s ease-out;
+}
+.payroll-notice-card {
+  width: 100%;
+  max-width: 460px;
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  background: var(--surface);
+  border-left: 4px solid var(--warning);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.45);
+  animation: saldo-popup-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.payroll-notice-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 20px 22px;
+  background: linear-gradient(135deg, #B45309 0%, var(--warning) 70%, #F6B800 130%);
+  color: #fff;
+  border-radius: 14px 18px 0 0;
+}
+.payroll-notice-header-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.28);
+}
+.payroll-notice-eyebrow {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.82);
+}
+.payroll-notice-title {
+  margin: 3px 0 0;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.2;
+  color: #fff;
+}
+.payroll-notice-body {
+  padding: 20px 22px 4px;
+  font-size: 14px;
+  line-height: 1.66;
+  color: var(--ink);
+}
+.payroll-notice-body p { margin: 0; }
+.payroll-notice-body strong { color: var(--warning); }
+.payroll-notice-footnote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400E;
+}
+.payroll-notice-actions {
+  padding: 16px 22px 22px;
+}
+.payroll-notice-countdown {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.payroll-notice-btn {
+  width: 100%;
+  min-height: 50px;
+  border: none;
+  border-radius: 13px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--warning), #B45309);
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  box-shadow: 0 8px 20px rgba(217, 119, 6, 0.28);
+}
+.payroll-notice-btn:hover:not(:disabled) { opacity: 0.94; }
+.payroll-notice-btn:active:not(:disabled) { transform: scale(0.985); }
+.payroll-notice-btn:disabled {
+  cursor: not-allowed;
+  color: var(--muted-light);
+  background: var(--border);
+  box-shadow: none;
+}
+
 /* Admin payroll */
 .payroll-admin-staff-select {
   max-width: 360px;

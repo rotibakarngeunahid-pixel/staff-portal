@@ -19,7 +19,8 @@ import { apiFetch } from "@/lib/client-api";
 import { rupiah } from "@/lib/format";
 import {
   allocatePaymentByAmount,
-  allocatePaymentByDates
+  allocatePaymentByDates,
+  isShiftCounted
 } from "@/lib/payroll";
 
 type PaymentRecord = {
@@ -44,7 +45,7 @@ type PayrollStaff = {
   totalPaid: number;
   balance: number;
   summary?: PayrollSummaryView;
-  attendance: Array<{ id: string; date: string; shift: number; final_salary: number; paid_status: boolean }>;
+  attendance: Array<{ id: string; date: string; shift: number; final_salary: number; paid_status: boolean; checkin_time?: string | null; checkout_time?: string | null }>;
   payments: PaymentRecord[];
 };
 
@@ -101,8 +102,9 @@ export default function AdminPayrollPage() {
   const current = useMemo(() => payroll.find((item) => item.id === selected) || null, [payroll, selected]);
   const summary = current?.summary;
 
+  // Hanya shift dengan absen masuk+keluar lengkap yang bisa dibayar (selaras server).
   const unpaid = useMemo(
-    () => (current?.attendance.filter((row) => !row.paid_status) || []).sort((a, b) => {
+    () => (current?.attendance.filter((row) => !row.paid_status && isShiftCounted(row)) || []).sort((a, b) => {
       const d = a.date.localeCompare(b.date);
       return d !== 0 ? d : a.shift - b.shift;
     }),
