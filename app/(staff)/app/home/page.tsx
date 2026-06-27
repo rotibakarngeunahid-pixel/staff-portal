@@ -427,6 +427,7 @@ export default function StaffHomePage() {
   const [reportError, setReportError] = useState("");
   const [invCheck, setInvCheck] = useState<"idle" | "loading" | "ok" | "blocked">("idle");
   const [invBlockMsg, setInvBlockMsg] = useState("");
+  const [invBlocker, setInvBlocker] = useState<"pos_shift" | "inventory" | null>(null);
   const [clockNow, setClockNow] = useState(() => new Date());
   const reportPhotosRef = useRef<Record<string, ReportPhoto>>({});
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -719,6 +720,7 @@ export default function StaffHomePage() {
     if (nextState !== "report_tutup") {
       setInvCheck("idle");
       setInvBlockMsg("");
+      setInvBlocker(null);
     }
   }, [nextState]);
 
@@ -726,20 +728,23 @@ export default function StaffHomePage() {
     setInvCheck("loading");
     setInvBlockMsg("");
     try {
-      const res = await apiFetch<{ can_proceed: boolean; has_mapping: boolean; message: string }>(
+      const res = await apiFetch<{ can_proceed: boolean; has_mapping: boolean; message: string; blocker?: "pos_shift" | "inventory" | null }>(
         "/api/reports/inventory-status", { role: "staff" }
       );
       if (!res.has_mapping || res.can_proceed) {
         setInvCheck("ok");
+        setInvBlocker(null);
       } else {
         setInvCheck("blocked");
         setInvBlockMsg(res.message || "");
+        setInvBlocker(res.blocker ?? "inventory");
       }
     } catch {
-      // fail-closed: jika status inventori tak bisa dicek, blokir & beri tombol coba lagi.
+      // fail-closed: jika status tak bisa dicek, blokir & beri tombol coba lagi.
       // Server tetap source of truth, jadi UI tidak boleh diam-diam membuka form.
       setInvCheck("blocked");
-      setInvBlockMsg("Tidak dapat memeriksa status inventori. Periksa koneksi lalu coba lagi.");
+      setInvBlockMsg("Tidak dapat memeriksa status Tutup Kasir & Inventori. Periksa koneksi lalu coba lagi.");
+      setInvBlocker(null);
     }
   }, []);
 
@@ -1666,14 +1671,14 @@ export default function StaffHomePage() {
                   <div style={{ borderRadius: 20, overflow: "hidden", border: "2px solid #DDD6FE", boxShadow: "0 4px 20px rgba(109,40,217,0.10)" }}>
                     <div style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)", padding: "36px 24px", textAlign: "center" }}>
                       <div style={{ width: 52, height: 52, border: "4px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.9s linear infinite", margin: "0 auto 18px" }} />
-                      <h3 style={{ fontSize: 18, fontWeight: 900, color: "#fff", margin: "0 0 10px", letterSpacing: "-0.3px" }}>Memeriksa Laporan Inventori...</h3>
+                      <h3 style={{ fontSize: 18, fontWeight: 900, color: "#fff", margin: "0 0 10px", letterSpacing: "-0.3px" }}>Memeriksa Status Tutup Toko...</h3>
                       <p style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", margin: 0, lineHeight: 1.7 }}>
-                        Laporan Tutup Toko hanya bisa diisi setelah laporan inventori selesai dikerjakan.
+                        Laporan Tutup Toko hanya bisa diisi setelah <strong>Tutup Kasir</strong> dan <strong>laporan inventori</strong> selesai.
                       </p>
                     </div>
                     <div style={{ background: "#F5F3FF", padding: "16px 20px", textAlign: "center" }}>
                       <p style={{ fontSize: 12, color: "#6D28D9", fontWeight: 600, margin: 0 }}>
-                        Harap tunggu, sistem sedang memeriksa status inventori cabang ini...
+                        Harap tunggu, sistem sedang memeriksa status kasir & inventori cabang ini...
                       </p>
                     </div>
                   </div>
@@ -1685,18 +1690,25 @@ export default function StaffHomePage() {
                     <div style={{ background: "linear-gradient(135deg,#DC2626,#B91C1C)", padding: "36px 24px", textAlign: "center" }}>
                       <div style={{ fontSize: 56, marginBottom: 14, lineHeight: 1 }}>🚫</div>
                       <h3 style={{ fontSize: 21, fontWeight: 900, color: "#fff", margin: "0 0 12px", letterSpacing: "-0.4px" }}>
-                        Laporan Inventori Belum Selesai!
+                        {invBlocker === "pos_shift" ? "Belum Tutup Kasir!" : "Laporan Inventori Belum Selesai!"}
                       </h3>
                       <p style={{ fontSize: 14, color: "rgba(255,255,255,0.92)", margin: 0, lineHeight: 1.75 }}>
-                        {invBlockMsg || "Laporan inventori cabang ini belum dikerjakan hari ini."}
+                        {invBlockMsg || (invBlocker === "pos_shift"
+                          ? "Sesi kasir cabang ini belum ditutup hari ini."
+                          : "Laporan inventori cabang ini belum dikerjakan hari ini.")}
                       </p>
                     </div>
                     <div style={{ background: "#FEF2F2", padding: "20px", display: "flex", flexDirection: "column", gap: 12 }}>
                       <div style={{ background: "#fff", borderRadius: 14, padding: "16px", border: "1.5px solid #FECACA" }}>
                         <p style={{ fontSize: 14, fontWeight: 900, color: "#7F1D1D", margin: "0 0 8px" }}>⚠️ Laporan Tutup Toko DIKUNCI</p>
                         <p style={{ fontSize: 13, color: "#991B1B", margin: 0, lineHeight: 1.75 }}>
-                          Kamu <strong>tidak bisa mengisi</strong> Laporan Tutup Toko sebelum laporan inventori selesai.
-                          Buka sistem inventori, selesaikan laporan hari ini, lalu kembali ke sini untuk mengisi laporan tutup toko.
+                          {invBlocker === "pos_shift" ? (
+                            <>Kamu <strong>tidak bisa mengisi</strong> Laporan Tutup Toko sebelum <strong>Tutup Kasir/Shift</strong> dilakukan.
+                            Selesaikan Tutup Kasir di aplikasi Kasir, lalu kembali ke sini untuk mengisi laporan tutup toko.</>
+                          ) : (
+                            <>Kamu <strong>tidak bisa mengisi</strong> Laporan Tutup Toko sebelum laporan inventori selesai.
+                            Buka sistem inventori, selesaikan laporan hari ini, lalu kembali ke sini untuk mengisi laporan tutup toko.</>
+                          )}
                         </p>
                       </div>
                       <button
@@ -1704,7 +1716,7 @@ export default function StaffHomePage() {
                         style={{ fontSize: 14, fontWeight: 900 }}
                         onClick={checkInventory}
                       >
-                        🔄 Sudah Selesai — Cek Ulang Status Inventori
+                        🔄 Sudah Selesai — Cek Ulang Status
                       </button>
                     </div>
                   </div>

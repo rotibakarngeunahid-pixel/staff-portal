@@ -22,6 +22,7 @@ type Outlet = {
   report_tutup_start: string | null;
   report_tutup_end: string | null;
   inventory_branch_id: string | null;
+  pos_branch_id: string | null;
   active: boolean;
 };
 
@@ -32,11 +33,13 @@ const empty = {
   shift2_start: "17:00", shift2_end: "01:00",
   report_buka_start: "", report_buka_end: "",
   report_tutup_start: "", report_tutup_end: "",
-  inventory_branch_id: ""
+  inventory_branch_id: "",
+  pos_branch_id: ""
 };
 type F = typeof empty;
 
 type InventoryBranch = { branch_id: string; branch_name: string };
+type PosBranch = { pos_branch_id: string; pos_branch_name: string };
 
 export default function AdminOutletsPage() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
@@ -49,6 +52,8 @@ export default function AdminOutletsPage() {
   const [saving, setSaving] = useState(false);
   const [inventoryBranches, setInventoryBranches] = useState<InventoryBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
+  const [posBranches, setPosBranches] = useState<PosBranch[]>([]);
+  const [posBranchesLoading, setPosBranchesLoading] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -76,6 +81,24 @@ export default function AdminOutletsPage() {
     } finally {
       setBranchesLoading(false);
     }
+  }
+
+  async function loadPosBranches() {
+    if (posBranches.length > 0) return; // sudah di-cache, skip fetch ulang
+    setPosBranchesLoading(true);
+    try {
+      const payload = await apiFetch<{ branches: PosBranch[] }>("/api/admin/pos-branches", { role: "admin" });
+      setPosBranches(payload.branches || []);
+    } catch {
+      // gagal fetch tidak perlu blokir form
+    } finally {
+      setPosBranchesLoading(false);
+    }
+  }
+
+  function loadIntegrationBranches() {
+    loadInventoryBranches();
+    loadPosBranches();
   }
 
   async function deactivate(outletId: string, name: string) {
@@ -178,10 +201,11 @@ export default function AdminOutletsPage() {
       report_buka_end: row.report_buka_end?.slice(0, 5) || "",
       report_tutup_start: row.report_tutup_start?.slice(0, 5) || "",
       report_tutup_end: row.report_tutup_end?.slice(0, 5) || "",
-      inventory_branch_id: row.inventory_branch_id || ""
+      inventory_branch_id: row.inventory_branch_id || "",
+      pos_branch_id: row.pos_branch_id || ""
     });
     setShowForm(true);
-    loadInventoryBranches();
+    loadIntegrationBranches();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -193,7 +217,7 @@ export default function AdminOutletsPage() {
       subtitle="Geofence, shift, dan jendela laporan"
       action={
         !showForm ? (
-          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => { setEditing(null); setForm(empty); setShowForm(true); loadInventoryBranches(); }}>
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => { setEditing(null); setForm(empty); setShowForm(true); loadIntegrationBranches(); }}>
             <Plus size={15} /> Tambah Outlet
           </button>
         ) : null
@@ -306,6 +330,32 @@ export default function AdminOutletsPage() {
             <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
               💡 Pilih cabang inventori yang sesuai dengan outlet ini. Jika dipilih, staff tidak bisa absen keluar sebelum laporan inventori cabang tersebut selesai.<br />
               Daftar cabang diambil langsung dari sistem inventori saat halaman dibuka.
+            </p>
+
+            <div style={{ marginTop: 16 }}>
+              <label className="label">Cabang di Sistem Kasir/POS</label>
+              {posBranchesLoading ? (
+                <div style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, color: "var(--muted)" }}>
+                  Memuat daftar cabang kasir...
+                </div>
+              ) : (
+                <select
+                  className="field"
+                  value={form.pos_branch_id}
+                  onChange={(e) => setForm((prev) => ({ ...prev, pos_branch_id: e.target.value }))}
+                >
+                  <option value="">— Tidak terhubung ke kasir —</option>
+                  {posBranches.map((b) => (
+                    <option key={b.pos_branch_id} value={b.pos_branch_id}>{b.pos_branch_name}</option>
+                  ))}
+                  {posBranches.length === 0 && (
+                    <option disabled>Tidak ada cabang ditemukan (cek POS_API_URL / POS_API_KEY)</option>
+                  )}
+                </select>
+              )}
+            </div>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+              💡 Pilih cabang kasir yang sesuai dengan outlet ini. Jika dipilih, staff tidak bisa mengirim laporan <b>Tutup Toko</b> sebelum <b>Tutup Kasir/Shift</b> cabang tersebut dilakukan.
             </p>
           </AdminSection>
 

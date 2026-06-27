@@ -1379,6 +1379,64 @@ async function resolveInventoryGate(
   return { ...status, overridden: false };
 }
 
+// ── Gate Tutup Toko #1: Tutup Kasir/Shift (sistem POS) ───────────────────────
+// Status penutupan shift kasir dari sistem POS (cPanel). `verified` membedakan
+// jawaban pasti (shift sudah/belum ditutup) dengan kondisi gagal verifikasi
+// (POS down/timeout/belum dikonfigurasi). Gate bersifat FAIL-CLOSED: bila tidak
+// bisa diverifikasi, laporan TUTUP diblokir kecuali ada izin darurat admin.
+type PosShiftStatus = { closed: boolean; verified: boolean; message: string };
+
+async function checkPosShiftClosed(posBranchId: string, date: string): Promise<PosShiftStatus> {
+  const apiUrl = (process.env.POS_API_URL || "").trim();
+  const apiKey = (process.env.POS_API_KEY || "").trim();
+  if (!apiUrl || !apiKey) {
+    console.error("[pos] POS_API_URL/POS_API_KEY tidak dikonfigurasi — tutup toko diblokir (fail-closed)");
+    return { closed: false, verified: false, message: "Integrasi Kasir/POS belum dikonfigurasi (POS_API_URL/POS_API_KEY). Hubungi admin." };
+  }
+  const branchInt = parseInt(posBranchId, 10);
+  if (!Number.isFinite(branchInt) || branchInt <= 0) {
+    return { closed: false, verified: false, message: "ID cabang POS untuk outlet ini belum/tidak valid. Hubungi admin." };
+  }
+  try {
+    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/rpc/check_shift_status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({ p_branch_id: branchInt, p_date: date }),
+      signal: AbortSignal.timeout(8000)
+    });
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    if (!res.ok || (json && json.error)) {
+      const msg = json?.error?.message || `HTTP ${res.status}`;
+      console.error(`[pos] check_shift_status gagal (${msg}) — tutup toko diblokir (fail-closed)`);
+      return { closed: false, verified: false, message: `Tidak dapat memeriksa status kasir (${msg}).` };
+    }
+    const closed = json?.shift_closed === true;
+    return { closed, verified: true, message: closed ? "" : (json?.message || "Sesi kasir belum ditutup.") };
+  } catch (err) {
+    console.error("[pos] Gagal menghubungi POS — tutup toko diblokir (fail-closed):", err instanceof Error ? err.message : err);
+    return { closed: false, verified: false, message: "Tidak dapat menghubungi sistem Kasir/POS. Coba lagi sebentar." };
+  }
+}
+
+// Resolusi gate kasir lengkap: status dari POS + izin darurat admin (memakai
+// override yang SAMA dengan gate inventori — satu izin darurat membuka keduanya).
+async function resolvePosShiftGate(
+  db: Db,
+  outletId: string,
+  posBranchId: string,
+  date: string
+): Promise<PosShiftStatus & { overridden: boolean }> {
+  const status = await checkPosShiftClosed(posBranchId, date);
+  if (status.closed) return { ...status, overridden: false };
+  const override = await getInventoryOverride(db, outletId, date);
+  if (override) {
+    return { closed: true, verified: status.verified, overridden: true, message: status.message };
+  }
+  return { ...status, overridden: false };
+}
+
 async function checkin(db: Db, request: NextRequest, body: Body) {
   const session = await requireSession(request, "staff");
 
@@ -1977,7 +2035,20 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
     throw new HttpError("Absen masuk dulu sebelum submit laporan", 400, "NO_CHECKIN");
   }
 
-  // Cek inventori wajib selesai sebelum laporan tutup toko bisa dikirim.
+  // Gate Tutup Toko #1 — Tutup Kasir/Shift wajib selesai dulu.
+  // FAIL-CLOSED: jika status kasir tidak bisa diverifikasi, laporan TUTUP diblokir
+  // kecuali ada izin darurat admin untuk outlet+tanggal ini.
+  if (type === "TUTUP" && outlet.pos_branch_id) {
+    const shiftStatus = await resolvePosShiftGate(db, outlet.id, outlet.pos_branch_id, date);
+    if (!shiftStatus.closed) {
+      const detail = shiftStatus.verified
+        ? `Kamu belum melakukan Tutup Kasir untuk hari ini.\n\n${shiftStatus.message || "Tutup sesi kasir di aplikasi Kasir terlebih dahulu, lalu kirim ulang laporan tutup toko."}`
+        : `${shiftStatus.message || "Status kasir tidak dapat diverifikasi."}\n\nJika sistem Kasir sedang bermasalah, minta admin memberi izin darurat sebelum mengirim laporan tutup toko.`;
+      throw new HttpError(detail, 400, "POS_SHIFT_NOT_CLOSED");
+    }
+  }
+
+  // Gate Tutup Toko #2 — Input Inventori wajib selesai sebelum laporan tutup toko bisa dikirim.
   // FAIL-CLOSED: jika status inventori tidak bisa diverifikasi, laporan TUTUP diblokir
   // kecuali ada izin darurat admin untuk outlet+tanggal ini.
   if (type === "TUTUP" && outlet.inventory_branch_id) {
@@ -2162,24 +2233,45 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
   return ok({ report, reportId: report.id, emailSent, earlyCheckoutPermissionId: earlyTutupPermission?.id ?? null });
 }
 
+// Pre-check kesiapan "Tutup Toko" untuk staff: gabungan 2 gate —
+//   1) Tutup Kasir/Shift (sistem POS)   → blocker "pos_shift"
+//   2) Input/Laporan Inventori selesai  → blocker "inventory"
+// Dicek berurutan (kasir dulu) agar pesan yang ditampilkan spesifik & sesuai
+// urutan validasi server saat submit laporan TUTUP.
 async function staffInventoryStatus(db: Db, request: NextRequest) {
   const session = await requireSession(request, "staff");
   const { outlet } = await getStaffWithOutlet(db, session.sub);
-  if (!outlet?.inventory_branch_id) {
-    return ok({ can_proceed: true, has_mapping: false, verified: true, overridden: false, message: "" });
-  }
   const date = getWorkingDate().date;
-  const result = await resolveInventoryGate(db, outlet.id, outlet.inventory_branch_id, date);
-  const message = !result.can_checkout && !result.verified
-    ? `${result.message || "Status inventori tidak dapat diverifikasi."} Jika sistem inventori bermasalah, minta admin memberi izin darurat.`
-    : result.message;
-  return ok({
-    can_proceed: result.can_checkout,
-    has_mapping: true,
-    verified: result.verified,
-    overridden: result.overridden,
-    message
-  });
+  const hasPos = Boolean(outlet?.pos_branch_id);
+  const hasInv = Boolean(outlet?.inventory_branch_id);
+
+  if (!outlet || (!hasPos && !hasInv)) {
+    return ok({ can_proceed: true, has_mapping: false, verified: true, overridden: false, blocker: null, message: "" });
+  }
+
+  // 1) Gate Tutup Kasir/Shift
+  if (hasPos) {
+    const shift = await resolvePosShiftGate(db, outlet.id, outlet.pos_branch_id as string, date);
+    if (!shift.closed) {
+      const message = shift.verified
+        ? (shift.message || "Sesi kasir belum ditutup. Lakukan Tutup Kasir terlebih dahulu.")
+        : `${shift.message || "Status kasir tidak dapat diverifikasi."} Jika sistem Kasir bermasalah, minta admin memberi izin darurat.`;
+      return ok({ can_proceed: false, has_mapping: true, verified: shift.verified, overridden: shift.overridden, blocker: "pos_shift", message });
+    }
+  }
+
+  // 2) Gate Input Inventori
+  if (hasInv) {
+    const result = await resolveInventoryGate(db, outlet.id, outlet.inventory_branch_id as string, date);
+    if (!result.can_checkout) {
+      const message = !result.verified
+        ? `${result.message || "Status inventori tidak dapat diverifikasi."} Jika sistem inventori bermasalah, minta admin memberi izin darurat.`
+        : (result.message || "Laporan inventori cabang ini belum selesai.");
+      return ok({ can_proceed: false, has_mapping: true, verified: result.verified, overridden: result.overridden, blocker: "inventory", message });
+    }
+  }
+
+  return ok({ can_proceed: true, has_mapping: true, verified: true, overridden: false, blocker: null, message: "" });
 }
 
 async function staffPayroll(db: Db, request: NextRequest) {
@@ -2597,6 +2689,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/staff") return adminStaff(db, method, body);
   if (path === "/admin/outlets") return adminOutlets(db, method, body);
   if (path === "/admin/inventory-branches" && method === "GET") return adminInventoryBranches();
+  if (path === "/admin/pos-branches" && method === "GET") return adminPosBranches();
   if (path === "/admin/attendance/bulk" && method === "POST") return adminAttendanceBulk(db, body);
   if (path === "/admin/attendance-import/preview" && method === "POST") return adminAttendanceImportPreview(db, body);
   if (path === "/admin/attendance-import/import" && method === "POST") return adminAttendanceImportCommit(db, body);
@@ -2940,6 +3033,7 @@ async function adminOutlets(db: Db, method: string, body: Body) {
     report_tutup_start: stringBody(body, "report_tutup_start") || null,
     report_tutup_end: stringBody(body, "report_tutup_end") || null,
     inventory_branch_id: stringBody(body, "inventory_branch_id") || null,
+    pos_branch_id: stringBody(body, "pos_branch_id") || null,
     active: body.active === undefined ? true : body.active === true || body.active === "true"
   };
   if (!payload.name) throw new HttpError("Nama outlet wajib diisi");
@@ -2964,6 +3058,28 @@ async function adminOutlets(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method outlet tidak valid", 405);
+}
+
+// Daftar cabang POS/Kasir untuk dropdown mapping di Manajemen Outlet.
+async function adminPosBranches() {
+  const apiUrl = (process.env.POS_API_URL || "").trim();
+  const apiKey = (process.env.POS_API_KEY || "").trim();
+  if (!apiUrl || !apiKey) return ok({ branches: [] });
+  try {
+    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/rpc/inventory_list_branches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json() as Array<{ id: number | string; name: string }> | { error?: unknown };
+    const list = Array.isArray(json) ? json : [];
+    return ok({ branches: list.map((b) => ({ pos_branch_id: String(b.id), pos_branch_name: b.name })) });
+  } catch (err) {
+    console.error("[pos] Gagal ambil daftar cabang POS:", err instanceof Error ? err.message : err);
+    return ok({ branches: [] });
+  }
 }
 
 async function adminInventoryBranches() {
