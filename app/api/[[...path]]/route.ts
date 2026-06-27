@@ -1288,28 +1288,25 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   });
 }
 
-const INVENTORY_API_URL = "https://script.google.com/macros/s/AKfycbxEqwArPOXtQbAOoMSWoYRiUAUHZK3cCRecxxH39_SKpixUEy90WL20q5HqGf6hgFi4/exec";
+// Sistem inventori BARU (Next.js + Supabase). Endpoint publik:
+//   GET /reports/check/{branch_id}?date=YYYY-MM-DD → { data: { already_submitted } }
+//   GET /reports/branches                          → { data: [{ id, name }] }
+// Bisa dioverride via env INVENTORY_API_URL bila domain berubah.
+const INVENTORY_API_URL = (process.env.INVENTORY_API_URL || "https://inventory.rotibakarngeunah.my.id/api").replace(/\/$/, "");
 
 // Hasil pengecekan inventori. `verified` membedakan jawaban pasti dari sistem
-// inventori (bisa/tidak bisa checkout) dengan kondisi gagal verifikasi (API down,
-// timeout, error, atau belum dikonfigurasi). Gate inventori bersifat FAIL-CLOSED:
-// jika tidak bisa diverifikasi, staff diblokir kecuali admin memberi izin darurat.
+// inventori (sudah/belum input) dengan kondisi gagal verifikasi (API down,
+// timeout, error). Gate inventori bersifat FAIL-CLOSED: jika tidak bisa
+// diverifikasi, staff diblokir kecuali admin memberi izin darurat.
 type InventoryGateStatus = { can_checkout: boolean; verified: boolean; message: string };
 
 async function checkInventoryCheckoutStatus(branchId: string, date: string): Promise<InventoryGateStatus> {
-  const apiKey = process.env.INVENTORY_API_KEY;
-  if (!apiKey) {
-    console.error("[inventory] INVENTORY_API_KEY tidak dikonfigurasi — checkout diblokir (fail-closed)");
-    return { can_checkout: false, verified: false, message: "Sistem inventori belum dikonfigurasi (INVENTORY_API_KEY). Hubungi admin." };
+  if (!branchId) {
+    return { can_checkout: false, verified: false, message: "Outlet ini belum dipetakan ke cabang inventori. Hubungi admin." };
   }
-  const params = new URLSearchParams({
-    action: "api.v1.integration.checkout-status",
-    api_key: apiKey,
-    branch_id: branchId,
-    date
-  });
+  const qs = date ? `?date=${encodeURIComponent(date)}` : "";
   try {
-    const res = await fetch(`${INVENTORY_API_URL}?${params.toString()}`, {
+    const res = await fetch(`${INVENTORY_API_URL}/reports/check/${encodeURIComponent(branchId)}${qs}`, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(8000)
@@ -1318,15 +1315,16 @@ async function checkInventoryCheckoutStatus(branchId: string, date: string): Pro
       console.error(`[inventory] API error HTTP ${res.status} — checkout diblokir (fail-closed)`);
       return { can_checkout: false, verified: false, message: `Tidak dapat menghubungi sistem inventori (HTTP ${res.status}).` };
     }
-    const json = await res.json() as { success?: boolean; can_checkout_attendance?: boolean; message?: string };
-    if (json.success === false) {
-      console.error("[inventory] API mengembalikan success=false:", json.message);
-      return { can_checkout: false, verified: false, message: json.message || "Sistem inventori menolak permintaan verifikasi." };
+    const json = await res.json() as { success?: boolean; data?: { already_submitted?: boolean; report_date?: string }; error?: { message?: string } };
+    if (json.success === false || !json.data) {
+      console.error("[inventory] API mengembalikan error:", json.error?.message);
+      return { can_checkout: false, verified: false, message: json.error?.message || "Sistem inventori menolak permintaan verifikasi." };
     }
+    const done = json.data.already_submitted === true;
     return {
-      can_checkout: json.can_checkout_attendance !== false,
+      can_checkout: done,
       verified: true,
-      message: json.message || ""
+      message: done ? "" : "Laporan inventori cabang ini belum dikirim hari ini."
     };
   } catch (err) {
     console.error("[inventory] Gagal menghubungi sistem inventori — checkout diblokir (fail-closed):", err instanceof Error ? err.message : err);
@@ -3083,21 +3081,16 @@ async function adminPosBranches() {
 }
 
 async function adminInventoryBranches() {
-  const apiKey = process.env.INVENTORY_API_KEY;
-  if (!apiKey) return ok({ branches: [] });
-  const params = new URLSearchParams({
-    action: "api.v1.integration.branches",
-    api_key: apiKey
-  });
   try {
-    const res = await fetch(`${INVENTORY_API_URL}?${params.toString()}`, {
+    const res = await fetch(`${INVENTORY_API_URL}/reports/branches`, {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json() as { success?: boolean; branches?: { branch_id: string; branch_name: string }[] };
-    return ok({ branches: json.branches || [] });
+    const json = await res.json() as { success?: boolean; data?: Array<{ id: number | string; name: string }> };
+    const list = json.data || [];
+    return ok({ branches: list.map((b) => ({ branch_id: String(b.id), branch_name: b.name })) });
   } catch (err) {
     console.error("[inventory] Gagal ambil daftar cabang:", err instanceof Error ? err.message : err);
     return ok({ branches: [] });

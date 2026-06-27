@@ -322,7 +322,7 @@ export default function AdminOutletsPage() {
                     <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>
                   ))}
                   {inventoryBranches.length === 0 && (
-                    <option disabled>Tidak ada cabang ditemukan (cek INVENTORY_API_KEY)</option>
+                    <option disabled>Tidak ada cabang ditemukan (cek koneksi sistem inventori)</option>
                   )}
                 </select>
               )}
