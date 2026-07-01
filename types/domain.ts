@@ -51,6 +51,11 @@ export type Staff = {
   deleted_by?: string | null;
   delete_reason?: string | null;
   archived_at?: string | null;
+  // PRD resign — employment status & resignation linkage
+  employment_status?: EmploymentStatus;
+  resigned_at?: string | null;
+  last_working_date?: string | null;
+  resignation_case_id?: string | null;
 };
 
 export type Attendance = {
@@ -124,6 +129,8 @@ export type Report = {
   client_request_id?: string | null;
 };
 
+export type PaymentKind = "regular" | "final_resignation";
+
 export type Payment = {
   id: string;
   staff_id: string;
@@ -134,6 +141,17 @@ export type Payment = {
   paid_at: string;
   proof_url: string | null;
   note: string | null;
+  bonus?: number;
+  bonus_note?: string | null;
+  deduction?: number;
+  deduction_note?: string | null;
+  // PRD resign — final resignation payroll breakdown
+  payment_kind?: PaymentKind;
+  resignation_case_id?: string | null;
+  payout_rate?: number;
+  resignation_policy_deduction?: number;
+  manual_deduction?: number;
+  net_transfer_amount?: number | null;
 };
 
 export type ShiftSchedule = {
@@ -323,6 +341,57 @@ export type StaffDeletePreview = {
   leaveCount: number;
   totalDependencies: number;
   canHardDelete: boolean;
+};
+
+// ─── PRD resign — resignation cases ───────────────────────────────────────
+
+export type EmploymentStatus = "active" | "resigning" | "resigned" | "inactive" | "archived";
+
+export type ResignationSource = "staff_portal" | "admin_entry" | "abandonment";
+
+export type ResignationCaseStatus =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "approved_compliant"
+  | "approved_non_compliant"
+  | "exempted"
+  | "withdrawn"
+  | "cancelled"
+  | "final_payroll_approved"
+  | "paid";
+
+export type AutoComplianceStatus = "auto_compliant" | "auto_non_compliant" | "needs_review";
+
+export type FinalComplianceStatus = "compliant" | "non_compliant" | "exempted";
+
+export type ResignationCase = {
+  id: string;
+  staff_id: string;
+  staff_name: string;
+  outlet_id: string | null;
+  outlet_name: string | null;
+  source: ResignationSource;
+  status: ResignationCaseStatus;
+  submitted_at: string | null;
+  letter_received_at: string | null;
+  requested_last_working_date: string;
+  approved_last_working_date: string | null;
+  effective_resign_date: string | null;
+  notice_required_days: number;
+  notice_given_days: number | null;
+  written_notice_received: boolean;
+  resignation_letter_url: string | null;
+  reason: string | null;
+  auto_compliance_status: AutoComplianceStatus | null;
+  final_compliance_status: FinalComplianceStatus | null;
+  compliance_reason: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  final_payroll_payment_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 // ─── Auth & API helpers ───────────────────────────────────────────────────

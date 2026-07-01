@@ -274,7 +274,7 @@ async function validateRows(
   }
 
   const [{ data: staffRows, error: staffError }, { data: outletRows, error: outletError }, cfg] = await Promise.all([
-    db.from("staff").select("id,name,outlet_id,salary_per_shift,active,deleted_at").order("name"),
+    db.from("staff").select("id,name,outlet_id,salary_per_shift,active,deleted_at,last_working_date").order("name"),
     db.from("outlets").select("*").order("name"),
     configMap(db)
   ]);
@@ -409,6 +409,15 @@ function prepareRow(args: {
   const date = parseDate(value("date"));
   if (!date) return problem(args.rowNumber, args.row, normalized, "Tanggal tidak terbaca.");
   normalized.date = date;
+
+  if (staff.last_working_date && date > staff.last_working_date) {
+    return problem(
+      args.rowNumber,
+      args.row,
+      normalized,
+      `Tanggal absen (${date}) melebihi tanggal kerja terakhir staff (${staff.last_working_date}).`
+    );
+  }
 
   const checkin = parseDateTime(date, value("checkinTime"));
   if (!checkin) return problem(args.rowNumber, args.row, normalized, "Jam masuk tidak terbaca.");

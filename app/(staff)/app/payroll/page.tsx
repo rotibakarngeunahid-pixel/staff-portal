@@ -59,6 +59,11 @@ type PayrollPayload = {
     proof_url: string | null;
     date_from: string | null;
     date_to: string | null;
+    payment_kind?: "regular" | "final_resignation";
+    payout_rate?: number;
+    resignation_policy_deduction?: number;
+    manual_deduction?: number;
+    net_transfer_amount?: number;
   }>;
   outlet: { shift1_start: string | null; shift2_start: string | null } | null;
   config: { lateToleranceMinutes: number; deductionPerMinute: number };
@@ -272,6 +277,10 @@ export default function StaffPayrollPage() {
                     dateTo={payment.date_to}
                     note={payment.note}
                     proofUrl={payment.proof_url}
+                    paymentKind={payment.payment_kind}
+                    payoutRate={payment.payout_rate}
+                    resignationPolicyDeduction={payment.resignation_policy_deduction}
+                    manualDeduction={payment.manual_deduction}
                     slipHref={`/app/payslip/${payment.id}`}
                   />
                 ))}

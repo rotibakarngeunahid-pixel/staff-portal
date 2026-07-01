@@ -35,6 +35,11 @@ export type PayslipData = {
     date_from: string | null;
     date_to: string | null;
     proof_url: string | null;
+    payment_kind?: "regular" | "final_resignation";
+    payout_rate?: number;
+    resignation_policy_deduction?: number;
+    manual_deduction?: number;
+    net_transfer_amount?: number;
   };
   staff: {
     name: string;
@@ -130,9 +135,13 @@ export function PayslipDocument({
   const bonusNote = payment.bonus_note?.trim() || null;
   const deduction = summary.thisPaymentDeduction || payment.deduction || 0;
   const deductionNote = payment.deduction_note?.trim() || null;
-  const hasAdjustment = bonus > 0 || deduction > 0;
+  const isFinalResignation = payment.payment_kind === "final_resignation";
+  const hasAdjustment = !isFinalResignation && (bonus > 0 || deduction > 0);
   // Total yang benar-benar diterima pada transfer ini = gaji shift + bonus − potongan.
-  const thisPaymentGross = summary.thisPaymentAmount + bonus - deduction;
+  const thisPaymentGross = payment.net_transfer_amount ?? (summary.thisPaymentAmount + bonus - deduction);
+  const payoutRatePercent = Math.round((payment.payout_rate ?? 1) * 100);
+  const resignationPolicyDeduction = payment.resignation_policy_deduction ?? 0;
+  const manualDeductionAmount = payment.manual_deduction ?? (isFinalResignation ? Math.max(0, deduction - resignationPolicyDeduction) : 0);
   const denseRows = shifts.length >= 20;
   const font = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
   const grid = "95px 76px 112px minmax(0,1fr)";
@@ -504,6 +513,48 @@ export function PayslipDocument({
           )}
         </div>
       </Sect>
+
+      {isFinalResignation && (
+        <Sect>
+          <SecLabel>Rincian Payroll Final Resign</SecLabel>
+          <div
+            style={{
+              background: "#FFFFFF",
+              borderRadius: 11,
+              overflow: "hidden",
+              border: "1.5px solid #E9CDB9",
+            }}
+          >
+            <BreakRow label="Gaji final eligible" value={rupiah(summary.thisPaymentAmount)} />
+            <BreakRow label="Payout rate" value={`${payoutRatePercent}%`} borderTop />
+            {resignationPolicyDeduction > 0 && (
+              <BreakRow
+                label="Potongan resign tidak sesuai prosedur"
+                value={`− ${rupiah(resignationPolicyDeduction)}`}
+                tone="deduction"
+                borderTop
+              />
+            )}
+            {manualDeductionAmount > 0 && (
+              <BreakRow
+                label={deductionNote ? `Potongan manual — ${deductionNote}` : "Potongan manual"}
+                value={`− ${rupiah(manualDeductionAmount)}`}
+                tone="deduction"
+                borderTop
+              />
+            )}
+            {bonus > 0 && (
+              <BreakRow
+                label={bonusNote ? `Bonus — ${bonusNote}` : "Bonus"}
+                value={`+ ${rupiah(bonus)}`}
+                tone="bonus"
+                borderTop
+              />
+            )}
+            <BreakRow label="Total diterima" value={rupiah(thisPaymentGross)} tone="total" borderTop />
+          </div>
+        </Sect>
+      )}
 
       {hasAdjustment && (
         <Sect>

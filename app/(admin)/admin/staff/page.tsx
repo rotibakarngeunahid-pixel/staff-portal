@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { AlertTriangle, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
@@ -14,6 +15,7 @@ type Staff = {
   active: boolean;
   phone: string | null;
   deleted_at?: string | null;
+  employment_status?: "active" | "resigning" | "resigned" | "inactive" | "archived";
 };
 type Outlet = { id: string; name: string; active?: boolean };
 
@@ -476,6 +478,15 @@ export default function AdminStaffPage() {
                       <span className={`status-pill ${row.active ? "status-ok" : "status-danger"}`}>
                         {row.active ? "Aktif" : "Nonaktif"}
                       </span>
+                      {row.employment_status === "resigning" || row.employment_status === "resigned" ? (
+                        <Link
+                          href={`/admin/resignations?staffId=${row.id}`}
+                          className="status-pill status-warn"
+                          style={{ marginLeft: 6, textDecoration: "none" }}
+                        >
+                          {row.employment_status === "resigning" ? "Resigning" : "Resigned"}
+                        </Link>
+                      ) : null}
                     </td>
                     <td data-label="Aksi">
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
