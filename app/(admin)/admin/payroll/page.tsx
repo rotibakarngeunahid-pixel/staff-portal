@@ -447,23 +447,27 @@ export default function AdminPayrollPage() {
 
             {isResignCase ? (
               <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 16px", maxWidth: 480 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
-                  <div>
-                    <label className="label">Persentase Gaji Dibayar (%)<span style={{ color: "var(--danger)" }}> *</span></label>
-                    <input
-                      className="field"
-                      type="number"
-                      min={0}
-                      max={100}
-                      step="1"
-                      placeholder="20"
-                      value={resignPercentInput}
-                      onChange={(e) => setResignPercentInput(e.target.value)}
-                    />
+                <div style={{ marginBottom: 12 }}>
+                  <label className="label">Persentase Gaji Dibayar (%)<span style={{ color: "var(--danger)" }}> *</span></label>
+                  <input
+                    className="field"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="1"
+                    placeholder="20"
+                    value={resignPercentInput}
+                    onChange={(e) => setResignPercentInput(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                  <div style={{ background: "#fff", borderRadius: 10, padding: "10px 12px", border: "1px solid var(--danger-border)" }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", margin: 0 }}>Potongan</p>
+                    <p style={{ fontSize: 18, fontWeight: 900, color: "var(--danger)", margin: "4px 0 0" }}>{rupiah(resignDeduction)}</p>
                   </div>
-                  <div>
-                    <label className="label">Potongan Otomatis</label>
-                    <p style={{ fontSize: 16, fontWeight: 900, color: "var(--danger)", margin: "9px 0 0" }}>{rupiah(resignDeduction)}</p>
+                  <div style={{ background: "#fff", borderRadius: 10, padding: "10px 12px", border: "1px solid var(--success-border)" }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", margin: 0 }}>Yang Ditransfer</p>
+                    <p style={{ fontSize: 18, fontWeight: 900, color: "var(--success)", margin: "4px 0 0" }}>{rupiah(Math.max(0, transferShiftAmount - resignDeduction))}</p>
                   </div>
                 </div>
                 <label className="label">Alasan<span style={{ color: "var(--danger)" }}> *</span></label>
@@ -475,7 +479,7 @@ export default function AdminPayrollPage() {
                   onChange={(e) => setResignReason(e.target.value)}
                 />
                 <p className="payroll-hint" style={{ marginTop: 8 }}>
-                  Gaji ditransfer = {resignPercent}% × {rupiah(transferShiftAmount)} = {rupiah(Math.max(0, transferShiftAmount - resignDeduction))}. Alasan ini akan tampil di slip gaji & riwayat staff.
+                  Dari sisa gaji {rupiah(transferShiftAmount)}, dibayar {resignPercent}% = {rupiah(Math.max(0, transferShiftAmount - resignDeduction))}. Alasan ini akan tampil di slip gaji & riwayat staff.
                 </p>
               </div>
             ) : (
