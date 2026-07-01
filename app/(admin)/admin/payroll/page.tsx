@@ -61,6 +61,9 @@ export default function AdminPayrollPage() {
   const [bonusNote, setBonusNote] = useState("");
   const [deductionInput, setDeductionInput] = useState("");
   const [deductionNote, setDeductionNote] = useState("");
+  const [isResignCase, setIsResignCase] = useState(false);
+  const [resignPercentInput, setResignPercentInput] = useState("");
+  const [resignReason, setResignReason] = useState("");
   const [note, setNote] = useState("");
   const [proof, setProof] = useState<string>("");
   const [proofName, setProofName] = useState("");
@@ -97,6 +100,9 @@ export default function AdminPayrollPage() {
     setBonusNote("");
     setDeductionInput("");
     setDeductionNote("");
+    setIsResignCase(false);
+    setResignPercentInput("");
+    setResignReason("");
   }, [selected, payMode]);
 
   const current = useMemo(() => payroll.find((item) => item.id === selected) || null, [payroll, selected]);
@@ -122,7 +128,6 @@ export default function AdminPayrollPage() {
   const payments = current?.payments || [];
   const payAmount = Number(amountInput) || 0;
   const bonusAmount = Math.max(0, Number(bonusInput) || 0);
-  const deductionAmount = Math.max(0, Number(deductionInput) || 0);
 
   const previewAllocation = useMemo(() => {
     if (!unpaid.length) return null;
@@ -138,6 +143,18 @@ export default function AdminPayrollPage() {
 
   // Potongan tidak boleh melebihi total yang ditransfer (gaji shift + bonus).
   const transferShiftAmount = payMode === "amount" ? payAmount : (previewAllocation?.totalCovered ?? 0);
+
+  // Resign tidak sesuai prosedur: admin masukkan persentase gaji yang tetap
+  // dibayar, sisanya otomatis jadi potongan (mis. 200rb x 20% = 40rb dibayar,
+  // 160rb dipotong). Menggantikan input potongan manual selama checkbox aktif.
+  const resignPercent = Math.max(0, Math.min(100, Number(resignPercentInput) || 0));
+  const resignDeduction = isResignCase ? Math.round(transferShiftAmount * (1 - resignPercent / 100)) : 0;
+  const resignDeductionNote = isResignCase
+    ? `Resign tidak sesuai prosedur (dibayar ${resignPercent}%)${resignReason.trim() ? ` — ${resignReason.trim()}` : ""}`
+    : "";
+
+  const deductionAmount = isResignCase ? resignDeduction : Math.max(0, Number(deductionInput) || 0);
+  const effectiveDeductionNote = isResignCase ? resignDeductionNote : deductionNote;
   const maxDeduction = transferShiftAmount + bonusAmount;
   const deductionExceeds = deductionAmount > maxDeduction;
 
@@ -189,16 +206,29 @@ export default function AdminPayrollPage() {
       setMsgType("err");
       return;
     }
-    const rawDeduction = Number(deductionInput);
-    if (deductionInput.trim() && (!Number.isFinite(rawDeduction) || rawDeduction < 0)) {
-      setMessage("Potongan tidak valid. Masukkan angka 0 atau lebih.");
-      setMsgType("err");
-      return;
-    }
-    if (deductionInput.trim() && !Number.isInteger(rawDeduction)) {
-      setMessage("Potongan harus berupa angka bulat (rupiah tanpa desimal).");
-      setMsgType("err");
-      return;
+    if (isResignCase) {
+      if (!resignPercentInput.trim() || resignPercent <= 0) {
+        setMessage("Isi persentase gaji yang tetap dibayar (lebih dari 0%).");
+        setMsgType("err");
+        return;
+      }
+      if (!resignReason.trim()) {
+        setMessage("Isi alasan resign tidak sesuai prosedur.");
+        setMsgType("err");
+        return;
+      }
+    } else {
+      const rawDeduction = Number(deductionInput);
+      if (deductionInput.trim() && (!Number.isFinite(rawDeduction) || rawDeduction < 0)) {
+        setMessage("Potongan tidak valid. Masukkan angka 0 atau lebih.");
+        setMsgType("err");
+        return;
+      }
+      if (deductionInput.trim() && !Number.isInteger(rawDeduction)) {
+        setMessage("Potongan harus berupa angka bulat (rupiah tanpa desimal).");
+        setMsgType("err");
+        return;
+      }
     }
     if (deductionExceeds) {
       setMessage("Potongan tidak boleh melebihi total (gaji shift + bonus).");
@@ -222,7 +252,7 @@ export default function AdminPayrollPage() {
       }
       if (deductionAmount > 0) {
         body.deduction = deductionAmount;
-        if (deductionNote.trim()) body.deductionNote = deductionNote.trim();
+        if (effectiveDeductionNote.trim()) body.deductionNote = effectiveDeductionNote.trim();
       }
       if (proof) body.proof = proof;
 
@@ -238,6 +268,9 @@ export default function AdminPayrollPage() {
       setBonusNote("");
       setDeductionInput("");
       setDeductionNote("");
+      setIsResignCase(false);
+      setResignPercentInput("");
+      setResignReason("");
       setNote("");
       setProof("");
       setProofName("");
@@ -391,36 +424,82 @@ export default function AdminPayrollPage() {
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <label className="label">Potongan (opsional)</label>
-            <div className="payroll-amount-input-wrap" style={{ maxWidth: 480 }}>
-              <span className="payroll-amount-prefix">Rp</span>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 10 }}>
               <input
-                className="payroll-amount-input"
-                type="number"
-                min="0"
-                max={maxDeduction || undefined}
-                step="1"
-                placeholder="0"
-                value={deductionInput}
-                onChange={(e) => setDeductionInput(e.target.value)}
+                type="checkbox"
+                checked={isResignCase}
+                onChange={(e) => setIsResignCase(e.target.checked)}
               />
-            </div>
-            <input
-              className="field"
-              style={{ maxWidth: 480, marginTop: 8 }}
-              placeholder="Alasan potongan (mis. Kasbon, ganti barang) — terlihat oleh staff"
-              value={deductionNote}
-              onChange={(e) => setDeductionNote(e.target.value)}
-              disabled={deductionAmount <= 0}
-            />
-            {deductionExceeds ? (
-              <p className="payroll-hint" style={{ marginTop: 8, color: "var(--danger)", fontWeight: 700 }}>
-                Potongan melebihi total transfer (gaji shift + bonus = {rupiah(maxDeduction)}).
-              </p>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "var(--danger)" }}>Resign Tidak Sesuai Prosedur</span>
+            </label>
+
+            {isResignCase ? (
+              <div style={{ background: "var(--danger-bg)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 16px", maxWidth: 480 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+                  <div>
+                    <label className="label">Persentase Gaji Dibayar (%)<span style={{ color: "var(--danger)" }}> *</span></label>
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="1"
+                      placeholder="20"
+                      value={resignPercentInput}
+                      onChange={(e) => setResignPercentInput(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Potongan Otomatis</label>
+                    <p style={{ fontSize: 16, fontWeight: 900, color: "var(--danger)", margin: "9px 0 0" }}>{rupiah(resignDeduction)}</p>
+                  </div>
+                </div>
+                <label className="label">Alasan<span style={{ color: "var(--danger)" }}> *</span></label>
+                <textarea
+                  className="field"
+                  rows={2}
+                  placeholder="Contoh: kontrak 2 bulan, staff keluar sebelum kontrak selesai"
+                  value={resignReason}
+                  onChange={(e) => setResignReason(e.target.value)}
+                />
+                <p className="payroll-hint" style={{ marginTop: 8 }}>
+                  Gaji ditransfer = {resignPercent}% × {rupiah(transferShiftAmount)} = {rupiah(Math.max(0, transferShiftAmount - resignDeduction))}. Alasan ini akan tampil di slip gaji & riwayat staff.
+                </p>
+              </div>
             ) : (
-              <p className="payroll-hint" style={{ marginTop: 8 }}>
-                Potongan mengurangi nominal yang ditransfer (tidak mengubah saldo gaji shift). Alasan akan tampil di slip gaji & riwayat staff.
-              </p>
+              <>
+                <label className="label">Potongan (opsional)</label>
+                <div className="payroll-amount-input-wrap" style={{ maxWidth: 480 }}>
+                  <span className="payroll-amount-prefix">Rp</span>
+                  <input
+                    className="payroll-amount-input"
+                    type="number"
+                    min="0"
+                    max={maxDeduction || undefined}
+                    step="1"
+                    placeholder="0"
+                    value={deductionInput}
+                    onChange={(e) => setDeductionInput(e.target.value)}
+                  />
+                </div>
+                <input
+                  className="field"
+                  style={{ maxWidth: 480, marginTop: 8 }}
+                  placeholder="Alasan potongan (mis. Kasbon, ganti barang) — terlihat oleh staff"
+                  value={deductionNote}
+                  onChange={(e) => setDeductionNote(e.target.value)}
+                  disabled={deductionAmount <= 0}
+                />
+                {deductionExceeds ? (
+                  <p className="payroll-hint" style={{ marginTop: 8, color: "var(--danger)", fontWeight: 700 }}>
+                    Potongan melebihi total transfer (gaji shift + bonus = {rupiah(maxDeduction)}).
+                  </p>
+                ) : (
+                  <p className="payroll-hint" style={{ marginTop: 8 }}>
+                    Potongan mengurangi nominal yang ditransfer (tidak mengubah saldo gaji shift). Alasan akan tampil di slip gaji & riwayat staff.
+                  </p>
+                )}
+              </>
             )}
           </div>
 
@@ -432,7 +511,7 @@ export default function AdminPayrollPage() {
             bonus={bonusAmount}
             bonusNote={bonusNote.trim() || undefined}
             deduction={deductionAmount}
-            deductionNote={deductionNote.trim() || undefined}
+            deductionNote={effectiveDeductionNote.trim() || undefined}
           />
 
           <div style={{ maxWidth: 480, marginBottom: 16 }}>
