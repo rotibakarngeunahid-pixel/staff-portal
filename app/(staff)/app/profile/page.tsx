@@ -1,9 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { LogOut, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import { apiFetch } from "@/lib/client-api";
 import { rupiah } from "@/lib/format";
@@ -109,20 +108,15 @@ export default function StaffProfilePage() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button
-          className="btn btn-soft"
-          style={{ fontSize: 12, padding: "9px 14px" }}
-          onClick={load}
-          disabled={loading}
-        >
-          <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
-          {loading ? "Memuat..." : "Refresh"}
-        </button>
-        <Link href="/app/resignation" className="btn btn-soft" style={{ fontSize: 12, padding: "9px 14px", color: "var(--danger)" }}>
-          <LogOut size={14} /> Ajukan Resign
-        </Link>
-      </div>
+      <button
+        className="btn btn-soft"
+        style={{ fontSize: 12, padding: "9px 14px", alignSelf: "flex-start" }}
+        onClick={load}
+        disabled={loading}
+      >
+        <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} />
+        {loading ? "Memuat..." : "Refresh"}
+      </button>
     </StaffPage>
   );
 }

@@ -290,11 +290,7 @@ export function PayrollPaymentCard({
   note,
   proofUrl,
   compact,
-  slipHref,
-  paymentKind,
-  payoutRate,
-  resignationPolicyDeduction = 0,
-  manualDeduction
+  slipHref
 }: {
   paidAt: string;
   amount: number;
@@ -308,29 +304,17 @@ export function PayrollPaymentCard({
   proofUrl: string | null;
   compact?: boolean;
   slipHref?: string;
-  paymentKind?: "regular" | "final_resignation";
-  payoutRate?: number;
-  resignationPolicyDeduction?: number;
-  manualDeduction?: number;
 }) {
   const [modalUrl, setModalUrl] = useState<string | null>(null);
   const cleanNote = note
     ?.replace(/\[LEBIH_BAYAR:\d+\]/g, "")
     .replace(/\[MODE:\w+\]/g, "")
     .trim();
-  const isFinalResignation = paymentKind === "final_resignation";
-  const payoutRatePercent = Math.round((payoutRate ?? 1) * 100);
-  const manualDeductionAmount = manualDeduction ?? (isFinalResignation ? Math.max(0, deduction - resignationPolicyDeduction) : deduction);
 
   return (
     <div className="payroll-payment-card">
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {isFinalResignation ? (
-            <span className="status-pill status-warn" style={{ marginBottom: 6, display: "inline-block" }}>
-              Gaji Final Resign — Payout {payoutRatePercent}%
-            </span>
-          ) : null}
           <p style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)", marginBottom: 3 }}>
             Transfer {formatDateID(paidAt.slice(0, 10))}
           </p>
@@ -354,28 +338,11 @@ export function PayrollPaymentCard({
               + Bonus {rupiah(bonus)}{bonusNote ? ` — ${bonusNote}` : ""}
             </p>
           )}
-          {isFinalResignation ? (
-            <>
-              {resignationPolicyDeduction > 0 && (
-                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
-                  <Wallet size={11} style={{ flexShrink: 0 }} />
-                  − Potongan resign tidak sesuai prosedur {rupiah(resignationPolicyDeduction)}
-                </p>
-              )}
-              {manualDeductionAmount > 0 && (
-                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
-                  <Wallet size={11} style={{ flexShrink: 0 }} />
-                  − Potongan manual {rupiah(manualDeductionAmount)}
-                </p>
-              )}
-            </>
-          ) : (
-            deduction > 0 && (
-              <p style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
-                <Wallet size={11} style={{ flexShrink: 0 }} />
-                − Potongan {rupiah(deduction)}{deductionNote ? ` — ${deductionNote}` : ""}
-              </p>
-            )
+          {deduction > 0 && (
+            <p style={{ fontSize: 11, fontWeight: 700, color: "var(--primary)", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
+              <Wallet size={11} style={{ flexShrink: 0 }} />
+              − Potongan {rupiah(deduction)}{deductionNote ? ` — ${deductionNote}` : ""}
+            </p>
           )}
         </div>
         {proofUrl && (

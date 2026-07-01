@@ -19,7 +19,6 @@ import {
   Settings,
   Store,
   TrendingUp,
-  UserMinus,
   UsersRound,
   X
 } from "lucide-react";
@@ -29,7 +28,6 @@ import { useSessionStore } from "@/stores/session";
 const items = [
   { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/staff", label: "Staff", icon: UsersRound },
-  { href: "/admin/resignations", label: "Resignasi", icon: UserMinus },
   { href: "/admin/outlets", label: "Outlet", icon: Store },
   { href: "/admin/attendance", label: "Absensi", icon: ClipboardList },
   { href: "/admin/attendance-import", label: "Import Absensi", icon: FileUp },

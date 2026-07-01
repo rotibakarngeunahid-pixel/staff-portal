@@ -71,10 +71,6 @@ export type ProjectionInput = {
   pendingLeaveCount: number;
   futureAssignments: AssignmentRow[];
   payments: PaymentRow[];
-  // PRD resign §13.4 — label & payout rate saat staff punya resignation case yang
-  // sudah di-approve (compliant/non_compliant/exempted) tapi belum final-paid.
-  resignationLabel?: string | null;
-  payoutRatePercent?: number;
 };
 
 export type StaffPayrollProjection = {
@@ -103,8 +99,6 @@ export type StaffPayrollProjection = {
   remainingPotentialUnits: number;
   elapsedPotentialUnits: number;
   expectedAdditionalUnits: number;
-  resignationLabel: string | null;
-  payoutRatePercent: number;
 };
 
 export type InsufficientDataProjection = {
@@ -133,8 +127,6 @@ export type InsufficientDataProjection = {
   expectedAdditionalUnits: 0;
   differenceFromPreviousPeriod: 0;
   differencePercent: 0;
-  resignationLabel: string | null;
-  payoutRatePercent: number;
 };
 
 export type AnyStaffProjection = StaffPayrollProjection | InsufficientDataProjection;
@@ -466,12 +458,7 @@ export function calculatePayrollProjection(input: ProjectionInput): StaffPayroll
     })
     .reduce((sum, p) => sum + p.amount, 0);
   const paidInPeriod = Math.max(paidFromPayments, paidFormedSalary);
-  // Resignation case yang sudah di-approve tapi belum final-paid: proyeksi cash need
-  // dikali payout rate case tsb (mis. 20% untuk non-compliant) supaya tidak menyiapkan
-  // dana seolah staff masih dibayar penuh.
-  const payoutRatePercent = input.payoutRatePercent ?? 100;
-  const payoutAdjustedProjectedNormal = Math.round((projectedNormal * payoutRatePercent) / 100);
-  const cashNeedNormal = Math.max(0, payoutAdjustedProjectedNormal - paidInPeriod);
+  const cashNeedNormal = Math.max(0, projectedNormal - paidInPeriod);
 
   return {
     staffId: input.staffId,
@@ -498,9 +485,7 @@ export function calculatePayrollProjection(input: ProjectionInput): StaffPayroll
     cashNeedNormal: Math.round(cashNeedNormal),
     remainingPotentialUnits,
     elapsedPotentialUnits,
-    expectedAdditionalUnits,
-    resignationLabel: input.resignationLabel ?? null,
-    payoutRatePercent
+    expectedAdditionalUnits
   };
 }
 
@@ -510,8 +495,7 @@ export function makeInsufficientDataProjection(
   staffId: string,
   staffName: string,
   outletId: string | null,
-  outletName: string | null,
-  resignationLabel: string | null = null
+  outletName: string | null
 ): InsufficientDataProjection {
   return {
     staffId,
@@ -538,9 +522,7 @@ export function makeInsufficientDataProjection(
     elapsedPotentialUnits: 0,
     expectedAdditionalUnits: 0,
     differenceFromPreviousPeriod: 0,
-    differencePercent: 0,
-    resignationLabel,
-    payoutRatePercent: 100
+    differencePercent: 0
   };
 }
 

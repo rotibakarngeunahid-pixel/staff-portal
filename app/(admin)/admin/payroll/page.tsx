@@ -35,10 +35,6 @@ type PaymentRecord = {
   proof_url: string | null;
   date_from: string | null;
   date_to: string | null;
-  payment_kind?: "regular" | "final_resignation";
-  payout_rate?: number;
-  resignation_policy_deduction?: number;
-  manual_deduction?: number;
 };
 
 type PayrollStaff = {
@@ -501,10 +497,6 @@ export default function AdminPayrollPage() {
                   dateTo={payment.date_to}
                   note={payment.note}
                   proofUrl={payment.proof_url}
-                  paymentKind={payment.payment_kind}
-                  payoutRate={payment.payout_rate}
-                  resignationPolicyDeduction={payment.resignation_policy_deduction}
-                  manualDeduction={payment.manual_deduction}
                   compact
                 />
                 <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end" }}>

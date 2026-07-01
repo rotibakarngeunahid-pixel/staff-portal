@@ -14,11 +14,7 @@ export const EMAIL_NOTIFICATION_TYPES = [
   "leave_rejected",
   "full_shift",
   "report_late",
-  "system_warning",
-  "resignation_submitted",
-  "resignation_decision",
-  "resignation_final_payroll_ready",
-  "resignation_payment_done"
+  "system_warning"
 ] as const;
 
 export type EmailNotificationType = (typeof EMAIL_NOTIFICATION_TYPES)[number];
@@ -34,11 +30,7 @@ export const EMAIL_NOTIFICATION_LABELS: Record<EmailNotificationType, string> = 
   leave_rejected: "Penolakan Libur",
   full_shift: "Full Shift",
   report_late: "Laporan Terlambat",
-  system_warning: "Error / Warning Sistem",
-  resignation_submitted: "Pengajuan Resign",
-  resignation_decision: "Keputusan Compliance Resign",
-  resignation_final_payroll_ready: "Payroll Final Resign Siap Direview",
-  resignation_payment_done: "Pembayaran Final Resign Selesai"
+  system_warning: "Error / Warning Sistem"
 };
 
 const BRAND_NAME = "Roti Bakar Ngeunah";
@@ -177,11 +169,6 @@ function appUrl(path = "/admin") {
   const base = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "";
   if (!base) return null;
   return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-function rupiahID(value?: number | null) {
-  const amount = Number(value || 0);
-  return `Rp${Math.round(amount).toLocaleString("id-ID")}`;
 }
 
 function formatDateID(value?: string | null) {
@@ -652,117 +639,6 @@ export function buildSystemWarningEmail(data: {
   return { subject: `[RBN] Warning Sistem - ${data.title}`, html, text: textTemplate("Warning Sistem", rows) };
 }
 
-export function buildResignationSubmittedEmail(data: {
-  staffName: string;
-  outletName: string;
-  requestedLastWorkingDate: string;
-  source: "staff_portal" | "admin_entry" | "abandonment";
-  autoComplianceStatus?: string | null;
-  reason?: string | null;
-  adminUrl?: string | null;
-}) {
-  const rows: InfoRow[] = [
-    { label: "Nama staff", value: data.staffName },
-    { label: "Outlet", value: data.outletName },
-    { label: "Tanggal terakhir kerja diajukan", value: formatDateID(data.requestedLastWorkingDate) },
-    { label: "Sumber pengajuan", value: data.source === "staff_portal" ? "Staff Portal" : data.source === "admin_entry" ? "Input Admin" : "Abandonment" },
-    { label: "Rekomendasi sistem", value: data.autoComplianceStatus || "Menunggu data lengkap", tone: data.autoComplianceStatus === "auto_non_compliant" ? "warning" : "neutral" },
-    { label: "Alasan", value: data.reason || "-" }
-  ];
-
-  const html = emailLayout({
-    title: "Pengajuan Resign Baru",
-    subtitle: `${data.staffName} mengajukan resign, perlu direview.`,
-    statusLabel: "Perlu Review",
-    statusTone: "warning",
-    sections: section("Detail Pengajuan", infoTable(rows) + actionButton(data.adminUrl || appUrl("/admin/resignations"), "Review di Admin"))
-  });
-  return { subject: `[RBN] Pengajuan Resign - ${data.staffName}`, html, text: textTemplate("Pengajuan Resign", rows) };
-}
-
-export function buildResignationDecisionEmail(data: {
-  staffName: string;
-  outletName: string;
-  finalComplianceStatus: "compliant" | "non_compliant" | "exempted";
-  approvedLastWorkingDate?: string | null;
-  payoutRatePercent: number;
-  complianceReason?: string | null;
-}) {
-  const statusLabel =
-    data.finalComplianceStatus === "compliant" ? "Sesuai Prosedur"
-    : data.finalComplianceStatus === "exempted" ? "Dikecualikan (Tetap 100%)"
-    : "Tidak Sesuai Prosedur";
-  const tone: EmailTone = data.finalComplianceStatus === "non_compliant" ? "danger" : "success";
-  const rows: InfoRow[] = [
-    { label: "Nama staff", value: data.staffName },
-    { label: "Outlet", value: data.outletName },
-    { label: "Status keputusan", value: statusLabel, tone },
-    { label: "Tanggal terakhir kerja disetujui", value: data.approvedLastWorkingDate ? formatDateID(data.approvedLastWorkingDate) : "-" },
-    { label: "Payout rate gaji terakhir", value: `${data.payoutRatePercent}%`, tone: data.payoutRatePercent < 100 ? "danger" : "success" },
-    { label: "Alasan keputusan", value: data.complianceReason || "-" }
-  ];
-
-  const html = emailLayout({
-    title: "Keputusan Compliance Resign",
-    subtitle: `Keputusan resign ${data.staffName} sudah ditetapkan: ${statusLabel}.`,
-    statusLabel,
-    statusTone: tone,
-    sections: section("Detail Keputusan", infoTable(rows))
-  });
-  return { subject: `[RBN] Keputusan Resign - ${data.staffName}`, html, text: textTemplate("Keputusan Compliance Resign", rows) };
-}
-
-export function buildResignationFinalPayrollReadyEmail(data: {
-  staffName: string;
-  outletName: string;
-  eligibleBase: number;
-  payoutRatePercent: number;
-  netTransferAmount: number;
-  adminUrl?: string | null;
-}) {
-  const rows: InfoRow[] = [
-    { label: "Nama staff", value: data.staffName },
-    { label: "Outlet", value: data.outletName },
-    { label: "Gaji final eligible", value: rupiahID(data.eligibleBase) },
-    { label: "Payout rate", value: `${data.payoutRatePercent}%` },
-    { label: "Estimasi net transfer", value: rupiahID(data.netTransferAmount), tone: "info" }
-  ];
-
-  const html = emailLayout({
-    title: "Payroll Final Resign Siap Direview",
-    subtitle: `Payroll final resign ${data.staffName} sudah bisa direview sebelum dibayar.`,
-    statusLabel: "Siap Direview",
-    statusTone: "info",
-    sections: section("Ringkasan Payroll Final", infoTable(rows) + actionButton(data.adminUrl || appUrl("/admin/resignations"), "Review Payroll Final"))
-  });
-  return { subject: `[RBN] Payroll Final Resign - ${data.staffName}`, html, text: textTemplate("Payroll Final Resign Siap Direview", rows) };
-}
-
-export function buildResignationPaymentDoneEmail(data: {
-  staffName: string;
-  outletName: string;
-  payoutRatePercent: number;
-  netTransferAmount: number;
-  paidAt: string;
-}) {
-  const rows: InfoRow[] = [
-    { label: "Nama staff", value: data.staffName },
-    { label: "Outlet", value: data.outletName },
-    { label: "Payout rate", value: `${data.payoutRatePercent}%` },
-    { label: "Total diterima (net transfer)", value: rupiahID(data.netTransferAmount), tone: "success" },
-    { label: "Tanggal dibayar", value: formatDateTimeID(data.paidAt, "Asia/Makassar", "WITA") }
-  ];
-
-  const html = emailLayout({
-    title: "Pembayaran Final Resign Selesai",
-    subtitle: `Pembayaran gaji final resign ${data.staffName} sudah dicatat.`,
-    statusLabel: "Selesai",
-    statusTone: "success",
-    sections: section("Detail Pembayaran", infoTable(rows))
-  });
-  return { subject: `[RBN] Pembayaran Final Resign - ${data.staffName}`, html, text: textTemplate("Pembayaran Final Resign Selesai", rows) };
-}
-
 export async function sendAttendanceInEmail(db: DbClient | null, data: Parameters<typeof buildAttendanceInEmail>[0] & BaseActivityData & { to?: string | null }) {
   return sendEmailNotification(db, {
     type: "attendance_in",
@@ -883,70 +759,6 @@ export async function sendFullShiftEmail(db: DbClient | null, data: Parameters<t
     activityType: "attendance",
     activityId: data.attendanceId,
     idempotencyKey: data.attendanceId ? `attendance:${data.attendanceId}:full_shift` : null,
-    staffId: data.staffId,
-    staffName: data.staffName,
-    outletId: data.outletId,
-    outletName: data.outletName,
-    payload: data
-  });
-}
-
-export async function sendResignationSubmittedEmail(db: DbClient | null, data: Parameters<typeof buildResignationSubmittedEmail>[0] & BaseActivityData & { resignationId?: string | null; to?: string | null }) {
-  return sendEmailNotification(db, {
-    type: "resignation_submitted",
-    to: data.to,
-    template: buildResignationSubmittedEmail(data),
-    activityType: "resignation",
-    activityId: data.resignationId,
-    idempotencyKey: data.resignationId ? `resignation:${data.resignationId}:submitted` : null,
-    staffId: data.staffId,
-    staffName: data.staffName,
-    outletId: data.outletId,
-    outletName: data.outletName,
-    payload: data
-  });
-}
-
-export async function sendResignationDecisionEmail(db: DbClient | null, data: Parameters<typeof buildResignationDecisionEmail>[0] & BaseActivityData & { resignationId?: string | null; to?: string | null }) {
-  return sendEmailNotification(db, {
-    type: "resignation_decision",
-    to: data.to,
-    template: buildResignationDecisionEmail(data),
-    activityType: "resignation",
-    activityId: data.resignationId,
-    idempotencyKey: data.resignationId ? `resignation:${data.resignationId}:decision:${data.finalComplianceStatus}` : null,
-    staffId: data.staffId,
-    staffName: data.staffName,
-    outletId: data.outletId,
-    outletName: data.outletName,
-    payload: data
-  });
-}
-
-export async function sendResignationFinalPayrollReadyEmail(db: DbClient | null, data: Parameters<typeof buildResignationFinalPayrollReadyEmail>[0] & BaseActivityData & { resignationId?: string | null; to?: string | null }) {
-  return sendEmailNotification(db, {
-    type: "resignation_final_payroll_ready",
-    to: data.to,
-    template: buildResignationFinalPayrollReadyEmail(data),
-    activityType: "resignation",
-    activityId: data.resignationId,
-    idempotencyKey: data.resignationId ? `resignation:${data.resignationId}:final_payroll_ready` : null,
-    staffId: data.staffId,
-    staffName: data.staffName,
-    outletId: data.outletId,
-    outletName: data.outletName,
-    payload: data
-  });
-}
-
-export async function sendResignationPaymentDoneEmail(db: DbClient | null, data: Parameters<typeof buildResignationPaymentDoneEmail>[0] & BaseActivityData & { resignationId?: string | null; to?: string | null }) {
-  return sendEmailNotification(db, {
-    type: "resignation_payment_done",
-    to: data.to,
-    template: buildResignationPaymentDoneEmail(data),
-    activityType: "resignation",
-    activityId: data.resignationId,
-    idempotencyKey: data.resignationId ? `resignation:${data.resignationId}:payment_done` : null,
     staffId: data.staffId,
     staffName: data.staffName,
     outletId: data.outletId,

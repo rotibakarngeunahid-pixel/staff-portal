@@ -39,10 +39,6 @@ import {
   sendLeaveDecisionEmail,
   sendLeaveRequestEmail,
   sendOpeningCombinedEmail,
-  sendResignationDecisionEmail,
-  sendResignationFinalPayrollReadyEmail,
-  sendResignationPaymentDoneEmail,
-  sendResignationSubmittedEmail,
   sendTestEmailNotification
 } from "@/lib/email";
 import {
@@ -71,20 +67,6 @@ import {
   resolvePayrollPeriod,
   summarizeAttendancePeriod
 } from "@/lib/payroll-projection";
-import {
-  ACTIVE_RESIGNATION_STATUSES,
-  calculateFinalPayroll,
-  calculateNoticeGivenDays,
-  computeAutoComplianceStatus,
-  DECIDED_RESIGNATION_STATUSES,
-  isActiveResignationStatus,
-  resignationStatusLabel,
-  resolveEffectiveResignDate,
-  resolveNoticeStartDate,
-  resolvePayoutRate,
-  resolveRequiredNoticeDays
-} from "@/lib/resignation";
-import type { FinalComplianceStatus, ResignationCase, ResignationCaseStatus } from "@/types/domain";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -646,10 +628,6 @@ function stringBody(body: Body, key: string, fallback = "") {
   return String(value).trim();
 }
 
-function boolBody(body: Body, key: string): boolean {
-  return body[key] === true || body[key] === "true";
-}
-
 // BARU (face detection gate): nilai status verifikasi wajah yang valid.
 const FACE_VERIFICATION_STATUSES = new Set([
   "passed",
@@ -734,9 +712,6 @@ async function dispatch(request: NextRequest, context: RouteContext) {
     if (request.method === "GET" && path === "/reports/inventory-status") return await staffInventoryStatus(db, request);
     if (request.method === "GET" && path === "/staff/payroll") return await staffPayroll(db, request);
     if (request.method === "GET" && path === "/staff/profile") return await staffProfile(db, request);
-    if (request.method === "GET" && path === "/staff/resignation") return await staffResignation(db, request);
-    if (request.method === "POST" && path === "/staff/resignation") return await staffSubmitResignation(db, request, body);
-    if (request.method === "POST" && path === "/staff/resignation/withdraw") return await staffWithdrawResignation(db, request, body);
     if (request.method === "GET" && path === "/schedule/weekly") return await staffWeeklySchedule(db, request, body);
     if (request.method === "POST" && path === "/schedule/claim") return await claimShift(db, request, body);
     if (request.method === "POST" && path === "/schedule/cancel") return await cancelShift(db, request, body);
@@ -1467,15 +1442,6 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   if (!outlet) throw new HttpError("Outlet belum ditentukan", 400, "NO_OUTLET");
 
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
-  // PRD resign — staff yang tanggal kerja terakhirnya sudah lewat tidak boleh absen lagi,
-  // walau belum dinonaktifkan penuh (payroll final belum dibayar).
-  if ((staff as any).last_working_date && date > (staff as any).last_working_date) {
-    throw new HttpError(
-      `Kamu sudah melewati tanggal kerja terakhir (${(staff as any).last_working_date}). Hubungi admin untuk proses resign.`,
-      403,
-      "STAFF_RESIGNED"
-    );
-  }
   // Use nullish coalescing to allow shift=0 (full shift) to pass through correctly
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
@@ -2323,7 +2289,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
       .order("date", { ascending: false }),
     db
       .from("payments")
-      .select("id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to,payment_kind,payout_rate,resignation_policy_deduction,manual_deduction,net_transfer_amount")
+      .select("id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to")
       .eq("staff_id", session.sub)
       .order("paid_at", { ascending: false }),
     getStaffWithOutlet(db, session.sub),
@@ -2336,18 +2302,11 @@ async function staffPayroll(db: Db, request: NextRequest) {
   const rows = attendance || [];
   const summary = buildPayrollSummary(rows, payments || []);
 
-  let resignationCase = null;
-  if (staff.resignation_case_id) {
-    const { data } = await db.from("resignation_cases").select("*").eq("id", staff.resignation_case_id).maybeSingle();
-    resignationCase = data || null;
-  }
-
   return ok({
     staff: publicStaff(staff),
     attendance: rows,
     payments: payments || [],
     summary,
-    resignationCase,
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
       shift2_start: outlet.shift2_start || null
@@ -2363,205 +2322,6 @@ async function staffProfile(db: Db, request: NextRequest) {
   const session = await requireSession(request, "staff");
   const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
   return ok({ profile: publicStaff(staff), outlet });
-}
-
-// ─── PRD resign — shared helpers (staff & admin) ───────────────────────────
-
-async function getResignationCaseOrThrow(db: Db, id: string): Promise<ResignationCase> {
-  if (!id) throw new HttpError("Resignation case ID wajib diisi", 400);
-  const { data, error } = await db.from("resignation_cases").select("*").eq("id", id).maybeSingle();
-  if (error) throw error;
-  if (!data) throw new HttpError("Kasus resign tidak ditemukan", 404, "RESIGNATION_NOT_FOUND");
-  return data as ResignationCase;
-}
-
-function isMissingResignationTable(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code || "") : "";
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return code === "42P01" || code === "PGRST205" || message.includes("resignation_cases");
-}
-
-// Fail-open jika migrasi 0017 belum diterapkan (tabel belum ada) — supaya payroll
-// reguler & proyeksi gaji (fitur existing) tidak ikut rusak saat migrasi masih tertunda.
-async function findActiveResignationCase(db: Db, staffId: string) {
-  const { data, error } = await db
-    .from("resignation_cases")
-    .select("*")
-    .eq("staff_id", staffId)
-    .in("status", ACTIVE_RESIGNATION_STATUSES)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    if (isMissingResignationTable(error)) return null;
-    throw error;
-  }
-  return data as ResignationCase | null;
-}
-
-/** Shift unpaid + counted (checkin & checkout lengkap) sampai suatu tanggal — dasar eligible base final payroll. */
-async function getResignationEligibleAttendance(db: Db, staffId: string, uptoDate: string) {
-  const { data, error } = await db
-    .from("attendance")
-    .select("id,date,shift,checkin_time,checkout_time,final_salary,paid_status")
-    .eq("staff_id", staffId)
-    .eq("paid_status", false)
-    .lte("date", uptoDate)
-    .order("date", { ascending: true })
-    .order("shift", { ascending: true });
-  if (error) throw error;
-  const rows = data || [];
-  const counted = rows.filter(isShiftCounted);
-  const excluded = rows
-    .filter((row: any) => !isShiftCounted(row))
-    .map((row: any) => ({ id: row.id, date: row.date, shift: row.shift, reason: "Shift tidak lengkap (belum absen masuk/keluar)" }));
-  const eligibleBase = counted.reduce((sum: number, row: any) => sum + normalizeCurrency(row.final_salary), 0);
-  return { counted, excluded, eligibleBase };
-}
-
-/** Batalkan jadwal/assignment/libur staff yang jatuh SETELAH tanggal kerja terakhir (PRD test §12.13). */
-async function cancelFutureScheduleForStaff(db: Db, staffId: string, afterDate: string, reason: string) {
-  const nowIso = new Date().toISOString();
-  await db.from("shift_schedule").update({ staff_id: null, staff_name: null, status: "open" }).eq("staff_id", staffId).gt("date", afterDate);
-  await db
-    .from("staff_shift_assignments")
-    .update({ status: "cancelled", cancelled_at: nowIso, cancel_reason: reason, updated_at: nowIso })
-    .eq("staff_id", staffId)
-    .gt("date", afterDate)
-    .in("status", ["confirmed", "admin_override", "auto_cover"]);
-  await db
-    .from("staff_dayoff")
-    .update({ status: "cancelled", cancelled_at: nowIso, cancel_reason: reason })
-    .eq("staff_id", staffId)
-    .eq("status", "active")
-    .gt("date", afterDate);
-}
-
-function resignationComplianceOverride(caseRow: ResignationCase, finalStatus: string): boolean {
-  if (finalStatus === "exempted") return true;
-  if (caseRow.auto_compliance_status === "auto_compliant") return finalStatus !== "compliant";
-  if (caseRow.auto_compliance_status === "auto_non_compliant") return finalStatus !== "non_compliant";
-  return true; // needs_review atau belum ada rekomendasi -> selalu dianggap keputusan manual
-}
-
-// ─── PRD resign — staff endpoints ──────────────────────────────────────────
-
-async function staffResignation(db: Db, request: NextRequest) {
-  const session = await requireSession(request, "staff");
-  const { data, error } = await db
-    .from("resignation_cases")
-    .select("*")
-    .eq("staff_id", session.sub)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return ok({ resignationCase: data || null });
-}
-
-async function staffSubmitResignation(db: Db, request: NextRequest, body: Body) {
-  const session = await requireSession(request, "staff");
-  const { staff, outlet } = await getStaffWithOutlet(db, session.sub);
-
-  const requestedLastWorkingDate = stringBody(body, "requestedLastWorkingDate");
-  const reason = stringBody(body, "reason");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedLastWorkingDate)) {
-    throw new HttpError("Tanggal terakhir kerja wajib diisi dengan format yang benar", 400, "VALIDATION_ERROR");
-  }
-  if (!reason) throw new HttpError("Alasan resign wajib diisi", 400, "VALIDATION_ERROR");
-
-  const today = todayJakarta();
-  if (requestedLastWorkingDate < today) {
-    throw new HttpError("Tanggal terakhir kerja tidak boleh sebelum hari ini", 400, "VALIDATION_ERROR");
-  }
-
-  const existingActive = await findActiveResignationCase(db, staff.id);
-  if (existingActive) {
-    throw new HttpError("Kamu masih punya pengajuan resign yang sedang berjalan", 409, "ACTIVE_RESIGNATION_EXISTS");
-  }
-
-  const writtenNoticeReceived = boolBody(body, "writtenNoticeReceived");
-  const isProbation = boolBody(body, "isProbation");
-  const letterUrl = body.letterFile ? await uploadImage(db, `resignations/letters/${crypto.randomUUID()}.jpg`, body.letterFile) : "";
-
-  const cfg = await configMap(db);
-  const { requiredDays } = resolveRequiredNoticeDays(cfg, isProbation);
-  const noticeGivenDays = calculateNoticeGivenDays(today, requestedLastWorkingDate);
-  const hasWrittenNotice = writtenNoticeReceived || Boolean(letterUrl);
-  const autoComplianceStatus = computeAutoComplianceStatus({
-    hasCompleteDates: true,
-    hasWrittenNotice,
-    noticeGivenDays,
-    requiredNoticeDays: requiredDays
-  });
-
-  const nowIso = new Date().toISOString();
-  const { data: created, error } = await db
-    .from("resignation_cases")
-    .insert({
-      staff_id: staff.id,
-      staff_name: staff.name,
-      outlet_id: outlet?.id || null,
-      outlet_name: outlet?.name || null,
-      source: "staff_portal",
-      status: "submitted",
-      submitted_at: nowIso,
-      requested_last_working_date: requestedLastWorkingDate,
-      notice_required_days: requiredDays,
-      notice_given_days: noticeGivenDays,
-      written_notice_received: hasWrittenNotice,
-      resignation_letter_url: letterUrl || null,
-      reason,
-      auto_compliance_status: autoComplianceStatus,
-      created_by: staff.name
-    })
-    .select("*")
-    .single();
-  if (error) throw error;
-
-  await db.from("staff").update({ employment_status: "resigning", resignation_case_id: created.id }).eq("id", staff.id);
-  await logAudit(db, "staff_resignation_submitted", staff.name, { caseId: created.id, requestedLastWorkingDate, autoComplianceStatus });
-
-  await notifySafely(db, "resignation_submitted_email_failed", staff.name, () =>
-    sendResignationSubmittedEmail(db, {
-      resignationId: created.id,
-      staffId: staff.id,
-      staffName: staff.name,
-      outletId: outlet?.id || null,
-      outletName: outlet?.name || "-",
-      requestedLastWorkingDate,
-      source: "staff_portal",
-      autoComplianceStatus,
-      reason,
-      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
-    })
-  );
-
-  return ok({ resignationCase: created });
-}
-
-async function staffWithdrawResignation(db: Db, request: NextRequest, body: Body) {
-  const session = await requireSession(request, "staff");
-  const caseId = stringBody(body, "resignationCaseId");
-  const existing = await findActiveResignationCase(db, session.sub);
-  if (!existing || (caseId && existing.id !== caseId) || !["draft", "submitted", "under_review"].includes(existing.status)) {
-    throw new HttpError("Tidak ada pengajuan resign yang bisa ditarik", 400, "NO_WITHDRAWABLE_CASE");
-  }
-
-  const { error } = await db
-    .from("resignation_cases")
-    .update({ status: "withdrawn", updated_at: new Date().toISOString() })
-    .eq("id", existing.id);
-  if (error) throw error;
-
-  await db
-    .from("staff")
-    .update({ employment_status: "active", resignation_case_id: null })
-    .eq("id", session.sub)
-    .eq("resignation_case_id", existing.id);
-
-  await logAudit(db, "staff_resignation_withdrawn", existing.staff_name, { caseId: existing.id });
-  return ok({ withdrawn: true });
 }
 
 async function staffWeeklySchedule(db: Db, request: NextRequest, body: Body) {
@@ -2935,12 +2695,6 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/early-checkout") return adminEarlyCheckout(db, method, body);
   if (path === "/admin/inventory-override") return adminInventoryOverride(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
-  if (path === "/admin/resignations/review" && method === "POST") return adminReviewResignation(db, body);
-  if (path === "/admin/resignations/final-payroll-preview" && method === "POST") return adminResignationFinalPayrollPreview(db, body);
-  if (path === "/admin/resignations/final-payroll-approve" && method === "POST") return adminResignationFinalPayrollApprove(db, body);
-  if (path === "/admin/resignations/final-payroll-pay" && method === "POST") return adminResignationFinalPayrollPay(db, body);
-  if (path === "/admin/resignations" && method === "PUT") return adminUpdateResignation(db, body);
-  if (path === "/admin/resignations") return adminResignations(db, method, body);
   if (path === "/admin/payroll-projection" && method === "GET") return adminPayrollProjection(db, body);
   if (path === "/admin/payroll-projection/detail" && method === "GET") return adminPayrollProjectionDetail(db, body);
   if (path === "/admin/schedule") return adminSchedule(db, method, body);
@@ -3397,15 +3151,6 @@ async function adminAttendance(db: Db, method: string, body: Body) {
     if (outletError) throw outletError;
     assertOperationalStaff(staff, "Absen manual hanya bisa dibuat untuk staff aktif.");
     assertOperationalOutlet(outletRaw, "Absen manual hanya bisa dibuat untuk outlet aktif.");
-    // PRD resign — cegah absen manual dibuat setelah tanggal kerja terakhir staff,
-    // kecuali admin eksplisit override (mis. untuk koreksi data histori).
-    if (staff.last_working_date && date > staff.last_working_date && !boolBody(body, "allowPostResignation")) {
-      throw new HttpError(
-        `Tanggal absen (${date}) melebihi tanggal kerja terakhir staff (${staff.last_working_date}). Centang override jika ini koreksi data.`,
-        400,
-        "STAFF_RESIGNED"
-      );
-    }
     const outlet = toOutlet(outletRaw);
     const checkin = body.checkin_time
       ? dateTimeUtc(date, String(body.checkin_time).slice(0, 5))
@@ -3879,7 +3624,7 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       await Promise.all([
         db.from("staff").select("id,name,active,salary_per_shift,outlet_id").order("name"),
         db.from("attendance").select("id,staff_id,date,shift,checkin_time,checkout_time,final_salary,paid_status").order("date", { ascending: false }),
-        db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to,payment_kind,payout_rate,resignation_policy_deduction,manual_deduction,net_transfer_amount").order("paid_at", { ascending: false })
+        db.from("payments").select("id,staff_id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to").order("paid_at", { ascending: false })
       ]);
     if (staffError) throw staffError;
     if (attError) throw attError;
@@ -3909,18 +3654,6 @@ async function adminPayroll(db: Db, method: string, body: Body) {
 
     const { data: staff, error: staffError } = await db.from("staff").select("id,name").eq("id", staffId).single();
     if (staffError) throw staffError;
-
-    // PRD resign — staff dengan resignation case yang sedang berjalan harus dibayar
-    // lewat alur final payroll resign, bukan payroll reguler, supaya potongan resign
-    // tidak pernah "kelewat" dan payroll report tetap benar (gross vs net).
-    const activeResignation = await findActiveResignationCase(db, staffId);
-    if (activeResignation && activeResignation.status !== "draft") {
-      throw new HttpError(
-        "Staff ini punya kasus resign yang sedang berjalan. Proses gaji terakhir lewat menu Resignasi.",
-        409,
-        "STAFF_HAS_PENDING_RESIGNATION_PAYROLL"
-      );
-    }
 
     const { data: unpaidRows, error: rowsError } = await db
       .from("attendance")
@@ -4109,432 +3842,6 @@ async function adminPayroll(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method payroll tidak valid", 405);
-}
-
-// ─── PRD resign — admin endpoints ──────────────────────────────────────────
-
-async function adminResignations(db: Db, method: string, body: Body) {
-  if (method === "GET") {
-    let query = db.from("resignation_cases").select("*").order("created_at", { ascending: false });
-    if (stringBody(body, "resignationCaseId")) query = query.eq("id", stringBody(body, "resignationCaseId"));
-    if (stringBody(body, "status")) query = query.eq("status", stringBody(body, "status"));
-    if (stringBody(body, "outletId")) query = query.eq("outlet_id", stringBody(body, "outletId"));
-    if (stringBody(body, "staffId")) query = query.eq("staff_id", stringBody(body, "staffId"));
-    if (stringBody(body, "finalComplianceStatus")) query = query.eq("final_compliance_status", stringBody(body, "finalComplianceStatus"));
-    if (stringBody(body, "dateFrom")) query = query.gte("created_at", stringBody(body, "dateFrom"));
-    if (stringBody(body, "dateTo")) query = query.lte("created_at", stringBody(body, "dateTo"));
-    const { data, error } = await query;
-    if (error) throw error;
-    return ok({ resignationCases: data || [] });
-  }
-
-  if (method === "POST") {
-    const staffId = stringBody(body, "staffId");
-    if (!staffId) throw new HttpError("Staff wajib dipilih", 400, "VALIDATION_ERROR");
-    const requestedLastWorkingDate = stringBody(body, "requestedLastWorkingDate");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedLastWorkingDate)) {
-      throw new HttpError("Tanggal terakhir kerja wajib diisi dengan format yang benar", 400, "VALIDATION_ERROR");
-    }
-    const reason = stringBody(body, "reason");
-    if (!reason) throw new HttpError("Alasan resign wajib diisi", 400, "VALIDATION_ERROR");
-    const source = stringBody(body, "source", "admin_entry");
-    if (!["admin_entry", "abandonment"].includes(source)) {
-      throw new HttpError("Sumber pengajuan tidak valid", 400, "VALIDATION_ERROR");
-    }
-
-    const { data: staff, error: staffError } = await db.from("staff").select("*, outlets(id,name)").eq("id", staffId).maybeSingle();
-    if (staffError) throw staffError;
-    if (!staff || staff.deleted_at) throw new HttpError("Staff tidak ditemukan atau sudah diarsipkan", 404, "STAFF_NOT_FOUND");
-
-    const existingActive = await findActiveResignationCase(db, staffId);
-    if (existingActive) {
-      throw new HttpError("Staff ini masih punya pengajuan resign yang sedang berjalan", 409, "ACTIVE_RESIGNATION_EXISTS");
-    }
-
-    const writtenNoticeReceived = boolBody(body, "writtenNoticeReceived");
-    const isProbation = boolBody(body, "isProbation");
-    const letterReceivedAt = stringBody(body, "letterReceivedAt") || null;
-    const letterUrl = body.letterFile ? await uploadImage(db, `resignations/letters/${crypto.randomUUID()}.jpg`, body.letterFile) : "";
-
-    const cfg = await configMap(db);
-    const { requiredDays } = resolveRequiredNoticeDays(cfg, isProbation);
-    const noticeStartDate = letterReceivedAt ? letterReceivedAt.slice(0, 10) : todayJakarta();
-    const noticeGivenDays = calculateNoticeGivenDays(noticeStartDate, requestedLastWorkingDate);
-    const hasWrittenNotice = writtenNoticeReceived || Boolean(letterUrl);
-    const autoComplianceStatus = computeAutoComplianceStatus({
-      hasCompleteDates: true,
-      hasWrittenNotice,
-      noticeGivenDays,
-      requiredNoticeDays: requiredDays
-    });
-
-    const { data: created, error } = await db
-      .from("resignation_cases")
-      .insert({
-        staff_id: staff.id,
-        staff_name: staff.name,
-        outlet_id: staff.outlet_id || null,
-        outlet_name: (staff.outlets as any)?.name || null,
-        source,
-        status: "submitted",
-        submitted_at: source === "admin_entry" ? new Date().toISOString() : null,
-        letter_received_at: letterReceivedAt,
-        requested_last_working_date: requestedLastWorkingDate,
-        notice_required_days: requiredDays,
-        notice_given_days: noticeGivenDays,
-        written_notice_received: hasWrittenNotice,
-        resignation_letter_url: letterUrl || null,
-        reason,
-        auto_compliance_status: autoComplianceStatus,
-        created_by: "Admin"
-      })
-      .select("*")
-      .single();
-    if (error) throw error;
-
-    await db.from("staff").update({ employment_status: "resigning", resignation_case_id: created.id }).eq("id", staff.id);
-    await logAudit(db, "admin_create_resignation", "Admin", { caseId: created.id, staffId: staff.id, source, autoComplianceStatus });
-
-    return ok({ resignationCase: created });
-  }
-
-  throw new HttpError("Method resignation tidak valid", 405);
-}
-
-async function adminUpdateResignation(db: Db, body: Body) {
-  const caseId = stringBody(body, "resignationCaseId") || stringBody(body, "id");
-  const existing = await getResignationCaseOrThrow(db, caseId);
-  if (["withdrawn", "cancelled", "paid"].includes(existing.status)) {
-    throw new HttpError("Kasus resign ini sudah final dan tidak bisa diedit", 400, "RESIGNATION_LOCKED");
-  }
-
-  // Admin membatalkan case karena salah input/duplikat (PRD status `cancelled`).
-  if (stringBody(body, "status") === "cancelled") {
-    const { data: cancelled, error: cancelError } = await db
-      .from("resignation_cases")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", existing.id)
-      .select("*")
-      .single();
-    if (cancelError) throw cancelError;
-    await db
-      .from("staff")
-      .update({ employment_status: "active", resignation_case_id: null })
-      .eq("id", existing.staff_id)
-      .eq("resignation_case_id", existing.id);
-    await logAudit(db, "staff_resignation_cancelled", "Admin", { caseId: existing.id });
-    return ok({ resignationCase: cancelled });
-  }
-
-  const updates: Body = {};
-  if (body.requestedLastWorkingDate !== undefined) updates.requested_last_working_date = stringBody(body, "requestedLastWorkingDate");
-  if (body.reason !== undefined) updates.reason = stringBody(body, "reason");
-  if (body.writtenNoticeReceived !== undefined) updates.written_notice_received = boolBody(body, "writtenNoticeReceived");
-  if (body.letterReceivedAt !== undefined) updates.letter_received_at = stringBody(body, "letterReceivedAt") || null;
-  if (body.letterFile) updates.resignation_letter_url = await uploadImage(db, `resignations/letters/${existing.id}.jpg`, body.letterFile);
-  if (stringBody(body, "status") === "under_review" && existing.status === "submitted") updates.status = "under_review";
-
-  if (Object.keys(updates).length === 0) throw new HttpError("Tidak ada perubahan yang dikirim", 400, "VALIDATION_ERROR");
-
-  // Recompute rekomendasi otomatis jika tanggal/kelengkapan surat berubah (PRD test §12.7).
-  const requestedLastWorkingDate = (updates.requested_last_working_date as string) || existing.requested_last_working_date;
-  const writtenNoticeReceived = updates.written_notice_received !== undefined ? Boolean(updates.written_notice_received) : existing.written_notice_received;
-  const hasWrittenNotice = writtenNoticeReceived || Boolean(updates.resignation_letter_url || existing.resignation_letter_url);
-  const noticeStartDate = resolveNoticeStartDate({
-    submitted_at: existing.submitted_at,
-    letter_received_at: (updates.letter_received_at as string) ?? existing.letter_received_at
-  });
-  if (noticeStartDate) {
-    const noticeGivenDays = calculateNoticeGivenDays(noticeStartDate, requestedLastWorkingDate);
-    updates.notice_given_days = noticeGivenDays;
-    updates.auto_compliance_status = computeAutoComplianceStatus({
-      hasCompleteDates: true,
-      hasWrittenNotice,
-      noticeGivenDays,
-      requiredNoticeDays: existing.notice_required_days
-    });
-  }
-  updates.updated_at = new Date().toISOString();
-
-  const { data: updated, error } = await db.from("resignation_cases").update(updates).eq("id", existing.id).select("*").single();
-  if (error) throw error;
-  await logAudit(db, "admin_update_resignation", "Admin", { caseId: existing.id, updates: Object.keys(updates) });
-  return ok({ resignationCase: updated });
-}
-
-async function adminReviewResignation(db: Db, body: Body) {
-  const caseId = stringBody(body, "resignationCaseId") || stringBody(body, "id");
-  const existing = await getResignationCaseOrThrow(db, caseId);
-  if (["final_payroll_approved", "paid", "withdrawn", "cancelled"].includes(existing.status)) {
-    throw new HttpError("Kasus resign ini sudah terkunci dan tidak bisa direview ulang", 400, "RESIGNATION_LOCKED");
-  }
-
-  const finalComplianceStatus = stringBody(body, "finalComplianceStatus") as FinalComplianceStatus;
-  if (!["compliant", "non_compliant", "exempted"].includes(finalComplianceStatus)) {
-    throw new HttpError("Status compliance final tidak valid", 400, "VALIDATION_ERROR");
-  }
-  const complianceReason = stringBody(body, "complianceReason") || null;
-  if (resignationComplianceOverride(existing, finalComplianceStatus) && !complianceReason) {
-    throw new HttpError("Alasan wajib diisi karena keputusan berbeda dari rekomendasi sistem", 400, "COMPLIANCE_REASON_REQUIRED");
-  }
-
-  const approvedLastWorkingDate = stringBody(body, "approvedLastWorkingDate") || existing.requested_last_working_date;
-  const noticeStartDate = resolveNoticeStartDate(existing);
-  const noticeGivenDays = noticeStartDate ? calculateNoticeGivenDays(noticeStartDate, approvedLastWorkingDate) : existing.notice_given_days;
-
-  const newStatus: ResignationCaseStatus =
-    finalComplianceStatus === "compliant" ? "approved_compliant"
-    : finalComplianceStatus === "exempted" ? "exempted"
-    : "approved_non_compliant";
-
-  const { data: updated, error } = await db
-    .from("resignation_cases")
-    .update({
-      status: newStatus,
-      final_compliance_status: finalComplianceStatus,
-      approved_last_working_date: approvedLastWorkingDate,
-      effective_resign_date: approvedLastWorkingDate,
-      notice_given_days: noticeGivenDays,
-      compliance_reason: complianceReason,
-      reviewed_by: "Admin",
-      reviewed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", existing.id)
-    .select("*")
-    .single();
-  if (error) throw error;
-
-  await db.from("staff").update({ last_working_date: approvedLastWorkingDate }).eq("id", existing.staff_id);
-  await cancelFutureScheduleForStaff(db, existing.staff_id, approvedLastWorkingDate, "Resign disetujui");
-  await logAudit(db, "admin_review_resignation", "Admin", {
-    caseId: existing.id,
-    finalComplianceStatus,
-    approvedLastWorkingDate,
-    complianceReason
-  });
-
-  const cfg = await configMap(db);
-  const payoutRate = resolvePayoutRate(finalComplianceStatus, cfg);
-  await notifySafely(db, "resignation_decision_email_failed", "Admin", () =>
-    sendResignationDecisionEmail(db, {
-      resignationId: updated.id,
-      staffId: updated.staff_id,
-      staffName: updated.staff_name,
-      outletId: updated.outlet_id,
-      outletName: updated.outlet_name || "-",
-      finalComplianceStatus,
-      approvedLastWorkingDate,
-      payoutRatePercent: Math.round(payoutRate * 100),
-      complianceReason,
-      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
-    })
-  );
-
-  return ok({ resignationCase: updated });
-}
-
-async function adminResignationFinalPayrollPreview(db: Db, body: Body) {
-  const caseId = stringBody(body, "resignationCaseId") || stringBody(body, "id");
-  const existing = await getResignationCaseOrThrow(db, caseId);
-  if (!existing.final_compliance_status) {
-    throw new HttpError("Kasus resign ini belum punya keputusan compliance final", 400, "RESIGNATION_NOT_DECIDED");
-  }
-
-  const uptoDate = existing.approved_last_working_date || existing.requested_last_working_date;
-  const { counted, excluded, eligibleBase } = await getResignationEligibleAttendance(db, existing.staff_id, uptoDate);
-
-  const cfg = await configMap(db);
-  const payoutRate = resolvePayoutRate(existing.final_compliance_status, cfg);
-  const manualDeduction = numberBody(body, "manualDeduction", 0);
-  const bonus = numberBody(body, "bonus", 0);
-  const calc = calculateFinalPayroll({ eligibleBase, payoutRate, manualDeduction, bonus });
-
-  return ok({
-    preview: true,
-    resignationCaseId: existing.id,
-    eligibleShifts: counted.map((row: any) => ({ id: row.id, date: row.date, shift: row.shift, final_salary: normalizeCurrency(row.final_salary) })),
-    excludedShifts: excluded,
-    eligibleBase: calc.eligibleBase,
-    payoutRate: calc.payoutRate,
-    payoutRatePercent: Math.round(calc.payoutRate * 100),
-    resignationPolicyDeduction: calc.resignationPolicyDeduction,
-    manualDeduction: calc.manualDeduction,
-    bonus: calc.bonus,
-    netTransferAmount: calc.netTransferAmount
-  });
-}
-
-async function adminResignationFinalPayrollApprove(db: Db, body: Body) {
-  const caseId = stringBody(body, "resignationCaseId") || stringBody(body, "id");
-  const existing = await getResignationCaseOrThrow(db, caseId);
-  if (!DECIDED_RESIGNATION_STATUSES.includes(existing.status)) {
-    throw new HttpError("Kasus resign ini belum siap untuk final payroll", 400, "RESIGNATION_NOT_DECIDED");
-  }
-  if (existing.final_payroll_payment_id) {
-    throw new HttpError("Payroll final untuk kasus ini sudah pernah dibayar", 409, "FINAL_PAYROLL_ALREADY_PAID");
-  }
-
-  const { data: updated, error } = await db
-    .from("resignation_cases")
-    .update({ status: "final_payroll_approved", updated_at: new Date().toISOString() })
-    .eq("id", existing.id)
-    .select("*")
-    .single();
-  if (error) throw error;
-
-  await logAudit(db, "admin_approve_resignation_final_payroll", "Admin", { caseId: existing.id });
-
-  const uptoDate = existing.approved_last_working_date || existing.requested_last_working_date;
-  const { eligibleBase } = await getResignationEligibleAttendance(db, existing.staff_id, uptoDate);
-  const cfg = await configMap(db);
-  const payoutRate = resolvePayoutRate(existing.final_compliance_status!, cfg);
-  const calc = calculateFinalPayroll({ eligibleBase, payoutRate });
-  await notifySafely(db, "resignation_final_payroll_ready_email_failed", "Admin", () =>
-    sendResignationFinalPayrollReadyEmail(db, {
-      resignationId: updated.id,
-      staffId: updated.staff_id,
-      staffName: updated.staff_name,
-      outletId: updated.outlet_id,
-      outletName: updated.outlet_name || "-",
-      eligibleBase: calc.eligibleBase,
-      payoutRatePercent: Math.round(calc.payoutRate * 100),
-      netTransferAmount: calc.netTransferAmount,
-      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
-    })
-  );
-
-  return ok({ resignationCase: updated });
-}
-
-async function adminResignationFinalPayrollPay(db: Db, body: Body) {
-  const caseId = stringBody(body, "resignationCaseId") || stringBody(body, "id");
-  const existing = await getResignationCaseOrThrow(db, caseId);
-  if (existing.final_payroll_payment_id || existing.status === "paid") {
-    throw new HttpError("Payroll final untuk kasus ini sudah pernah dibayar", 409, "FINAL_PAYROLL_ALREADY_PAID");
-  }
-  if (existing.status !== "final_payroll_approved") {
-    throw new HttpError("Payroll final harus disetujui terlebih dahulu sebelum dibayar", 400, "RESIGNATION_NOT_APPROVED_FOR_PAYROLL");
-  }
-
-  const uptoDate = existing.approved_last_working_date || existing.requested_last_working_date;
-  const { counted, eligibleBase } = await getResignationEligibleAttendance(db, existing.staff_id, uptoDate);
-
-  if (eligibleBase === 0 && counted.length === 0 && !boolBody(body, "confirmZero")) {
-    throw new HttpError("Gaji final Rp0. Centang konfirmasi untuk tetap memproses final payroll nol.", 400, "CONFIRM_ZERO_PAYROLL_REQUIRED");
-  }
-
-  const cfg = await configMap(db);
-  const payoutRate = resolvePayoutRate(existing.final_compliance_status!, cfg);
-  const manualDeduction = numberBody(body, "manualDeduction", 0);
-  const manualDeductionNote = stringBody(body, "manualDeductionNote") || null;
-  const bonus = numberBody(body, "bonus", 0);
-  const bonusNote = stringBody(body, "bonusNote") || null;
-  const calc = calculateFinalPayroll({ eligibleBase, payoutRate, manualDeduction, bonus });
-
-  const proofId = crypto.randomUUID();
-  const proofUrl = body.proof ? await uploadImage(db, `payments/proof/${proofId}.jpg`, body.proof) : "";
-  const note = stringBody(body, "note") || null;
-  const payoutRatePercent = Math.round(calc.payoutRate * 100);
-  const deductionNote = [
-    calc.resignationPolicyDeduction > 0 ? `Potongan resign tidak sesuai prosedur (payout ${payoutRatePercent}%): ${calc.resignationPolicyDeduction}` : "",
-    manualDeductionNote ? `Potongan manual: ${manualDeductionNote}` : ""
-  ].filter(Boolean).join(" | ") || null;
-
-  const sorted = [...counted].sort(compareAttendanceChronological);
-  const dateFrom = sorted[0]?.date || uptoDate;
-  const dateTo = sorted[sorted.length - 1]?.date || uptoDate;
-
-  const { data: payment, error } = await db
-    .from("payments")
-    .insert({
-      id: proofId,
-      staff_id: existing.staff_id,
-      staff_name: existing.staff_name,
-      amount: calc.eligibleBase,
-      bonus: calc.bonus,
-      bonus_note: bonusNote,
-      deduction: calc.resignationPolicyDeduction + calc.manualDeduction,
-      deduction_note: deductionNote,
-      date_from: dateFrom,
-      date_to: dateTo,
-      proof_url: proofUrl || null,
-      note,
-      payment_kind: "final_resignation",
-      resignation_case_id: existing.id,
-      payout_rate: calc.payoutRate,
-      resignation_policy_deduction: calc.resignationPolicyDeduction,
-      manual_deduction: calc.manualDeduction,
-      net_transfer_amount: calc.netTransferAmount
-    })
-    .select("*")
-    .single();
-  if (error) throw error;
-
-  const ids = counted.map((row: any) => row.id);
-  if (ids.length > 0) {
-    const { data: paidRows, error: updateError } = await db
-      .from("attendance")
-      .update({ paid_status: true, payment_id: payment.id })
-      .eq("staff_id", existing.staff_id)
-      .eq("paid_status", false)
-      .in("id", ids)
-      .select("id");
-    if (updateError) throw updateError;
-    if ((paidRows || []).length !== ids.length) {
-      try {
-        await db.from("payments").delete().eq("id", payment.id);
-      } catch {
-        // Payment tanpa attendance akan terlihat di audit data; konflik tetap harus dikembalikan.
-      }
-      throw new HttpError(
-        "Sebagian shift sudah dibayar oleh request lain. Muat ulang lalu proses ulang.",
-        409,
-        "PAYROLL_CONFLICT"
-      );
-    }
-  }
-
-  const { data: updatedCase, error: caseError } = await db
-    .from("resignation_cases")
-    .update({ status: "paid", final_payroll_payment_id: payment.id, updated_at: new Date().toISOString() })
-    .eq("id", existing.id)
-    .select("*")
-    .single();
-  if (caseError) throw caseError;
-
-  await db
-    .from("staff")
-    .update({ active: false, employment_status: "resigned", resigned_at: new Date().toISOString() })
-    .eq("id", existing.staff_id);
-  await cancelFutureScheduleForStaff(db, existing.staff_id, uptoDate, "Resign final dibayar");
-
-  await logAudit(db, "admin_process_resignation_payment", "Admin", {
-    caseId: existing.id,
-    staffId: existing.staff_id,
-    paymentId: payment.id,
-    eligibleBase: calc.eligibleBase,
-    payoutRate: calc.payoutRate,
-    resignationPolicyDeduction: calc.resignationPolicyDeduction,
-    manualDeduction: calc.manualDeduction,
-    netTransferAmount: calc.netTransferAmount
-  });
-
-  await notifySafely(db, "resignation_payment_done_email_failed", "Admin", () =>
-    sendResignationPaymentDoneEmail(db, {
-      resignationId: updatedCase.id,
-      staffId: existing.staff_id,
-      staffName: existing.staff_name,
-      outletId: existing.outlet_id,
-      outletName: existing.outlet_name || "-",
-      payoutRatePercent,
-      netTransferAmount: calc.netTransferAmount,
-      paidAt: payment.paid_at,
-      to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
-    })
-  );
-
-  return ok({ payment, resignationCase: updatedCase });
 }
 
 async function activeAssignmentsForShift(db: Db, outletId: string, date: string, shift: 1 | 2) {
@@ -6076,13 +5383,8 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
     { data: allPayments, error: payError },
     { data: allDayoffs, error: dayoffError },
     { data: allLeaves, error: leaveError },
-    { data: allAssignments, error: assError },
-    { data: pendingResignations, error: resignError },
-    cfg
+    { data: allAssignments, error: assError }
   ] = await Promise.all([
-    // Query resignation_cases dibungkus try/catch di bawah (lihat resignError handling) —
-    // fail-open jika migrasi 0017 belum diterapkan supaya proyeksi gaji (fitur existing)
-    // tidak ikut rusak saat migrasi masih tertunda.
     db.from("attendance")
       .select("staff_id,date,checkin_time,checkout_time,status,final_salary,paid_status,flags")
       .gte("date", rangeStart)
@@ -6109,13 +5411,7 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
       .in("status", ["confirmed", "admin_override", "auto_cover", "locked"])
       .gt("date", asOfDate)
       .lte("date", rangeEnd)
-      .in("staff_id", allStaff.map((s: any) => s.id)),
-    // PRD resign §13.4 — case yang sudah punya final decision tapi belum final-paid.
-    db.from("resignation_cases")
-      .select("staff_id,status,final_compliance_status")
-      .in("status", ["approved_compliant", "approved_non_compliant", "exempted", "final_payroll_approved"])
-      .in("staff_id", allStaff.map((s: any) => s.id)),
-    configMap(db)
+      .in("staff_id", allStaff.map((s: any) => s.id))
   ]);
 
   if (attError) throw attError;
@@ -6123,11 +5419,6 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
   if (dayoffError) throw dayoffError;
   if (leaveError) throw leaveError;
   if (assError) throw assError;
-  if (resignError && !isMissingResignationTable(resignError)) throw resignError;
-
-  const resignationByStaffId = new Map<string, { status: string; final_compliance_status: string | null }>(
-    (resignError ? [] : (pendingResignations || [])).map((r: any) => [r.staff_id, r])
-  );
 
   const projections = allStaff.map((staff: any) => {
     const staffAtt = (allAttendance || []).filter((r: any) => r.staff_id === staff.id);
@@ -6135,19 +5426,12 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
       ? staffAtt.reduce((min: string, r: any) => r.date < min ? r.date : min, staffAtt[0].date as string)
       : null;
 
-    const resignationCase = resignationByStaffId.get(staff.id);
-    const resignationLabel = resignationCase ? "Resigning (menunggu payroll final)" : null;
-    const payoutRatePercent = resignationCase
-      ? Math.round(resolvePayoutRate((resignationCase.final_compliance_status as any) || "compliant", cfg) * 100)
-      : 100;
-
     if (!firstAttendanceDate) {
       return makeInsufficientDataProjection(
         staff.id,
         staff.name,
         staff.outlet_id ?? null,
-        (staff.outlets as any)?.name ?? null,
-        resignationLabel
+        (staff.outlets as any)?.name ?? null
       );
     }
 
@@ -6202,9 +5486,7 @@ async function buildProjectionData(db: Db, asOfDate: string, filterStaffId?: str
       blockedDaysFuture,
       pendingLeaveCount,
       futureAssignments,
-      payments,
-      resignationLabel,
-      payoutRatePercent
+      payments
     });
   });
 
@@ -6407,12 +5689,6 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
 
   const outlet = (staffRow as any)?.outlets ?? null;
 
-  let resignationCase = null;
-  if (payment.payment_kind === "final_resignation" && payment.resignation_case_id) {
-    const { data } = await db.from("resignation_cases").select("*").eq("id", payment.resignation_case_id).maybeSingle();
-    resignationCase = data || null;
-  }
-
   return ok({
     payment: {
       id: payment.id,
@@ -6425,16 +5701,8 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
       note: payment.note || null,
       date_from: payment.date_from || null,
       date_to: payment.date_to || null,
-      proof_url: payment.proof_url || null,
-      payment_kind: payment.payment_kind || "regular",
-      payout_rate: payment.payout_rate !== undefined && payment.payout_rate !== null ? Number(payment.payout_rate) : 1,
-      resignation_policy_deduction: normalizeCurrency(payment.resignation_policy_deduction),
-      manual_deduction: normalizeCurrency(payment.manual_deduction),
-      net_transfer_amount: payment.net_transfer_amount !== undefined && payment.net_transfer_amount !== null
-        ? normalizeCurrency(payment.net_transfer_amount)
-        : normalizeCurrency(payment.amount) + normalizeCurrency(payment.bonus) - normalizeCurrency(payment.deduction)
+      proof_url: payment.proof_url || null
     },
-    resignationCase,
     staff: {
       name: payment.staff_name || staffRow?.name || "",
       salary_per_shift: normalizeCurrency((staffRow as any)?.salary_per_shift ?? 0),
