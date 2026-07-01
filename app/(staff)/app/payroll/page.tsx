@@ -273,6 +273,7 @@ export default function StaffPayrollPage() {
                     note={payment.note}
                     proofUrl={payment.proof_url}
                     slipHref={`/app/payslip/${payment.id}`}
+                    showNetAmount
                   />
                 ))}
               </div>

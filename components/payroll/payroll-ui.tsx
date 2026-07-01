@@ -290,7 +290,8 @@ export function PayrollPaymentCard({
   note,
   proofUrl,
   compact,
-  slipHref
+  slipHref,
+  showNetAmount
 }: {
   paidAt: string;
   amount: number;
@@ -304,12 +305,15 @@ export function PayrollPaymentCard({
   proofUrl: string | null;
   compact?: boolean;
   slipHref?: string;
+  /** Tampilkan nominal setelah bonus/potongan (yang benar-benar diterima) sebagai angka utama, bukan gaji shift kotor. */
+  showNetAmount?: boolean;
 }) {
   const [modalUrl, setModalUrl] = useState<string | null>(null);
   const cleanNote = note
     ?.replace(/\[LEBIH_BAYAR:\d+\]/g, "")
     .replace(/\[MODE:\w+\]/g, "")
     .trim();
+  const netAmount = amount + bonus - deduction;
 
   return (
     <div className="payroll-payment-card">
@@ -331,7 +335,7 @@ export function PayrollPaymentCard({
               {cleanNote}
             </p>
           ) : null}
-          <p className="payroll-payment-amount">{rupiah(amount)}</p>
+          <p className="payroll-payment-amount">{rupiah(showNetAmount ? netAmount : amount)}</p>
           {bonus > 0 && (
             <p style={{ fontSize: 11, fontWeight: 700, color: "#B45309", marginTop: 3, display: "flex", gap: 5, alignItems: "center" }}>
               <Sparkles size={11} style={{ flexShrink: 0 }} />
