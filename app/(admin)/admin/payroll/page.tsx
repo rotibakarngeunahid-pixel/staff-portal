@@ -428,7 +428,19 @@ export default function AdminPayrollPage() {
               <input
                 type="checkbox"
                 checked={isResignCase}
-                onChange={(e) => setIsResignCase(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setIsResignCase(checked);
+                  // Isi otomatis nominal = sisa gaji staff supaya potongan langsung
+                  // terhitung tanpa admin perlu ketik nominal manual dulu.
+                  if (checked && current) {
+                    if (payMode === "amount") {
+                      setAmountInput(String(Math.round(current.balance || 0)));
+                    } else {
+                      setSelectedIds(unpaid.map((row) => row.id));
+                    }
+                  }
+                }}
               />
               <span style={{ fontSize: 13, fontWeight: 800, color: "var(--danger)" }}>Resign Tidak Sesuai Prosedur</span>
             </label>
