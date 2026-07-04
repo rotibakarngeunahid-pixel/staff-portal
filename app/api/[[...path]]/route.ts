@@ -4807,6 +4807,15 @@ async function cancelAssignment(db: Db, request: NextRequest, body: Body) {
 
 // ─── PRD §8.3 — Delete staff aman dengan dependency check ────────────────
 
+// resignation_cases (+ kolom staff.resignation_case_id & payments.resignation_case_id)
+// adalah peninggalan fitur resign yang sudah di-revert dari kode (commit c66ec39)
+// tapi migrasinya (0017) sempat kepasang & belum pernah dirollback di DB production,
+// jadi FK-nya masih hidup walau tidak dipakai kode manapun sekarang. Di DB lain yang
+// belum pernah kena migrasi 0017 tabel ini memang tidak ada — treat sebagai best-effort.
+function isMissingTableError(error: { code?: string } | null | undefined) {
+  return error?.code === "PGRST205" || error?.code === "42P01";
+}
+
 async function getStaffDeleteDependencies(db: Db, staffId: string) {
   const [
     { count: attCount },
@@ -4815,7 +4824,8 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     { count: schedCount },
     { count: leaveCount },
     { count: schedV1Count },
-    { count: sdCount }
+    { count: sdCount },
+    resignRes
   ] = await Promise.all([
     db.from("attendance").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("reports").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
@@ -4825,7 +4835,8 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     // shift_schedule dan staff_dayoff juga punya FK ke staff(id) tanpa CASCADE —
     // harus dihitung agar hard delete tidak gagal dengan FK constraint error.
     db.from("shift_schedule").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
-    db.from("staff_dayoff").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
+    db.from("staff_dayoff").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
+    db.from("resignation_cases").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
   ]);
   const attendanceCount = attCount ?? 0;
   const reportCount = repCount ?? 0;
@@ -4834,7 +4845,8 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
   const leaveCount2 = leaveCount ?? 0;
   const shiftScheduleCount = schedV1Count ?? 0;
   const staffDayoffCount = sdCount ?? 0;
-  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2 + shiftScheduleCount + staffDayoffCount;
+  const resignationCaseCount = isMissingTableError(resignRes.error) ? 0 : resignRes.count ?? 0;
+  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2 + shiftScheduleCount + staffDayoffCount + resignationCaseCount;
   return {
     attendanceCount,
     reportCount,
@@ -4843,6 +4855,7 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     leaveCount: leaveCount2,
     shiftScheduleCount,
     staffDayoffCount,
+    resignationCaseCount,
     totalDependencies,
     canHardDelete: totalDependencies === 0
   };
@@ -4883,6 +4896,25 @@ async function forceHardDeleteStaff(db: Db, staffId: string) {
   {
     const { error } = await db.from("staff_dayoff").update({ leave_request_id: null }).eq("staff_id", staffId);
     if (error) throw error;
+  }
+
+  // resignation_cases: peninggalan fitur resign yang di-revert (lihat komentar di
+  // getStaffDeleteDependencies). staff.resignation_case_id <-> resignation_cases.staff_id
+  // saling menunjuk, dan payments.resignation_case_id -> resignation_cases(id) —
+  // lepas ketiganya lalu hapus baris case-nya sebelum staff/payments dihapus.
+  {
+    const { data: resignCases, error: findErr } = await db.from("resignation_cases").select("id").eq("staff_id", staffId);
+    if (findErr && !isMissingTableError(findErr)) throw findErr;
+    const resignCaseIds = (resignCases || []).map((r: { id: string }) => r.id);
+    if (resignCaseIds.length) {
+      let error;
+      ({ error } = await db.from("staff").update({ resignation_case_id: null }).eq("id", staffId));
+      if (error && !isMissingTableError(error)) throw error;
+      ({ error } = await db.from("payments").update({ resignation_case_id: null }).in("resignation_case_id", resignCaseIds));
+      if (error && !isMissingTableError(error)) throw error;
+      ({ error } = await db.from("resignation_cases").delete().eq("staff_id", staffId));
+      if (error && !isMissingTableError(error)) throw error;
+    }
   }
 
   // 2. Hapus baris anak milik staff ini. Reports & staff_dayoff dihapus lebih

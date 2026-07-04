@@ -25,6 +25,7 @@ type DeletePreview = {
   paymentCount: number;
   scheduleCount: number;
   leaveCount: number;
+  resignationCaseCount: number;
   totalDependencies: number;
   canHardDelete: boolean;
 };
@@ -228,7 +229,8 @@ export default function AdminStaffPage() {
                     ["Laporan", deleteModal.preview.reportCount],
                     ["Pembayaran", deleteModal.preview.paymentCount],
                     ["Jadwal", deleteModal.preview.scheduleCount],
-                    ["Request Libur", deleteModal.preview.leaveCount]
+                    ["Request Libur", deleteModal.preview.leaveCount],
+                    ["Kasus Resign", deleteModal.preview.resignationCaseCount]
                   ].map(([label, count]) => (
                     <div key={label as string} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
                       <span style={{ fontSize: 12, color: "var(--muted)" }}>{label}</span>
@@ -298,7 +300,7 @@ export default function AdminStaffPage() {
                     style={{ marginTop: 2 }}
                   />
                   <span style={{ fontSize: 12, color: "#991B1B", fontWeight: 700 }}>
-                    Saya mengerti {deleteModal.preview.totalDependencies} data historis (absensi, laporan, pembayaran, jadwal, libur) akan ikut terhapus permanen dan tidak bisa dikembalikan.
+                    Saya mengerti {deleteModal.preview.totalDependencies} data historis (absensi, laporan, pembayaran, jadwal, libur, kasus resign) akan ikut terhapus permanen dan tidak bisa dikembalikan.
                   </span>
                 </label>
               )}
