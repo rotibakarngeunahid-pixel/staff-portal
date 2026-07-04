@@ -4853,29 +4853,55 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
 // Urutan delete disusun supaya tidak melanggar foreign key. Tabel opsional yang
 // mungkin belum ada di prod dibungkus best-effort agar tidak menggagalkan operasi.
 async function forceHardDeleteStaff(db: Db, staffId: string) {
-  // 1. Assignment milik staff ini bisa direferensikan baris lain (cover libur,
-  //    override, schedule_id di absensi/laporan). Lepas referensi itu dulu
-  //    supaya assignment-nya aman dihapus.
-  const { data: assignments } = await db
-    .from("staff_shift_assignments")
-    .select("id")
-    .eq("staff_id", staffId);
+  // 1. Assignment & attendance milik staff ini bisa direferensikan baris lain
+  //    (cover libur, override, schedule_id/attendance_id di absensi/laporan —
+  //    semuanya FK tanpa ON DELETE CASCADE). Lepas referensi itu dulu supaya
+  //    baris induknya aman dihapus tanpa melanggar foreign key constraint.
+  const [{ data: attendanceRows }, { data: assignments }] = await Promise.all([
+    db.from("attendance").select("id").eq("staff_id", staffId),
+    db.from("staff_shift_assignments").select("id").eq("staff_id", staffId)
+  ]);
+  const attendanceIds = (attendanceRows || []).map((a: { id: string }) => a.id);
   const assignmentIds = (assignments || []).map((a: { id: string }) => a.id);
+
+  if (attendanceIds.length) {
+    const { error } = await db.from("reports").update({ attendance_id: null }).in("attendance_id", attendanceIds);
+    if (error) throw error;
+  }
   if (assignmentIds.length) {
-    await db.from("staff_dayoff").update({ replacement_schedule_id: null }).in("replacement_schedule_id", assignmentIds);
-    await db.from("staff_shift_assignments").update({ overridden_from_id: null }).in("overridden_from_id", assignmentIds);
-    await db.from("attendance").update({ schedule_id: null }).in("schedule_id", assignmentIds);
-    await db.from("reports").update({ schedule_id: null }).in("schedule_id", assignmentIds);
+    let error;
+    ({ error } = await db.from("staff_dayoff").update({ replacement_schedule_id: null }).in("replacement_schedule_id", assignmentIds));
+    if (error) throw error;
+    ({ error } = await db.from("staff_shift_assignments").update({ overridden_from_id: null }).in("overridden_from_id", assignmentIds));
+    if (error) throw error;
+    ({ error } = await db.from("attendance").update({ schedule_id: null }).in("schedule_id", assignmentIds));
+    if (error) throw error;
+    ({ error } = await db.from("reports").update({ schedule_id: null }).in("schedule_id", assignmentIds));
+    if (error) throw error;
+  }
+  // staff_dayoff.leave_request_id -> leave_requests(id) juga tanpa CASCADE.
+  {
+    const { error } = await db.from("staff_dayoff").update({ leave_request_id: null }).eq("staff_id", staffId);
+    if (error) throw error;
   }
 
-  // 2. Hapus baris anak milik staff ini.
-  await db.from("early_checkout_permissions").delete().eq("staff_id", staffId);
-  await db.from("attendance").delete().eq("staff_id", staffId);
-  await db.from("reports").delete().eq("staff_id", staffId);
-  await db.from("payments").delete().eq("staff_id", staffId);
-  await db.from("leave_requests").delete().eq("staff_id", staffId);
-  await db.from("staff_dayoff").delete().eq("staff_id", staffId);
-  await db.from("staff_shift_assignments").delete().eq("staff_id", staffId);
+  // 2. Hapus baris anak milik staff ini. Reports & staff_dayoff dihapus lebih
+  //    dulu karena referensinya (attendance_id, leave_request_id) sudah dilepas
+  //    di atas, tapi urutan ini tetap dijaga supaya aman walau ada FK lain
+  //    yang belum diketahui.
+  const deletes: Array<[string, string]> = [
+    ["early_checkout_permissions", "staff_id"],
+    ["reports", "staff_id"],
+    ["attendance", "staff_id"],
+    ["payments", "staff_id"],
+    ["staff_dayoff", "staff_id"],
+    ["leave_requests", "staff_id"],
+    ["staff_shift_assignments", "staff_id"]
+  ];
+  for (const [table, column] of deletes) {
+    const { error } = await db.from(table).delete().eq(column, staffId);
+    if (error) throw error;
+  }
 
   // 3. Referensi nullable: kosongkan slot jadwal, jangan ikut dihapus.
   await db.from("shift_schedule").update({ staff_id: null, staff_name: null, status: "open" }).eq("staff_id", staffId);
