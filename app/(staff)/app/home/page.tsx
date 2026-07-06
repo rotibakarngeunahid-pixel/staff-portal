@@ -1479,6 +1479,13 @@ export default function StaffHomePage() {
               </div>
             )}
 
+            {/* Banner: otomatis jadi full shift karena shift berikutnya tidak absen sampai cutoff */}
+            {!loading && String(att?.flags || "").includes("AUTO_FULL_SHIFT") && !att?.checkout_time && (
+              <div style={{ background: "var(--primary-bg, #EEF2FF)", border: "1.5px solid var(--primary-border, #C7D2FE)", borderRadius: 12, padding: "12px 14px", fontSize: 12.5, fontWeight: 600, color: "#4338CA", lineHeight: 1.6 }}>
+                🌟 <strong>Kamu otomatis jadi Full Shift.</strong> Staff shift berikutnya belum absen sampai batas waktu, jadi jam kerjamu diperpanjang sampai jam tutup outlet dan gaji hari ini dihitung 2×. Kirim Laporan Tutup Toko sebelum absen keluar.
+              </div>
+            )}
+
             {/* Panduan realtime */}
             {!loading && (
               <RealtimeGuide

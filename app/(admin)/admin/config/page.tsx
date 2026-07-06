@@ -9,6 +9,11 @@ const CONFIG_FIELDS: Array<[string, string, string]> = [
   ["late_tolerance_minutes", "Toleransi terlambat (menit)", "number"],
   ["deduction_per_minute", "Potongan per menit (Rp)", "number"],
   ["early_checkout_tolerance", "Toleransi pulang awal (menit)", "number"],
+  [
+    "full_shift_auto_cutoff_offset_minutes",
+    "Auto Full Shift: batas tunggu shift berikutnya (menit setelah jam mulai shift 2 — kosong = 180, isi 0 untuk nonaktif)",
+    "number"
+  ],
   ["notification_email", "Email notifikasi", "email"],
   ["company_name", "Nama perusahaan", "text"]
 ];

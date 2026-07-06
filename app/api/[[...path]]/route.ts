@@ -476,6 +476,153 @@ async function resolveShiftDayoffState(
   return { shift: preferredShift, isFullShift: false, offShift: null as number | null, activeShift: null as number | null };
 }
 
+// ─── Auto full-shift saat shift berikutnya tidak absen sampai cutoff ────────
+//
+// Outlet 2 shift: jika staff Shift 2 belum absen masuk sampai cutoff
+// (jam mulai Shift 2 + offset menit dari config full_shift_auto_cutoff_offset_minutes,
+// default 180), staff Shift 1 yang masih bekerja otomatis di-upgrade jadi Full Shift:
+// gaji 2x, jam pulang mengikuti jam tutup outlet (shift2_end), wajib laporan BUKA+TUTUP.
+//
+// Catatan desain:
+// - Dievaluasi lazy pada interaksi API (status home, checkin, checkout, laporan TUTUP)
+//   karena tidak ada infra cron — konsekuensi gaji/jam checkout tetap tepat karena
+//   baru berlaku saat ada interaksi.
+// - Tanpa rollback: Shift 2 yang absen setelah cutoff diblokir guard "shift sudah
+//   diisi" (Full Shift menempati kedua slot); koreksi lewat menu Absensi admin.
+// - Skema saat ini maksimal 2 shift per outlet (shift_mode 1|2). Aturan umumnya:
+//   shift terakhir yang sudah absen meng-cover sisa jam operasional outlet — jika
+//   kelak ada 3+ shift, terapkan berantai per shift berikutnya.
+// - Best-effort: kegagalan di sini tidak boleh menggagalkan absen/status staff.
+const AUTO_FULL_SHIFT_FLAG = "AUTO_FULL_SHIFT";
+
+function autoFullShiftCutoffMs(outlet: Outlet, date: string, cfg: ConfigMap): number | null {
+  if (outlet.shift_mode !== 2 || !outlet.shift2_start) return null;
+  // String kosong ≠ nonaktif (pakai default); hanya nilai eksplisit ≤ 0 yang menonaktifkan.
+  const raw = String(cfg["full_shift_auto_cutoff_offset_minutes"] ?? "").trim();
+  const offsetMinutes = raw === "" ? 180 : Number(raw);
+  if (!Number.isFinite(offsetMinutes) || offsetMinutes <= 0) return null;
+  return dateTimeUtc(date, outlet.shift2_start).getTime() + offsetMinutes * 60000;
+}
+
+async function maybeAutoFullShiftUpgrade(db: Db, outlet: Outlet, date: string, cfgInput?: ConfigMap) {
+  try {
+    // Hanya evaluasi hari kerja berjalan — tanggal lampau dikoreksi admin bila perlu.
+    if (outlet.shift_mode !== 2 || date !== getWorkingDate().date) return null;
+
+    const cfg = cfgInput ?? (await configMap(db));
+    const cutoffMs = autoFullShiftCutoffMs(outlet, date, cfg);
+    if (cutoffMs === null || Date.now() < cutoffMs) return null;
+
+    const { data: rows, error } = await db
+      .from("attendance")
+      .select("id,staff_id,staff_name,shift,flags,checkin_time,checkout_time,paid_status")
+      .eq("outlet_id", outlet.id)
+      .eq("date", date)
+      .not("checkin_time", "is", null);
+    if (error) throw error;
+    const attRows = rows || [];
+
+    // Shift 2 sudah absen atau sudah ada Full Shift → tidak ada yang perlu di-cover.
+    const shift2Covered = attRows.some(
+      (row: any) =>
+        Number(row.shift) === 2 || Number(row.shift) === 0 || String(row.flags || "").includes("FULL_SHIFT_2X")
+    );
+    if (shift2Covered) return null;
+
+    // Kandidat upgrade: staff Shift 1 yang masih bekerja (belum absen keluar).
+    const candidate = attRows.find(
+      (row: any) => Number(row.shift) === 1 && !row.checkout_time && !row.paid_status
+    );
+    if (!candidate) return null;
+
+    const { data: staffRow } = await db
+      .from("staff")
+      .select("salary_per_shift")
+      .eq("id", candidate.staff_id)
+      .maybeSingle();
+    if (!staffRow) return null;
+
+    // Hitung ulang gaji sebagai Full Shift (2x). Keterlambatan asal tetap dihitung
+    // terhadap jam mulai Shift 1 — pola yang sama dengan koreksi shift oleh admin.
+    const recalc = calculateSalary(
+      new Date(candidate.checkin_time),
+      dateTimeUtc(date, outlet.shift1_start),
+      normalizeCurrency((staffRow as any).salary_per_shift) * 2,
+      configNumber(cfg, "late_tolerance_minutes", 10),
+      configNumber(cfg, "deduction_per_minute", configNumber(cfg, "late_deduction_per_minute", 1000))
+    );
+
+    const flagSet = String(candidate.flags || "")
+      .split(",")
+      .filter(Boolean)
+      .filter((flag) => flag !== "FULL_SHIFT_2X" && flag !== AUTO_FULL_SHIFT_FLAG);
+    flagSet.push("FULL_SHIFT_2X", AUTO_FULL_SHIFT_FLAG);
+
+    // Update kondisional (shift masih 1, belum checkout, belum dibayar) agar idempoten
+    // saat beberapa request memicu pengecekan bersamaan.
+    const { data: updated, error: updateError } = await db
+      .from("attendance")
+      .update({
+        shift: 0,
+        late_minutes: recalc.lateMinutes,
+        deduction: recalc.deduction,
+        final_salary: recalc.finalSalary,
+        status: recalc.lateMinutes > 0 ? "late" : "present",
+        flags: flagSet.join(",")
+      })
+      .eq("id", candidate.id)
+      .eq("shift", 1)
+      .eq("paid_status", false)
+      .is("checkout_time", null)
+      .select("id")
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updated) return null; // sudah di-upgrade request lain / kondisi berubah
+
+    // Sinkronkan assignment agar status endpoint & jadwal konsisten.
+    await db
+      .from("staff_shift_assignments")
+      .update({ shift_type: "FULL_SHIFT", updated_at: new Date().toISOString() })
+      .eq("staff_id", candidate.staff_id)
+      .eq("date", date)
+      .in("status", [...ACTIVE_ASSIGNMENT_STATUSES]);
+
+    const cutoffLabel = timeMakassar(new Date(cutoffMs));
+    await logAudit(db, "auto_full_shift_upgrade", candidate.staff_name, {
+      attendanceId: candidate.id,
+      outletId: outlet.id,
+      date,
+      cutoff: `${cutoffLabel} WITA`
+    });
+
+    await notifySafely(db, "email_full_shift_failed", candidate.staff_name, () =>
+      sendFullShiftEmail(db, {
+        attendanceId: candidate.id,
+        staffId: candidate.staff_id,
+        staffName: candidate.staff_name,
+        outletId: outlet.id,
+        outletName: outlet.name,
+        date,
+        shiftLabel: "Full Shift",
+        checkinTime: candidate.checkin_time,
+        note: `Otomatis jadi Full Shift: staff Shift 2 belum absen masuk sampai batas pukul ${cutoffLabel} WITA.`,
+        to: cfg.notification_email || process.env.NOTIFICATION_EMAIL || ""
+      })
+    );
+
+    return {
+      attendanceId: candidate.id as string,
+      staffId: candidate.staff_id as string,
+      staffName: candidate.staff_name as string
+    };
+  } catch (err) {
+    console.error(
+      `[auto-full-shift] gagal evaluasi outlet=${outlet.id} date=${date}: ${err instanceof Error ? err.message : err}`
+    );
+    return null;
+  }
+}
+
 function checkoutGpsFromFlags(flags?: string | null) {
   const match = String(flags || "").match(/CHECKOUT_GPS:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+)/);
   return {
@@ -1018,6 +1165,12 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
   const effective = stringBody(body, "date") || getWorkingDate().date;
   const cfg = await configMap(db);
 
+  // Auto full-shift: terapkan upgrade cutoff sebelum membaca attendance agar status
+  // yang dikembalikan (shift, laporan wajib, jam pulang) sudah mencerminkan upgrade.
+  if (outlet.shift_mode === 2) {
+    await maybeAutoFullShiftUpgrade(db, outlet, effective, cfg);
+  }
+
   const dayoffShift = await resolveShiftDayoffState(db, outlet, effective, detectShift(outlet));
   let effectiveShift: 0 | 1 | 2 = dayoffShift.shift;
   const isFullShift = dayoffShift.isFullShift;
@@ -1446,6 +1599,13 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
   const now = new Date();
+
+  // Auto full-shift: terapkan upgrade cutoff sebelum resolve assignment & guard slot,
+  // sehingga absen Shift 2 yang lewat batas terblokir oleh guard "shift sudah diisi".
+  if (outlet.shift_mode === 2) {
+    await maybeAutoFullShiftUpgrade(db, outlet, date);
+  }
+
   const dayoffShift = await resolveShiftDayoffState(db, outlet, date, shift);
   shift = dayoffShift.shift;
 
@@ -1530,7 +1690,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     const conflictingShifts = shift === 0 ? [0, 1, 2] : [0, shift];
     const { data: shiftTaken } = await db
       .from("attendance")
-      .select("id, staff_name, shift")
+      .select("id, staff_name, shift, flags")
       .eq("outlet_id", outlet.id)
       .eq("date", date)
       .neq("staff_id", staff.id)
@@ -1538,9 +1698,17 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
       .not("checkin_time", "is", null)
       .limit(1);
     if (shiftTaken && shiftTaken.length > 0) {
-      const taken = shiftTaken[0] as { staff_name?: string; shift?: number };
+      const taken = shiftTaken[0] as { staff_name?: string; shift?: number; flags?: string | null };
       const takenShiftLabel = taken.shift === 0 ? "Full Shift" : `Shift ${taken.shift}`;
       const thisShiftLabel = shift === 0 ? "Full Shift" : `Shift ${shift}`;
+      // Slot diambil alih otomatis karena lewat cutoff — beri pesan yang jelas ke staff telat.
+      if (String(taken.flags || "").includes(AUTO_FULL_SHIFT_FLAG)) {
+        throw new HttpError(
+          `Batas waktu absen ${thisShiftLabel} sudah lewat. ${taken.staff_name || "Staff lain"} otomatis menjadi Full Shift menggantikan sisa jam operasional, sehingga absen kamu tidak bisa dicatat. Hubungi admin jika kamu tetap masuk hari ini.`,
+          409,
+          "SHIFT_CUTOFF_PASSED"
+        );
+      }
       throw new HttpError(
         `${thisShiftLabel} pada ${date} sudah diisi oleh ${taken.staff_name || "staff lain"} (${takenShiftLabel}). Setiap shift hanya boleh diisi 1 orang.`,
         409,
@@ -1807,6 +1975,13 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
   const shiftFromBody = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : -1;
   let shift = ([0, 1, 2].includes(shiftFromBody) ? shiftFromBody : detectShift(outlet)) as 0 | 1 | 2;
+
+  // Auto full-shift: terapkan upgrade cutoff sebelum validasi jam pulang, agar staff
+  // yang di-upgrade tidak bisa pulang di jam selesai shift lamanya (wajib sampai tutup).
+  if (outlet.shift_mode === 2) {
+    await maybeAutoFullShiftUpgrade(db, outlet, date);
+  }
+
   const dayoffShift = await resolveShiftDayoffState(db, outlet, date, shift);
   shift = dayoffShift.shift;
 
@@ -1820,9 +1995,27 @@ async function checkout(db: Db, request: NextRequest, body: Body) {
     .not("checkin_time", "is", null)
     .order("shift", { ascending: true });
   if (attendanceError) throw attendanceError;
-  const attendance = shift === 0
+  let attendance = shift === 0
     ? (attendanceRows || []).find((row) => row.shift === 0 || String(row.flags || "").includes("FULL_SHIFT_2X")) ?? (attendanceRows || [])[0]
     : (attendanceRows || [])[0];
+
+  // Fallback auto full-shift: UI staff bisa masih mengirim shift lamanya (1) padahal
+  // barisnya sudah di-upgrade ke shift 0 — cari baris full shift miliknya.
+  if (!attendance && shift !== 0) {
+    const { data: fullRows } = await db
+      .from("attendance")
+      .select("*")
+      .eq("staff_id", staff.id)
+      .eq("date", date)
+      .not("checkin_time", "is", null);
+    const fullRow = (fullRows || []).find(
+      (row) => row.shift === 0 || String(row.flags || "").includes("FULL_SHIFT_2X")
+    );
+    if (fullRow) {
+      attendance = fullRow;
+      shift = 0;
+    }
+  }
   if (!attendance?.checkin_time) throw new HttpError("Belum ada absen masuk untuk shift ini", 400, "NO_CHECKIN");
   if (attendance.checkout_time) throw new HttpError("Absen pulang sudah tercatat", 409, "ALREADY_CHECKED_OUT");
 
@@ -2004,6 +2197,12 @@ async function submitReport(db: Db, request: NextRequest, body: Body) {
 
   const type = reportType(body);
   const date = stringBody(body, "shiftDate") || stringBody(body, "date") || getWorkingDate().date;
+
+  // Auto full-shift: staff Shift 1 yang di-upgrade wajib kirim laporan TUTUP —
+  // pastikan barisnya sudah ter-upgrade sebelum cek kelayakan shift di bawah.
+  if (outlet.shift_mode === 2 && type === "TUTUP") {
+    await maybeAutoFullShiftUpgrade(db, outlet, date);
+  }
 
   const allowedShifts = type === "BUKA" ? [0, 1] : [0, 2];
   const { data: checkinRows, error: attCheckError } = await db
