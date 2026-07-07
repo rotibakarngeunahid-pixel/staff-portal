@@ -62,12 +62,9 @@ export function compareAttendanceChronological(a: PayrollShiftRow, b: PayrollShi
   return a.shift - b.shift;
 }
 
-export function resolvePaymentStatus(totalEarned: number, totalPaid: number): PayrollPaymentStatus {
-  const earned = normalizeCurrency(totalEarned);
-  const paid = normalizeCurrency(totalPaid);
-  if (earned <= 0) return "lunas";
-  if (paid <= 0) return "belum_lunas";
-  if (paid >= earned) return "lunas";
+export function resolvePaymentStatus(balance: number, paidShiftCount: number): PayrollPaymentStatus {
+  if (normalizeCurrency(balance) <= 0) return "lunas";
+  if (paidShiftCount <= 0) return "belum_lunas";
   return "sebagian";
 }
 
@@ -150,8 +147,6 @@ export function buildPayrollSummary(
   const countedRows = rows.filter(isShiftCounted);
   const totalEarned = countedRows.reduce((sum, row) => sum + normalizeCurrency(row.final_salary), 0);
   const totalPaid = (payments || []).reduce((sum, row) => sum + normalizeCurrency(row.amount), 0);
-  const balance = Math.max(0, totalEarned - totalPaid);
-  const status = resolvePaymentStatus(totalEarned, totalPaid);
 
   const paidShifts = countedRows
     .filter((row) => row.paid_status)
@@ -172,6 +167,16 @@ export function buildPayrollSummary(
       shift: row.shift,
       final_salary: normalizeCurrency(row.final_salary)
     }));
+
+  // Saldo gaji tertahan dihitung langsung dari shift yang paid_status-nya masih
+  // false, BUKAN dari (totalEarned - totalPaid). Nominal transfer bisa dibulatkan
+  // lebih besar dari gaji shift yang tertutup (lebih-bayar), dan absen yang
+  // sudah lunas bisa direvisi/dihapus admin setelahnya — keduanya bikin selisih
+  // total vs total melenceng dari saldo sebenarnya, dan diam-diam "menelan" gaji
+  // shift baru yang sebetulnya belum dibayar (Sisa Gaji nampak Rp0 padahal ada
+  // baris berstatus "Belum" di rincian shift).
+  const balance = unpaidShifts.reduce((sum, row) => sum + row.final_salary, 0);
+  const status = resolvePaymentStatus(balance, paidShifts.length);
 
   return {
     totalEarned,

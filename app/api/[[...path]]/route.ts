@@ -5938,11 +5938,15 @@ async function getPayslip(db: Db, request: NextRequest, body: Body) {
   if (allAttError) throw allAttError;
 
   // Hanya shift dengan absen masuk+keluar lengkap yang dihitung sebagai gaji terbentuk.
-  const totalEarned = (allAtt || [])
-    .filter(isShiftCounted)
-    .reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
+  const countedAtt = (allAtt || []).filter(isShiftCounted);
+  const totalEarned = countedAtt.reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
   const totalPaid = (allPayments || []).reduce((s: number, r: any) => s + normalizeCurrency(r.amount), 0);
-  const balance = Math.max(0, totalEarned - totalPaid);
+  // Saldo dihitung dari shift yang paid_status-nya masih false (bukan totalEarned - totalPaid,
+  // yang bisa melenceng karena pembulatan nominal transfer atau revisi absen setelah lunas —
+  // lihat catatan di buildPayrollSummary/lib/payroll.ts).
+  const balance = countedAtt
+    .filter((r: any) => !r.paid_status)
+    .reduce((s: number, r: any) => s + normalizeCurrency(r.final_salary), 0);
 
   const outlet = (staffRow as any)?.outlets ?? null;
 
