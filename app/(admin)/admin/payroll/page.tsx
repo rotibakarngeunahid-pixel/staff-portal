@@ -578,7 +578,7 @@ export default function AdminPayrollPage() {
                 </button>
               </div>
               <p className="payroll-hint" style={{ marginTop: 8 }}>
-                Denda ini tercatat langsung — staff bisa lihat sebagai "belum diterapkan" sebelum gajian. Nanti tinggal ditarik ke kolom Potongan saat memproses pembayaran.
+                Denda ini tercatat langsung — staff bisa lihat sebagai &ldquo;belum diterapkan&rdquo; sebelum gajian. Nanti tinggal ditarik ke kolom Potongan saat memproses pembayaran.
               </p>
             </form>
           ) : (
