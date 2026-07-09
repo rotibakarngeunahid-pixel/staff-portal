@@ -2478,6 +2478,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
   const [
     { data: attendance, error },
     { data: payments, error: payError },
+    { data: fines, error: finesError },
     { staff, outlet },
     cfg
   ] = await Promise.all([
@@ -2491,12 +2492,21 @@ async function staffPayroll(db: Db, request: NextRequest) {
       .select("id,paid_at,amount,bonus,bonus_note,deduction,deduction_note,note,proof_url,date_from,date_to")
       .eq("staff_id", session.sub)
       .order("paid_at", { ascending: false }),
+    db
+      .from("staff_fines")
+      .select("id,amount,reason,incident_date,status,created_at")
+      .eq("staff_id", session.sub)
+      .eq("status", "unpaid")
+      .order("incident_date", { ascending: false }),
     getStaffWithOutlet(db, session.sub),
     configMap(db)
   ]);
 
   if (error) throw error;
   if (payError) throw payError;
+  // staff_fines (migrasi 0017) bisa saja belum ter-apply di prod — best-effort,
+  // jangan sampai seluruh halaman gaji staff ikut gagal karena fitur denda ini.
+  if (finesError && !isMissingTableError(finesError)) throw finesError;
 
   const rows = attendance || [];
   const summary = buildPayrollSummary(rows, payments || []);
@@ -2505,6 +2515,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
     staff: publicStaff(staff),
     attendance: rows,
     payments: payments || [],
+    fines: finesError ? [] : (fines || []),
     summary,
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
@@ -2894,6 +2905,7 @@ async function adminDispatch(db: Db, method: string, path: string, body: Body) {
   if (path === "/admin/early-checkout") return adminEarlyCheckout(db, method, body);
   if (path === "/admin/inventory-override") return adminInventoryOverride(db, method, body);
   if (path === "/admin/payroll") return adminPayroll(db, method, body);
+  if (path === "/admin/fines") return adminFines(db, method, body);
   if (path === "/admin/payroll-projection" && method === "GET") return adminPayrollProjection(db, body);
   if (path === "/admin/payroll-projection/detail" && method === "GET") return adminPayrollProjectionDetail(db, body);
   if (path === "/admin/schedule") return adminSchedule(db, method, body);
@@ -4029,6 +4041,24 @@ async function adminPayroll(db: Db, method: string, body: Body) {
       shiftCount: ids.length
     });
 
+    // Tandai denda (staff_fines) yang diikutsertakan admin ke potongan pembayaran ini
+    // sebagai "applied" — supaya tidak muncul lagi sebagai tertunda di kali berikutnya.
+    const applyFineIds = Array.isArray(body.applyFineIds)
+      ? body.applyFineIds.map((id) => String(id)).filter(Boolean)
+      : [];
+    if (applyFineIds.length) {
+      // Best-effort: migrasi 0017 (staff_fines) mungkin belum ter-apply di prod —
+      // jangan sampai pembayaran yang SUDAH tersimpan di atas gagal dilaporkan sukses
+      // hanya karena penandaan denda ini bermasalah.
+      const { error: fineApplyError } = await db
+        .from("staff_fines")
+        .update({ status: "applied", payment_id: payment.id, applied_at: new Date().toISOString() })
+        .eq("staff_id", staffId)
+        .eq("status", "unpaid")
+        .in("id", applyFineIds);
+      if (fineApplyError && !isMissingTableError(fineApplyError)) throw fineApplyError;
+    }
+
     return ok({
       payment,
       earned: allocation.totalCovered,
@@ -4041,6 +4071,85 @@ async function adminPayroll(db: Db, method: string, body: Body) {
   }
 
   throw new HttpError("Method payroll tidak valid", 405);
+}
+
+// ─── Denda staff (mis. info libur di hari-H, bukan H-1) — dicatat lepas dari payroll ───
+
+const FINES_MIGRATION_PENDING_MESSAGE =
+  "Fitur denda belum aktif — migrasi database 0017_staff_fines belum diterapkan ke server.";
+
+async function adminFines(db: Db, method: string, body: Body) {
+  if (method === "GET") {
+    let query = db.from("staff_fines").select("*").order("created_at", { ascending: false });
+    if (body.staffId) query = query.eq("staff_id", stringBody(body, "staffId"));
+    if (body.status) query = query.eq("status", stringBody(body, "status"));
+    const { data, error } = await query.limit(500);
+    if (error) {
+      // Best-effort: jangan sampai halaman payroll gagal total hanya karena
+      // migrasi fitur denda ini belum sempat diterapkan di prod.
+      if (isMissingTableError(error)) return ok({ fines: [] });
+      throw error;
+    }
+    return ok({ fines: data || [] });
+  }
+
+  if (method === "POST") {
+    const staffId = stringBody(body, "staffId");
+    if (!staffId) throw new HttpError("Staff wajib dipilih");
+    const amount = numberBody(body, "amount");
+    if (!Number.isFinite(amount) || amount <= 0) throw new HttpError("Nominal denda wajib lebih dari 0");
+    if (!Number.isInteger(amount)) throw new HttpError("Nominal denda harus berupa angka bulat (rupiah tanpa desimal).");
+    const reason = stringBody(body, "reason");
+    if (!reason) throw new HttpError("Alasan denda wajib diisi");
+    const incidentDate = stringBody(body, "incidentDate") || todayJakarta();
+
+    const { data: staff, error: staffError } = await db.from("staff").select("id,name").eq("id", staffId).maybeSingle();
+    if (staffError) throw staffError;
+    if (!staff) throw new HttpError("Staff tidak ditemukan", 404, "STAFF_NOT_FOUND");
+
+    const { data, error } = await db
+      .from("staff_fines")
+      .insert({
+        staff_id: staffId,
+        staff_name: staff.name,
+        amount,
+        reason,
+        incident_date: incidentDate,
+        status: "unpaid",
+        created_by: "Admin"
+      })
+      .select("*")
+      .single();
+    if (error) {
+      if (isMissingTableError(error)) throw new HttpError(FINES_MIGRATION_PENDING_MESSAGE, 503, "MIGRATION_PENDING");
+      throw error;
+    }
+    await logAudit(db, "admin_add_fine", "Admin", { staffId, staffName: staff.name, amount, reason, incidentDate });
+    return ok({ fine: data });
+  }
+
+  if (method === "DELETE") {
+    const id = stringBody(body, "id");
+    if (!id) throw new HttpError("ID denda wajib diisi");
+    const { data: existing, error: fetchError } = await db.from("staff_fines").select("*").eq("id", id).maybeSingle();
+    if (fetchError) {
+      if (isMissingTableError(fetchError)) throw new HttpError(FINES_MIGRATION_PENDING_MESSAGE, 503, "MIGRATION_PENDING");
+      throw fetchError;
+    }
+    if (!existing) throw new HttpError("Denda tidak ditemukan", 404);
+    if (existing.status !== "unpaid") {
+      throw new HttpError("Denda yang sudah diterapkan ke pembayaran tidak bisa dibatalkan dari sini", 400, "FINE_ALREADY_APPLIED");
+    }
+    const { error } = await db
+      .from("staff_fines")
+      .update({ status: "waived", waived_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) throw error;
+    await logAudit(db, "admin_waive_fine", "Admin", { id, staffId: existing.staff_id });
+    return ok({ waived: true });
+  }
+
+  throw new HttpError("Method denda tidak valid", 405);
 }
 
 async function activeAssignmentsForShift(db: Db, outletId: string, date: string, shift: 1 | 2) {
@@ -5024,7 +5133,8 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     { count: leaveCount },
     { count: schedV1Count },
     { count: sdCount },
-    resignRes
+    resignRes,
+    finesRes
   ] = await Promise.all([
     db.from("attendance").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("reports").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
@@ -5035,7 +5145,9 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     // harus dihitung agar hard delete tidak gagal dengan FK constraint error.
     db.from("shift_schedule").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
     db.from("staff_dayoff").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
-    db.from("resignation_cases").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
+    db.from("resignation_cases").select("id", { count: "exact", head: true }).eq("staff_id", staffId),
+    // staff_fines (migrasi 0017): fitur denda, mungkin belum ter-apply di prod — best-effort.
+    db.from("staff_fines").select("id", { count: "exact", head: true }).eq("staff_id", staffId)
   ]);
   const attendanceCount = attCount ?? 0;
   const reportCount = repCount ?? 0;
@@ -5045,7 +5157,8 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
   const shiftScheduleCount = schedV1Count ?? 0;
   const staffDayoffCount = sdCount ?? 0;
   const resignationCaseCount = isMissingTableError(resignRes.error) ? 0 : resignRes.count ?? 0;
-  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2 + shiftScheduleCount + staffDayoffCount + resignationCaseCount;
+  const fineCount = isMissingTableError(finesRes.error) ? 0 : finesRes.count ?? 0;
+  const totalDependencies = attendanceCount + reportCount + paymentCount + scheduleCount + leaveCount2 + shiftScheduleCount + staffDayoffCount + resignationCaseCount + fineCount;
   return {
     attendanceCount,
     reportCount,
@@ -5055,6 +5168,7 @@ async function getStaffDeleteDependencies(db: Db, staffId: string) {
     shiftScheduleCount,
     staffDayoffCount,
     resignationCaseCount,
+    fineCount,
     totalDependencies,
     canHardDelete: totalDependencies === 0
   };
@@ -5114,6 +5228,14 @@ async function forceHardDeleteStaff(db: Db, staffId: string) {
       ({ error } = await db.from("resignation_cases").delete().eq("staff_id", staffId));
       if (error && !isMissingTableError(error)) throw error;
     }
+  }
+
+  // staff_fines (migrasi 0017): fitur denda, mungkin belum ter-apply di prod — best-effort.
+  // HARUS dihapus SEBELUM payments di bawah karena staff_fines.payment_id -> payments(id)
+  // tanpa ON DELETE CASCADE; kalau dibalik, delete payments akan gagal FK constraint.
+  {
+    const { error } = await db.from("staff_fines").delete().eq("staff_id", staffId);
+    if (error && !isMissingTableError(error)) throw error;
   }
 
   // 2. Hapus baris anak milik staff ini. Reports & staff_dayoff dihapus lebih

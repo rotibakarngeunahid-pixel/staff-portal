@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Clock, Receipt, RefreshCw, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, Receipt, RefreshCw, Sparkles } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
 import {
   PayrollHero,
@@ -60,6 +60,7 @@ type PayrollPayload = {
     date_from: string | null;
     date_to: string | null;
   }>;
+  fines: Array<{ id: string; amount: number; reason: string; incident_date: string }>;
   outlet: { shift1_start: string | null; shift2_start: string | null } | null;
   config: { lateToleranceMinutes: number; deductionPerMinute: number };
 };
@@ -251,6 +252,32 @@ export default function StaffPayrollPage() {
         <div className="payroll-stack">
           {/* 1. Ringkasan gaji */}
           <PayrollHero summary={summary} />
+
+          {/* 1b. Denda belum diterapkan — supaya staff tahu sebelum gajian, bukan kejutan di slip */}
+          {data!.fines && data!.fines.length > 0 && (
+            <div style={{
+              background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
+              borderRadius: 14, padding: "14px 16px"
+            }}>
+              <p style={{
+                display: "flex", alignItems: "center", gap: 6,
+                fontSize: 13, fontWeight: 800, color: "var(--danger)", marginBottom: 8
+              }}>
+                <AlertTriangle size={15} />
+                Denda belum diterapkan: {rupiah(data!.fines.reduce((sum, f) => sum + f.amount, 0))}
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {data!.fines.map((fine) => (
+                  <div key={fine.id} style={{ fontSize: 12, color: "#78350F" }}>
+                    <strong>{rupiah(fine.amount)}</strong> — {fine.reason} ({formatDateWithDayID(fine.incident_date)})
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                Akan dipotong dari transfer gaji berikutnya.
+              </p>
+            </div>
+          )}
 
           {/* 2. Riwayat Pembayaran — ditaruh di atas agar slip gaji langsung terlihat */}
           <section>

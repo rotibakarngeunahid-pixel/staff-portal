@@ -194,3 +194,7 @@ export function buildPayrollSummary(
 export function shiftLabel(shift: number) {
   return shift === 0 ? "Full" : `Shift ${shift}`;
 }
+
+/** Denda info libur di hari-H (bukan H-1), sesuai SOP sanksi pelanggaran prosedur libur. */
+export const LATE_LEAVE_NOTICE_FINE_AMOUNT = 15000;
+export const LATE_LEAVE_NOTICE_FINE_REASON = "Info libur di hari-H, bukan H-1";
