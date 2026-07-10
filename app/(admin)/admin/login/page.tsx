@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { loginErrorMessage } from "@/lib/login-errors";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -60,6 +61,11 @@ export default function AdminLoginPage() {
       justifyContent: "center",
       padding: 24
     }}>
+      {/* Overlay loading — blokir interaksi saat memproses login & jeda redirect ke dashboard */}
+      <LoadingOverlay
+        show={loading || Boolean(success)}
+        message={success ? "Login berhasil. Membuka dashboard..." : "Memproses login..."}
+      />
       <form
         onSubmit={submit}
         style={{

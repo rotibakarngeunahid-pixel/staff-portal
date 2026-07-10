@@ -19,6 +19,7 @@ import { CapturedPhoto, isValidImageFile, photoFromFile, revokePhoto } from "@/l
 import { drawWatermark, FACE_CONFIDENCE_THRESHOLD, type FaceVerification } from "@/components/staff/camera-capture";
 import { StaffPage } from "@/components/staff/staff-page";
 import { CameraCapture } from "@/components/staff/camera-capture";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 import { loadFaceDetector } from "@/lib/face-detection";
 import { useSessionStore } from "@/stores/session";
 import { saveDraft, loadDraft, clearDraft, type RestoredPhoto } from "@/lib/report-draft";
@@ -416,6 +417,7 @@ export default function StaffHomePage() {
   const [camera, setCamera] = useState<CameraSlot | null>(null);
   const attendanceBusyRef = useRef(false);
   const [praiseMessage, setPraiseMessage] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
 
   /* ─── Report section state ─── */
   const [reportItems, setReportItems] = useState<ReportCfgItem[]>([]);
@@ -958,9 +960,12 @@ export default function StaffHomePage() {
   }
 
   async function logout() {
+    if (loggingOut) return; // anti double-tap
+    setLoggingOut(true);
     await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setStaffToken(null);
     router.replace("/app/login");
+    // Sengaja tidak di-reset: overlay tetap tampil sampai halaman login terbuka.
   }
 
   /* ─── Draft restore / discard handlers ─── */
@@ -1041,6 +1046,23 @@ export default function StaffHomePage() {
     loading || reportItemsLoading || reportBusy || !reportWindow.canSubmit ||
     !requiredReportPhotosComplete || effectiveReportItems.length === 0 ||
     (nextState === "report_tutup" && invCheck !== "ok");
+
+  /* ─── Loading overlay full-screen: blokir semua interaksi selama proses async ───
+     Prioritas pesan: proses absen (busy) → proses laporan (reportBusy) → logout →
+     muat status (loading, termasuk transisi absen→laporan) → muat config laporan. */
+  const overlayMessage = busy
+    ? busy
+    : reportBusy
+    ? (reportBusyLabel || "Memproses laporan...")
+    : loggingOut
+    ? "Keluar dari aplikasi..."
+    : loading
+    ? "Memuat status absensi..."
+    : isReportState && reportItemsLoading
+    ? "Menyiapkan formulir laporan..."
+    : nextState === "report_tutup" && invCheck === "loading" && reportWindowEarly.canSubmit
+    ? "Memeriksa status Tutup Kasir & Inventori..."
+    : "";
 
   /* ─── Warna indikator draft: hijau jika < 5 menit, abu-abu jika lebih ─── */
   const draftIndicatorColor = draftSavedAt
@@ -1141,6 +1163,9 @@ export default function StaffHomePage() {
 
   return (
     <>
+      {/* Overlay loading full-screen — mencegah tap tombol/nav sebelum proses selesai */}
+      <LoadingOverlay show={Boolean(overlayMessage)} message={overlayMessage} />
+
       {/* Hidden file input untuk mode upload foto */}
       <input
         ref={uploadInputRef}

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import PayrollRuleNotice from "@/components/staff/payroll-rule-notice";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 export default function StaffLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
@@ -43,8 +44,12 @@ export default function StaffLayout({ children }: Readonly<{ children: React.Rea
     return () => { cancelled = true; };
   }, [pathname, router]);
 
-  // Tunggu hingga ukuran layar diketahui sebelum render apapun
-  if (isMobile === null || !authReady) return null;
+  // Tunggu hingga ukuran layar diketahui & sesi terverifikasi sebelum render.
+  // Loading screen (bukan layar kosong) — tampil di setiap perpindahan halaman
+  // selama cek sesi berjalan, sekaligus memblokir interaksi dini.
+  if (isMobile === null || !authReady) {
+    return <LoadingOverlay show message="Menyiapkan halaman..." />;
+  }
 
   if (!isMobile) {
     return (

@@ -212,6 +212,7 @@ export default function AdminPayrollPage() {
   const deductionExceeds = deductionAmount > maxDeduction;
 
   function onProofChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (proofUploading) return; // anti double-upload
     const file = e.target.files?.[0];
     if (!file) return;
     setProofName(file.name);
@@ -247,7 +248,7 @@ export default function AdminPayrollPage() {
 
   async function addFine(event: React.FormEvent) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || fineSubmitting) return; // anti double-submit
     const amount = Number(fineAmountInput);
     if (!Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) {
       setMessage("Nominal denda harus angka bulat lebih dari 0.");
@@ -282,6 +283,7 @@ export default function AdminPayrollPage() {
   }
 
   async function waiveFine(id: string) {
+    if (finesLoading) return; // anti double-submit
     setFinesLoading(true);
     try {
       await apiFetch("/api/admin/fines", { method: "DELETE", role: "admin", body: { id } });
@@ -314,7 +316,7 @@ export default function AdminPayrollPage() {
 
   async function pay(event: React.FormEvent) {
     event.preventDefault();
-    if (!selected || !previewAllocation?.covered.length) return;
+    if (!selected || !previewAllocation?.covered.length || submitting) return; // anti double-submit
     const rawBonus = Number(bonusInput);
     if (bonusInput.trim() && (!Number.isFinite(rawBonus) || rawBonus < 0)) {
       setMessage("Bonus tidak valid. Masukkan angka 0 atau lebih.");

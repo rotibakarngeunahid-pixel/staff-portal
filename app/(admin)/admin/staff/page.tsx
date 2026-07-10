@@ -88,6 +88,7 @@ export default function AdminStaffPage() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return; // anti double-submit
     if (!form.name.trim()) { setMessage("Nama staff wajib diisi"); setMsgType("err"); return; }
     if (form.outlet_id && outlets.find((outlet) => outlet.id === form.outlet_id)?.active === false) {
       setMessage("Outlet yang dipilih sudah nonaktif. Pilih outlet aktif."); setMsgType("err"); return;
@@ -134,7 +135,7 @@ export default function AdminStaffPage() {
   }
 
   async function executeDelete() {
-    if (!deleteModal) return;
+    if (!deleteModal || deleteLoading) return; // anti double-submit
     const { preview, mode, confirmName, deleteReason, cascadeAck } = deleteModal;
 
     if (mode === "hard" && confirmName !== preview.staffName) {

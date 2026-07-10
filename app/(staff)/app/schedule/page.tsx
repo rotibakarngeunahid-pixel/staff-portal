@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarCheck, CalendarMinus, ChevronRight, RefreshCw, Users, X } from "lucide-react";
 import { StaffPage } from "@/components/staff/staff-page";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID } from "@/lib/format";
 
@@ -405,6 +406,9 @@ export default function StaffSchedulePage() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [leaveModal, setLeaveModal] = useState<LeaveModalState>(null);
+  // Guard sinkron anti double-submit: state React tidak langsung ter-update
+  // saat double-tap cepat, jadi pakai ref untuk mengunci mutasi yang berjalan.
+  const mutationBusyRef = useRef(false);
 
   async function load() {
     setLoading(true);
@@ -435,6 +439,8 @@ export default function StaffSchedulePage() {
   const shiftMode = data?.shiftMode ?? 2;
 
   async function selectShift(date: string, shiftType: ShiftType) {
+    if (mutationBusyRef.current) return; // anti double-submit
+    mutationBusyRef.current = true;
     setBusy(`Mengambil ${shiftLabel(shiftType)}...`);
     setError("");
     try {
@@ -443,10 +449,14 @@ export default function StaffSchedulePage() {
     } catch (err) {
       setError(humanError(err));
       setBusy("");
+    } finally {
+      mutationBusyRef.current = false;
     }
   }
 
   async function cancelAssignment(assignmentId: string) {
+    if (mutationBusyRef.current) return; // anti double-submit
+    mutationBusyRef.current = true;
     setBusy("Membatalkan shift...");
     setError("");
     try {
@@ -459,10 +469,14 @@ export default function StaffSchedulePage() {
     } catch (err) {
       setError(humanError(err));
       setBusy("");
+    } finally {
+      mutationBusyRef.current = false;
     }
   }
 
   async function cancelOldShift(scheduleId: string) {
+    if (mutationBusyRef.current) return; // anti double-submit
+    mutationBusyRef.current = true;
     setBusy("Membatalkan shift...");
     setError("");
     try {
@@ -471,11 +485,15 @@ export default function StaffSchedulePage() {
     } catch (err) {
       setError(humanError(err));
       setBusy("");
+    } finally {
+      mutationBusyRef.current = false;
     }
   }
 
   async function submitLeave() {
     if (!leaveModal) return;
+    if (mutationBusyRef.current) return; // anti double-submit
+    mutationBusyRef.current = true;
     setBusy("Mengajukan libur...");
     setError("");
     const { date, reason } = leaveModal;
@@ -486,11 +504,15 @@ export default function StaffSchedulePage() {
     } catch (err) {
       setError(humanError(err));
       setBusy("");
+    } finally {
+      mutationBusyRef.current = false;
     }
   }
 
   async function cancelLeaveRequest(leaveId: string) {
+    if (mutationBusyRef.current) return; // anti double-submit
     if (!window.confirm("Batalkan permintaan libur ini?")) return;
+    mutationBusyRef.current = true;
     setBusy("Membatalkan permintaan libur...");
     setError("");
     try {
@@ -499,11 +521,19 @@ export default function StaffSchedulePage() {
     } catch (err) {
       setError(humanError(err));
       setBusy("");
+    } finally {
+      mutationBusyRef.current = false;
     }
   }
 
   return (
     <>
+      {/* Overlay loading full-screen — blokir interaksi selama memuat/memproses jadwal */}
+      <LoadingOverlay
+        show={Boolean(busy) || loading}
+        message={busy || "Memuat jadwal..."}
+      />
+
       {/* Modal ajukan libur */}
       {leaveModal && (
         <div style={{

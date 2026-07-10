@@ -116,6 +116,7 @@ export default function AdminAttendanceImportPage() {
   }
 
   async function checkData() {
+    if (previewLoading || importLoading) return; // anti double-submit
     const data = formData();
     if (!data) {
       setMessage("Upload file absensi lama terlebih dahulu.");
@@ -145,6 +146,7 @@ export default function AdminAttendanceImportPage() {
   }
 
   async function importData() {
+    if (previewLoading || importLoading) return; // anti double-submit
     const data = formData();
     if (!data || !result) return;
     const ready = result.summary.ready;

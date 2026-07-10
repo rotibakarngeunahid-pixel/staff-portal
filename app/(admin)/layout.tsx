@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 export default function AdminRootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
@@ -31,6 +32,8 @@ export default function AdminRootLayout({ children }: Readonly<{ children: React
     return () => { cancelled = true; };
   }, [pathname, router]);
 
-  if (!authReady) return null;
+  // Loading screen selama cek sesi — mencegah blank screen & interaksi dini
+  // pada setiap perpindahan halaman admin.
+  if (!authReady) return <LoadingOverlay show message="Memeriksa sesi..." />;
   return <>{children}</>;
 }

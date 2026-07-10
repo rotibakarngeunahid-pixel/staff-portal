@@ -175,6 +175,7 @@ export default function AdminAttendancePage() {
   }
 
   async function grantInventoryOverride() {
+    if (invSaving) return; // anti double-submit
     if (!invForm.outletId) { setMessage("Pilih outlet untuk izin darurat inventori"); setMsgType("err"); return; }
     if (invForm.reason.trim().length < 5) { setMessage("Alasan izin darurat wajib diisi minimal 5 karakter"); setMsgType("err"); return; }
     setInvSaving(true);
@@ -195,6 +196,8 @@ export default function AdminAttendancePage() {
   }
 
   async function revokeInventoryOverride(outletId: string, date: string) {
+    if (invSaving) return; // anti double-submit
+    setInvSaving(true);
     setMessage("Mencabut izin darurat inventori..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/inventory-override", {
@@ -204,6 +207,8 @@ export default function AdminAttendancePage() {
       await loadInventoryOverrides();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gagal mencabut izin"); setMsgType("err");
+    } finally {
+      setInvSaving(false);
     }
   }
 
@@ -258,6 +263,7 @@ export default function AdminAttendancePage() {
 
   async function submitBulk(event: React.FormEvent) {
     event.preventDefault();
+    if (bulkLoading) return; // anti double-submit
     if (!bulkOutletId) { setMessage("Pilih outlet terlebih dahulu"); setMsgType("err"); return; }
     const selected = bulkEntries.filter((e) => e.checked);
     if (selected.length === 0) { setMessage("Pilih minimal 1 staff"); setMsgType("err"); return; }
@@ -301,7 +307,7 @@ export default function AdminAttendancePage() {
 
   async function submitRevise(event: React.FormEvent) {
     event.preventDefault();
-    if (!reviseTarget) return;
+    if (!reviseTarget || revising) return; // anti double-submit
     if (!reviseForm.revision_note.trim()) {
       setMessage("Catatan revisi wajib diisi"); setMsgType("err"); return;
     }
@@ -334,7 +340,7 @@ export default function AdminAttendancePage() {
   }
 
   async function confirmDelete() {
-    if (!deleteTarget) return;
+    if (!deleteTarget || deleting) return; // anti double-submit
     setDeleting(true);
     setMessage("Menghapus data absen..."); setMsgType("info");
     try {
@@ -361,7 +367,7 @@ export default function AdminAttendancePage() {
 
   async function submitEarly(event: React.FormEvent) {
     event.preventDefault();
-    if (!earlyTarget) return;
+    if (!earlyTarget || earlySaving) return; // anti double-submit
     if (earlyForm.reason.trim().length < 5) {
       setMessage("Alasan izin wajib diisi minimal 5 karakter"); setMsgType("err"); return;
     }
@@ -390,7 +396,7 @@ export default function AdminAttendancePage() {
 
   async function submitCancel(event: React.FormEvent) {
     event.preventDefault();
-    if (!cancelTarget?.early_checkout_permission) return;
+    if (!cancelTarget?.early_checkout_permission || cancelSaving) return; // anti double-submit
     if (cancelReason.trim().length < 5) {
       setMessage("Alasan pembatalan wajib diisi minimal 5 karakter"); setMsgType("err"); return;
     }

@@ -110,7 +110,7 @@ export default function AdminReportCfgPage() {
   }
 
   async function setExamplePhoto(index: number, file?: File) {
-    if (!file) return;
+    if (!file || uploadingIndex !== null) return; // anti double-upload
     setUploadingIndex(index);
     setMessage("Mengunggah foto contoh..."); setMsgType("info");
     try {
@@ -181,6 +181,7 @@ export default function AdminReportCfgPage() {
   }
 
   async function clearAll() {
+    if (clearing || saving) return; // anti double-submit
     setConfirmClear(false);
     setClearing(true);
     setMessage("Menghapus konfigurasi..."); setMsgType("info");

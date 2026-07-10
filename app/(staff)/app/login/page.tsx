@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/client-api";
 import { loginErrorMessage } from "@/lib/login-errors";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
 
 const PIN_LEN = 4;
 
@@ -105,6 +106,12 @@ export default function StaffLoginPage() {
 
   return (
     <div className="mobile-frame">
+      {/* Overlay loading — blokir interaksi saat memproses login & jeda redirect ke Beranda */}
+      <LoadingOverlay
+        show={loading || Boolean(success)}
+        message={success ? "Login berhasil. Membuka halaman Beranda..." : "Memproses login..."}
+      />
+
       {/* Header */}
       <header className="staff-hdr">
         <Image
