@@ -869,6 +869,8 @@ async function dispatch(request: NextRequest, context: RouteContext) {
 
     if (request.method === "GET" && path === "/payslip") return await getPayslip(db, request, body);
 
+    if (request.method === "GET" && path === "/public/full-shift-dayoff") return await publicFullShiftDayoff(db, request, body);
+
     if (path.startsWith("/admin/")) {
       await requireSession(request, "admin");
       return await adminDispatch(db, request.method, path, body);
@@ -3306,6 +3308,71 @@ async function adminInventoryBranches() {
     console.error("[inventory] Gagal ambil daftar cabang:", err instanceof Error ? err.message : err);
     return ok({ branches: [] });
   }
+}
+
+// ─── Integrasi Purchase Order — outlet Full Shift yang libur besok ─────────
+// Server-to-server, dipanggil PO system (proteksi X-API-Key, bukan sesi staff/admin).
+// Tujuan: outlet shift_mode=1 (Full Shift, biasanya 1 staff) yang pada tanggal
+// diminta tidak punya satu pun staff aktif tersedia (semua staff_dayoff aktif)
+// berarti outlet tidak beroperasi hari itu → PO bisa skip order bahan baku.
+function assertPoApiKey(request: NextRequest) {
+  const expected = (process.env.PO_API_KEY || "").trim();
+  if (!expected) {
+    throw new HttpError("Integrasi Purchase Order belum dikonfigurasi (PO_API_KEY)", 503, "PO_INTEGRATION_NOT_CONFIGURED");
+  }
+  const provided = request.headers.get("x-api-key") || "";
+  if (provided !== expected) throw new HttpError("API key tidak valid", 401, "INVALID_API_KEY");
+}
+
+async function publicFullShiftDayoff(db: Db, request: NextRequest, body: Body) {
+  assertPoApiKey(request);
+  const date = stringBody(body, "date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new HttpError("Parameter date wajib diisi format YYYY-MM-DD", 400, "INVALID_DATE");
+  }
+
+  const { data: outlets, error: outletError } = await db
+    .from("outlets")
+    .select("id,name,inventory_branch_id")
+    .eq("shift_mode", 1)
+    .eq("active", true);
+  if (outletError) throw outletError;
+  if (!outlets || outlets.length === 0) return ok({ date, outlets: [] });
+
+  const outletIds = outlets.map((o: any) => o.id);
+
+  const [{ data: staffRows, error: staffError }, { data: dayoffs, error: dayoffError }] = await Promise.all([
+    db.from("staff").select("id,outlet_id").in("outlet_id", outletIds).eq("active", true).is("deleted_at", null),
+    db.from("staff_dayoff").select("staff_id,outlet_id").in("outlet_id", outletIds).eq("date", date).eq("status", "active")
+  ]);
+  if (staffError) throw staffError;
+  if (dayoffError) throw dayoffError;
+
+  const offStaffIds = new Set((dayoffs || []).map((d: any) => d.staff_id as string));
+  const staffByOutlet = new Map<string, { total: number; available: number }>();
+  for (const o of outlets as any[]) staffByOutlet.set(o.id, { total: 0, available: 0 });
+  for (const s of (staffRows || []) as any[]) {
+    const bucket = staffByOutlet.get(s.outlet_id);
+    if (!bucket) continue;
+    bucket.total += 1;
+    if (!offStaffIds.has(s.id)) bucket.available += 1;
+  }
+
+  const result = (outlets as any[]).map((o) => {
+    const bucket = staffByOutlet.get(o.id) || { total: 0, available: 0 };
+    return {
+      outlet_id: o.id,
+      outlet_name: o.name,
+      inventory_branch_id: o.inventory_branch_id != null ? String(o.inventory_branch_id) : null,
+      active_staff_count: bucket.total,
+      available_staff_count: bucket.available,
+      // "closed" hanya jika outlet punya staff terdaftar TAPI semuanya libur —
+      // outlet tanpa data staff sama sekali tidak pernah ditandai closed (fail-safe).
+      closed: bucket.total > 0 && bucket.available === 0
+    };
+  });
+
+  return ok({ date, outlets: result });
 }
 
 async function adminAttendance(db: Db, method: string, body: Body) {
