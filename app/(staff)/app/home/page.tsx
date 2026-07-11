@@ -576,6 +576,37 @@ export default function StaffHomePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  /* ─── Refresh status berkala (senyap, tanpa spinner) ───
+     Selain menyegarkan tampilan, panggilan /api/attendance/status juga memicu
+     evaluasi auto full-shift di server — tanpa polling ini, staff yang dibiarkan
+     bekerja sendirian tidak pernah terlihat berubah jadi Full Shift sampai ia
+     sendiri membuka ulang aplikasi. */
+  const refresh = useCallback(async () => {
+    try {
+      const payload = await apiFetch<StatusPayload>("/api/attendance/status", { role: "staff" });
+      serverClockOffsetRef.current = new Date(payload.serverTime).getTime() - Date.now();
+      setStatus(payload);
+    } catch {
+      /* senyap — status yang sudah tampil tetap dipakai */
+    }
+  }, []);
+
+  const refreshPaused =
+    loading || Boolean(busy) || camera !== null || reportBusy ||
+    pendingCheckinPhoto !== null || showLateReasonModal || loggingOut;
+  useEffect(() => {
+    if (refreshPaused) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const timer = window.setInterval(onVisible, 60000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh, refreshPaused]);
+
   /* ─── Popup heads-up full shift: tampil sekali per tanggal (dismiss tersimpan lokal) ─── */
   useEffect(() => {
     const tfs = status?.tomorrowFullShift;

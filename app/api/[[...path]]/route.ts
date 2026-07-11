@@ -623,6 +623,32 @@ async function maybeAutoFullShiftUpgrade(db: Db, outlet: Outlet, date: string, c
   }
 }
 
+// Sweep evaluasi auto full-shift untuk semua outlet 2-shift sekaligus.
+// Dipanggil dari endpoint admin (dashboard, daftar absensi) karena evaluasi lazy
+// per-outlet hanya terpicu interaksi staff outlet itu sendiri — staff yang sedang
+// bekerja jarang membuka aplikasi setelah checkin, sehingga admin yang memantau
+// melihat status basi dan terpaksa koreksi manual padahal cutoff sudah lewat.
+// Murah: maybeAutoFullShiftUpgrade berhenti sebelum query attendance jika cutoff
+// belum tercapai, dan config hanya dibaca sekali untuk semua outlet.
+async function sweepAutoFullShiftUpgrades(db: Db) {
+  try {
+    const { date } = getWorkingDate();
+    const { data: outlets, error } = await db
+      .from("outlets")
+      .select("*")
+      .eq("active", true)
+      .eq("shift_mode", 2);
+    if (error) throw error;
+    if (!outlets || outlets.length === 0) return;
+    const cfg = await configMap(db);
+    for (const raw of outlets) {
+      await maybeAutoFullShiftUpgrade(db, toOutlet(raw), date, cfg);
+    }
+  } catch (err) {
+    console.error(`[auto-full-shift] sweep gagal: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 function checkoutGpsFromFlags(flags?: string | null) {
   const match = String(flags || "").match(/CHECKOUT_GPS:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+)/);
   return {
@@ -3026,6 +3052,10 @@ async function adminFixDuplicateShifts(db: Db, method: string, body: Body) {
 }
 
 async function adminDashboard(db: Db) {
+  // Terapkan upgrade auto full-shift yang cutoff-nya sudah lewat sebelum membaca
+  // attendance, supaya dashboard admin menampilkan shift terkini tanpa menunggu
+  // staff membuka aplikasinya.
+  await sweepAutoFullShiftUpgrades(db);
   const today = todayJakarta();
   const [
     { data: staff, error: staffError },
@@ -3377,6 +3407,9 @@ async function publicFullShiftDayoff(db: Db, request: NextRequest, body: Body) {
 
 async function adminAttendance(db: Db, method: string, body: Body) {
   if (method === "GET") {
+    // Sama seperti dashboard: pastikan upgrade auto full-shift hari berjalan sudah
+    // diterapkan sebelum admin melihat (dan berpotensi mengoreksi manual) absensi.
+    await sweepAutoFullShiftUpgrades(db);
     let query = db.from("attendance").select("*").order("date", { ascending: false }).order("shift", { ascending: true });
     if (body.staffId) query = query.eq("staff_id", body.staffId);
     if (body.outletId) query = query.eq("outlet_id", body.outletId);
