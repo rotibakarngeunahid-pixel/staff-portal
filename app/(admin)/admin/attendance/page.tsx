@@ -780,9 +780,10 @@ export default function AdminAttendancePage() {
                       {isIncompleteUnpaid(row, today) ? (
                         <span
                           className="status-pill status-danger"
+                          style={{ borderRadius: 8, whiteSpace: "nowrap" }}
                           title={`Tidak dibayar — tidak checkout. Gaji ${rupiah(row.final_salary)} tidak dihitung.`}
                         >
-                          Absen Tidak Lengkap
+                          Tidak Lengkap
                         </span>
                       ) : row.checkin_time && !row.checkout_time && row.date === today ? (
                         <span className="status-pill status-warn">Bertugas</span>
