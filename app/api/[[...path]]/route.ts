@@ -3609,7 +3609,23 @@ async function adminAttendance(db: Db, method: string, body: Body) {
     }
 
     if (body.checkin_time) updates.checkin_time = dateTimeUtc(existing.date, String(body.checkin_time).slice(0, 5)).toISOString();
-    if (body.checkout_time) updates.checkout_time = dateTimeUtc(existing.date, String(body.checkout_time).slice(0, 5)).toISOString();
+    if (body.checkout_time) {
+      let checkoutDt = dateTimeUtc(existing.date, String(body.checkout_time).slice(0, 5));
+      // Shift yang melewati tengah malam (mis. Shift 2 20:00-01:00): jam checkout yang
+      // dikoreksi jatuh di dini hari, secara kalender adalah hari BERIKUTNYA dari
+      // attendance.date. Jika hasil kombinasi tanggal+jam ternyata <= checkin, anggap
+      // itu tanda checkout sebenarnya di hari berikutnya dan geser +1 hari.
+      const checkinRef = updates.checkin_time
+        ? new Date(updates.checkin_time as string)
+        : (existing.checkin_time ? new Date(existing.checkin_time) : null);
+      if (checkinRef && checkoutDt.getTime() <= checkinRef.getTime()) {
+        checkoutDt = new Date(checkoutDt.getTime() + 24 * 60 * 60 * 1000);
+      }
+      updates.checkout_time = checkoutDt.toISOString();
+    } else if (body.clearCheckoutTime === true) {
+      // Batalkan checkout yang salah diisi — kembalikan ke "belum checkout".
+      updates.checkout_time = null;
+    }
     const { data, error } = await db.from("attendance").update(updates).eq("id", attendanceId).select("*").single();
     if (error) throw error;
     await logAudit(db, "admin_revise_attendance", "Admin", {

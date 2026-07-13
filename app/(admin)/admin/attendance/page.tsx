@@ -41,7 +41,16 @@ type Attendance = {
   early_checkout_permission?: EarlyCheckoutPermission | null;
 };
 type Staff = { id: string; name: string; outlet_id: string | null; active?: boolean };
-type Outlet = { id: string; name: string; shift1_start?: string; shift2_start?: string; shift_mode?: number; active?: boolean };
+type Outlet = {
+  id: string;
+  name: string;
+  shift1_start?: string;
+  shift1_end?: string;
+  shift2_start?: string;
+  shift2_end?: string;
+  shift_mode?: number;
+  active?: boolean;
+};
 type BulkEntry = { staffId: string; staffName: string; checked: boolean; checkin_time: string; checkout_time: string };
 type BulkResult = { staffId: string; staffName: string; status: "success" | "error"; message?: string };
 type InventoryOverride = { outletId: string | null; date: string | null; by: string; reason: string; at: string };
@@ -368,38 +377,72 @@ export default function AdminAttendancePage() {
     }
   }
 
+  /** Jam pulang default saat "Maafkan" mengisi checkout yang hilang — asumsikan staff
+   * bekerja sampai jadwal jam pulang shift-nya. Backend menggeser +1 hari otomatis
+   * kalau hasilnya jatuh sebelum/​sama dengan checkin (shift yang lewat tengah malam). */
+  function scheduledCheckoutTime(row: Attendance): string | null {
+    const outlet = outlets.find((o) => o.id === row.outlet_id);
+    if (!outlet) return null;
+    // Outlet 1-shift: shift selalu tersimpan sebagai 0 tapi itu satu-satunya shift
+    // (bukan "full shift" 2x yang menutup shift1+shift2), jadi selalu pakai shift1_end.
+    const end = outlet.shift_mode === 1
+      ? outlet.shift1_end
+      : (row.shift === 2 || row.shift === 0) ? outlet.shift2_end : outlet.shift1_end;
+    return end ? end.slice(0, 5) : null;
+  }
+
   /**
-   * Maafkan keterlambatan sekali klik: hapus late_minutes & potongan, kembalikan
-   * gaji ke nominal penuh (final_salary + deduction yang sudah tersimpan), tandai
-   * status "present". Dipakai saat keterlambatan disebabkan kendala yang bisa
-   * dimaafkan (mis. macet parah, force majeure) — tanpa perlu buka modal Revisi.
+   * Maafkan sekali klik: menutup dua masalah absensi yang bikin gaji tidak dibayar—
+   * (1) keterlambatan → hapus late_minutes & potongan, kembalikan gaji ke nominal
+   * penuh; (2) absen keluar tidak tercatat → isi checkout sesuai jadwal jam pulang
+   * shift. Kombinasi kedua kondisi ditangani sekaligus dalam satu klik. Dipakai saat
+   * kendalanya bisa dimaafkan (mis. macet parah, lupa tap checkout) — tanpa perlu
+   * buka modal Revisi.
    */
   async function forgiveLate(row: Attendance) {
     if (forgivingId) return; // anti double-submit
+    const needsLateFix = row.late_minutes > 0;
+    const needsCheckoutFix = Boolean(row.checkin_time) && !row.checkout_time;
+    if (!needsLateFix && !needsCheckoutFix) return;
+
+    const checkoutTime = needsCheckoutFix ? scheduledCheckoutTime(row) : null;
+    if (needsCheckoutFix && !checkoutTime) {
+      setMessage("Jam pulang outlet belum diatur — isi checkout lewat Revisi manual"); setMsgType("err");
+      return;
+    }
+
+    const parts: string[] = [];
+    if (needsLateFix) {
+      parts.push(`Potongan ${rupiah(row.deduction)} (telat ${row.late_minutes} menit) dihapus, gaji kembali penuh menjadi ${rupiah(row.final_salary + row.deduction)}.`);
+    }
+    if (needsCheckoutFix && checkoutTime) {
+      parts.push(`Absen keluar diisi otomatis pukul ${checkoutTime} (jadwal jam pulang shift) sehingga shift ini terhitung dibayar.`);
+    }
     const ok = window.confirm(
-      `Maafkan keterlambatan ${row.staff_name} (${row.late_minutes} menit) pada ${formatDateID(row.date)}?\n\n` +
-      `Potongan ${rupiah(row.deduction)} akan dihapus dan gaji dikembalikan penuh menjadi ${rupiah(row.final_salary + row.deduction)}.`
+      `Maafkan absen ${row.staff_name} pada ${formatDateID(row.date)}?\n\n${parts.join("\n")}`
     );
     if (!ok) return;
+
     setForgivingId(row.id);
-    setMessage("Memaafkan keterlambatan..."); setMsgType("info");
+    setMessage("Memaafkan absen..."); setMsgType("info");
     try {
       await apiFetch("/api/admin/attendance", {
         method: "PUT",
         role: "admin",
         body: {
           attendanceId: row.id,
-          revision_note: "Keterlambatan dimaafkan (kendala yang bisa dimaafkan) — potongan dihapus, gaji dikembalikan penuh",
-          late_minutes: "0",
-          deduction: "0",
-          final_salary: String(row.final_salary + row.deduction),
-          status: "present"
+          revision_note: [
+            needsLateFix ? "Keterlambatan dimaafkan — potongan dihapus, gaji dikembalikan penuh" : null,
+            needsCheckoutFix ? "Absen keluar tidak tercatat — checkout diisi sesuai jadwal jam pulang shift" : null
+          ].filter(Boolean).join(". "),
+          ...(needsLateFix ? { late_minutes: "0", deduction: "0", final_salary: String(row.final_salary + row.deduction), status: "present" } : {}),
+          ...(needsCheckoutFix && checkoutTime ? { checkout_time: checkoutTime } : {})
         }
       });
       await load();
-      setMessage("Keterlambatan dimaafkan, gaji dikembalikan penuh ✓"); setMsgType("ok");
+      setMessage("Absen dimaafkan ✓"); setMsgType("ok");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gagal memaafkan keterlambatan"); setMsgType("err");
+      setMessage(err instanceof Error ? err.message : "Gagal memaafkan absen"); setMsgType("err");
     } finally {
       setForgivingId(null);
     }
@@ -895,11 +938,16 @@ export default function AdminAttendancePage() {
                             <Clock size={13} /> Izinkan
                           </button>
                         ) : null}
-                        {row.late_minutes > 0 && !row.paid_status && (
+                        {(row.late_minutes > 0 || (row.checkin_time && !row.checkout_time)) && !row.paid_status && (
                           <button
                             className="btn btn-soft"
                             style={{ fontSize: 12, padding: "6px 9px", color: "var(--success)" }}
-                            title={`Maafkan keterlambatan — hapus potongan ${rupiah(row.deduction)}, gaji kembali penuh`}
+                            title={
+                              [
+                                row.late_minutes > 0 ? `Maafkan keterlambatan — hapus potongan ${rupiah(row.deduction)}` : null,
+                                !row.checkout_time ? "Isi absen keluar otomatis sesuai jadwal shift" : null
+                              ].filter(Boolean).join(" & ")
+                            }
                             onClick={() => forgiveLate(row)}
                             disabled={forgivingId === row.id}
                           >
