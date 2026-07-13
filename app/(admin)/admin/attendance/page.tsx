@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X, Clock, Ban } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X, Clock, Ban, CheckCircle2 } from "lucide-react";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
@@ -147,6 +147,9 @@ export default function AdminAttendancePage() {
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<Attendance | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Maafkan keterlambatan (one-click, hapus potongan + kembalikan gaji penuh)
+  const [forgivingId, setForgivingId] = useState<string | null>(null);
 
   // Photo modal
   const [photoTarget, setPhotoTarget] = useState<Attendance | null>(null);
@@ -362,6 +365,43 @@ export default function AdminAttendancePage() {
       setDeleteTarget(null);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  /**
+   * Maafkan keterlambatan sekali klik: hapus late_minutes & potongan, kembalikan
+   * gaji ke nominal penuh (final_salary + deduction yang sudah tersimpan), tandai
+   * status "present". Dipakai saat keterlambatan disebabkan kendala yang bisa
+   * dimaafkan (mis. macet parah, force majeure) — tanpa perlu buka modal Revisi.
+   */
+  async function forgiveLate(row: Attendance) {
+    if (forgivingId) return; // anti double-submit
+    const ok = window.confirm(
+      `Maafkan keterlambatan ${row.staff_name} (${row.late_minutes} menit) pada ${formatDateID(row.date)}?\n\n` +
+      `Potongan ${rupiah(row.deduction)} akan dihapus dan gaji dikembalikan penuh menjadi ${rupiah(row.final_salary + row.deduction)}.`
+    );
+    if (!ok) return;
+    setForgivingId(row.id);
+    setMessage("Memaafkan keterlambatan..."); setMsgType("info");
+    try {
+      await apiFetch("/api/admin/attendance", {
+        method: "PUT",
+        role: "admin",
+        body: {
+          attendanceId: row.id,
+          revision_note: "Keterlambatan dimaafkan (kendala yang bisa dimaafkan) — potongan dihapus, gaji dikembalikan penuh",
+          late_minutes: "0",
+          deduction: "0",
+          final_salary: String(row.final_salary + row.deduction),
+          status: "present"
+        }
+      });
+      await load();
+      setMessage("Keterlambatan dimaafkan, gaji dikembalikan penuh ✓"); setMsgType("ok");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Gagal memaafkan keterlambatan"); setMsgType("err");
+    } finally {
+      setForgivingId(null);
     }
   }
 
@@ -855,6 +895,17 @@ export default function AdminAttendancePage() {
                             <Clock size={13} /> Izinkan
                           </button>
                         ) : null}
+                        {row.late_minutes > 0 && !row.paid_status && (
+                          <button
+                            className="btn btn-soft"
+                            style={{ fontSize: 12, padding: "6px 9px", color: "var(--success)", whiteSpace: "nowrap" }}
+                            title={`Maafkan keterlambatan — hapus potongan ${rupiah(row.deduction)}, gaji kembali penuh`}
+                            onClick={() => forgiveLate(row)}
+                            disabled={forgivingId === row.id}
+                          >
+                            <CheckCircle2 size={13} /> {forgivingId === row.id ? "..." : "Maafkan"}
+                          </button>
+                        )}
                         <button
                           className="btn btn-soft"
                           style={{ fontSize: 12, padding: "6px 9px" }}
