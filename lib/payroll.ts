@@ -23,6 +23,18 @@ export function isShiftCounted(row: {
   return Boolean(row.checkin_time) && Boolean(row.checkout_time);
 }
 
+/**
+ * Shift yang sudah PASTI tidak dibayar: sudah absen masuk, tidak pernah absen
+ * keluar, dan tanggal shift sudah lewat (bukan hari ini — staff yang masih
+ * bertugas hari ini belum tentu lupa checkout, jadi tidak dihitung "rugi").
+ */
+export function isIncompleteUnpaid(
+  row: { checkin_time?: string | null; checkout_time?: string | null; date: string },
+  referenceDate: string
+): boolean {
+  return Boolean(row.checkin_time) && !row.checkout_time && row.date < referenceDate;
+}
+
 export type PayrollPaymentStatus = "lunas" | "sebagian" | "belum_lunas";
 
 export type PayrollAllocationResult = {

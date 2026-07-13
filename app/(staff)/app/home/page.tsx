@@ -7,6 +7,7 @@ import { ApiError, apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
 import {
   WORKING_DAY_CUTOFF_HOUR,
+  dateTimeUtc,
   haversineDistance,
   hourMakassar,
   isCheckoutTimeReached,
@@ -70,6 +71,7 @@ type StatusPayload = {
   shift1WaitingInfo?: { staff_name: string; outlet_name: string; date: string } | null;
   checkinTooEarly?: { tooEarly: boolean; windowOpensAt: string | null } | null;
   tomorrowFullShift?: { date: string; offStaffName: string | null; reason: string | null } | null;
+  unresolvedPastAttendance?: Array<{ id: string; date: string; shift: number; final_salary: number }>;
   earlyCheckoutPermission?: {
     id: string;
     reason: string;
@@ -139,6 +141,31 @@ const GPS_LABEL: Record<GpsStatus, string> = {
   low_accuracy:     "Akurasi GPS terlalu rendah",
   timeout:          "GPS timeout, mencoba ulang otomatis..."
 };
+
+/**
+ * Cek apakah waktu sekarang sudah lewat jam tutup shift (staff sudah checkin,
+ * belum checkout). Dibandingkan sebagai datetime absolut (bukan sekadar jam-of-day)
+ * supaya shift yang melewati tengah malam (mis. Shift 2 20:00-01:00) dihitung benar —
+ * jam tutup dianggap jatuh di tanggal berikutnya, dan checkin lebih awal (staff boleh
+ * checkin hingga 60 menit sebelum shift mulai) tidak salah terdeteksi "sudah lewat".
+ */
+function isPastShiftEnd(
+  outlet: OutletInfo | null | undefined,
+  shift: number,
+  isFullShift: boolean,
+  date: string,
+  now: Date
+): boolean {
+  if (!outlet || !date) return false;
+  const start = shift === 2 ? outlet.shift2_start : outlet.shift1_start;
+  const end = (shift === 2 || isFullShift) ? outlet.shift2_end : outlet.shift1_end;
+  const startMin = parseTimeToMinutes(start);
+  const endMin = parseTimeToMinutes(end);
+  if (startMin === null || endMin === null || !end) return false;
+  let endDate = dateTimeUtc(date, end);
+  if (endMin <= startMin) endDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000); // shift tutup lewat tengah malam
+  return now.getTime() > endDate.getTime();
+}
 
 /* ─── Realtime Guide ─── */
 function RealtimeGuide({
@@ -228,6 +255,20 @@ function RealtimeGuide({
     }
   } else if (nextState === "done") {
     return null; // Done state tidak perlu guide
+  }
+
+  // Sudah checkin, belum checkout, dan jam kerja sudah lewat — timpa jadi pesan mendesak
+  // karena shift ini akan dianggap tidak dibayar (checkin tanpa checkout) jika dibiarkan.
+  if (
+    ["report_buka", "report_tutup", "checkout"].includes(nextState) &&
+    isPastShiftEnd(status.outlet, shift, isFullShift, status.date, clockNow)
+  ) {
+    icon = "⏰";
+    color = "#C0392B";
+    bg = "#FDEDEC";
+    border = "#F5B7B1";
+    const endLabel = (shift === 2 || isFullShift) ? status.outlet?.shift2_end?.slice(0, 5) : status.outlet?.shift1_end?.slice(0, 5);
+    message = `Jam kerja shift ini sudah lewat${endLabel ? ` (selesai pukul ${endLabel})` : ""}. Segera selesaikan laporan & absen keluar — jika tidak, gaji hari ini tidak akan dihitung.`;
   }
 
   if (!message) return null;
@@ -446,6 +487,9 @@ export default function StaffHomePage() {
   /* ─── Heads-up "besok kamu full shift" (cover libur partner) ─── */
   const [showFullShiftNotice, setShowFullShiftNotice] = useState(false);
 
+  /* ─── Peringatan shift lampau yang belum checkout (tidak dibayar) ─── */
+  const [showMissedCheckoutNotice, setShowMissedCheckoutNotice] = useState(false);
+
   /* ─── Draft auto-save ─── */
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftHideTimerRef = useRef<number | null>(null);
@@ -615,6 +659,17 @@ export default function StaffHomePage() {
     try { dismissed = window.localStorage.getItem(`rbn_fs_notice_${tfs.date}`) === "1"; } catch { /* ignore */ }
     setShowFullShiftNotice(!dismissed);
   }, [status?.tomorrowFullShift]);
+
+  /* ─── Banner shift lampau belum checkout: dismiss per tanggal terbaru yang
+     belum diselesaikan — muncul lagi kalau ada tanggal baru yang bermasalah,
+     dan hilang otomatis begitu admin merevisi (baris keluar dari daftar). ─── */
+  useEffect(() => {
+    const rows = status?.unresolvedPastAttendance;
+    if (!rows || rows.length === 0) { setShowMissedCheckoutNotice(false); return; }
+    let dismissed = false;
+    try { dismissed = window.localStorage.getItem(`rbn_missed_checkout_ack_${rows[0].date}`) === "1"; } catch { /* ignore */ }
+    setShowMissedCheckoutNotice(!dismissed);
+  }, [status?.unresolvedPastAttendance]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -914,6 +969,14 @@ export default function StaffHomePage() {
       try { window.localStorage.setItem(`rbn_fs_notice_${tfs.date}`, "1"); } catch { /* ignore */ }
     }
     setShowFullShiftNotice(false);
+  }
+
+  function dismissMissedCheckoutNotice() {
+    const rows = status?.unresolvedPastAttendance;
+    if (rows && rows.length > 0) {
+      try { window.localStorage.setItem(`rbn_missed_checkout_ack_${rows[0].date}`, "1"); } catch { /* ignore */ }
+    }
+    setShowMissedCheckoutNotice(false);
   }
 
   /* ─── Submit report ─── */
@@ -1417,6 +1480,31 @@ export default function StaffHomePage() {
         {busy && (
           <div style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "var(--warning)" }}>
             ⏳ {busy}
+          </div>
+        )}
+
+        {/* Shift lampau belum checkout — tidak dibayar */}
+        {showMissedCheckoutNotice && status?.unresolvedPastAttendance && status.unresolvedPastAttendance.length > 0 && (
+          <div style={{
+            background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
+            borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "flex-start", gap: 8
+          }}>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 13, fontWeight: 800, color: "var(--danger)", margin: 0 }}>
+                ⚠️ {status.unresolvedPastAttendance.length} shift sebelumnya belum checkout
+              </p>
+              <p style={{ fontSize: 12, color: "#78350F", marginTop: 4, lineHeight: 1.5 }}>
+                Tanggal: {status.unresolvedPastAttendance.map((row) => formatDateID(row.date)).join(", ")}.
+                Shift ini tidak dihitung ke gaji karena tidak ada absen keluar. Hubungi admin jika ini kekeliruan.
+              </p>
+            </div>
+            <button
+              onClick={dismissMissedCheckoutNotice}
+              aria-label="Tutup"
+              style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", flexShrink: 0 }}
+            >
+              <X size={16} />
+            </button>
           </div>
         )}
 

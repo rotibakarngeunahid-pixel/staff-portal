@@ -21,6 +21,14 @@ type DashboardPayload = {
     final_salary: number;
     flags: string | null;
   }>;
+  incompleteAttendance: Array<{
+    id: string;
+    staff_name: string;
+    outlet_name: string;
+    date: string;
+    shift: number;
+    final_salary: number;
+  }>;
 };
 
 type ProjectionSummary = {
@@ -144,6 +152,42 @@ export default function AdminDashboardPage() {
                 </div>
               </>
             ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* Perlu Tindakan — shift lampau yang checkin tapi tidak pernah checkout (sudah pasti tidak dibayar) */}
+      {!loading && (data?.incompleteAttendance || []).length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid var(--danger-border)", borderRadius: 16, marginBottom: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--danger-bg)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ fontSize: 13, fontWeight: 800, color: "var(--danger)" }}>⚠️ Perlu Tindakan — Absen Tidak Lengkap</h2>
+            <Link href="/admin/attendance" style={{ fontSize: 12, fontWeight: 700, color: "var(--primary)", textDecoration: "none", display: "flex", alignItems: "center", gap: 4 }}>
+              Lihat &amp; Revisi <ArrowRight size={13} />
+            </Link>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Tanggal</th>
+                  <th>Staff</th>
+                  <th>Outlet</th>
+                  <th>Shift</th>
+                  <th>Gaji Hilang</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.incompleteAttendance || []).map((row) => (
+                  <tr key={row.id}>
+                    <td data-label="Tanggal">{formatDateID(row.date)}</td>
+                    <td data-label="Staff" style={{ fontWeight: 700 }}>{row.staff_name}</td>
+                    <td data-label="Outlet">{row.outlet_name}</td>
+                    <td data-label="Shift">{row.shift === 0 ? "Full" : `S${row.shift}`}</td>
+                    <td data-label="Gaji Hilang" style={{ fontWeight: 700, color: "var(--danger)" }}>{rupiah(row.final_salary)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

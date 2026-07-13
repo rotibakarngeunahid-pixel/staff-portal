@@ -13,7 +13,7 @@ import {
 import { SaldoTertahanPopup, hasSaldoAck } from "@/components/payroll/saldo-tertahan-popup";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateWithDayID, hhmm, rupiah } from "@/lib/format";
-import { isShiftCounted, shiftLabel } from "@/lib/payroll";
+import { isIncompleteUnpaid, isShiftCounted, shiftLabel } from "@/lib/payroll";
 
 const MONTHS_ID = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
@@ -61,6 +61,7 @@ type PayrollPayload = {
     date_to: string | null;
   }>;
   fines: Array<{ id: string; amount: number; reason: string; incident_date: string }>;
+  today: string;
   outlet: { shift1_start: string | null; shift2_start: string | null } | null;
   config: { lateToleranceMinutes: number; deductionPerMinute: number };
 };
@@ -224,6 +225,10 @@ export default function StaffPayrollPage() {
   }, [data]);
 
   const summary = data?.summary;
+  const incompleteRows = data
+    ? data.attendance.filter((row) => isIncompleteUnpaid(row, data.today))
+    : [];
+  const incompleteTotal = incompleteRows.reduce((sum, row) => sum + (row.final_salary || 0), 0);
 
   return (
     <StaffPage title="Info Gaji" subtitle="Ringkasan pembayaran dan rincian per shift">
@@ -252,6 +257,34 @@ export default function StaffPayrollPage() {
         <div className="payroll-stack">
           {/* 1. Ringkasan gaji */}
           <PayrollHero summary={summary} />
+
+          {/* 1a. Absen tidak lengkap — shift ini dikeluarkan diam-diam dari perhitungan gaji */}
+          {incompleteRows.length > 0 && (
+            <div style={{
+              background: "var(--danger-bg)", border: "1px solid var(--danger-border)",
+              borderRadius: 14, padding: "14px 16px"
+            }}>
+              <p style={{
+                display: "flex", alignItems: "center", gap: 6,
+                fontSize: 13, fontWeight: 800, color: "var(--danger)", marginBottom: 6
+              }}>
+                <AlertTriangle size={15} />
+                {incompleteRows.length} shift tidak dihitung ke gaji: {rupiah(incompleteTotal)}
+              </p>
+              <p style={{ fontSize: 12, color: "#78350F" }}>
+                Kamu absen masuk tapi tidak absen keluar pada shift tersebut, jadi tidak dihitung sesuai aturan penggajian.
+                Hubungi admin jika ini kekeliruan.
+              </p>
+              <button
+                type="button"
+                className="btn btn-soft"
+                style={{ fontSize: 12, marginTop: 10 }}
+                onClick={() => setShowDetails(true)}
+              >
+                Lihat shift yang tidak dihitung
+              </button>
+            </div>
+          )}
 
           {/* 1b. Denda belum diterapkan — supaya staff tahu sebelum gajian, bukan kejutan di slip */}
           {data!.fines && data!.fines.length > 0 && (

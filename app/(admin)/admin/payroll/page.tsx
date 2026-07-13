@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, ImageIcon, Loader2, Plus, RefreshCw, Save, Users, X } from "lucide-react";
+import { AlertTriangle, ExternalLink, ImageIcon, Loader2, Plus, RefreshCw, Save, Users, X } from "lucide-react";
 import Link from "next/link";
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import {
@@ -21,6 +21,7 @@ import { formatDateWithDayID, rupiah } from "@/lib/format";
 import {
   allocatePaymentByAmount,
   allocatePaymentByDates,
+  isIncompleteUnpaid,
   isShiftCounted,
   LATE_LEAVE_NOTICE_FINE_AMOUNT,
   LATE_LEAVE_NOTICE_FINE_REASON
@@ -177,6 +178,14 @@ export default function AdminPayrollPage() {
     }),
     [current]
   );
+
+  // Shift yang checkin tapi tidak pernah checkout — sudah pasti tidak dibayar,
+  // dan diam-diam absen dari daftar "unpaid" di atas karena isShiftCounted().
+  const incompleteRows = useMemo(
+    () => current?.attendance.filter((row) => isIncompleteUnpaid(row, todayJakarta())) || [],
+    [current]
+  );
+  const incompleteTotal = incompleteRows.reduce((sum, row) => sum + (row.final_salary || 0), 0);
 
   const payments = current?.payments || [];
   const payAmount = Number(amountInput) || 0;
@@ -483,6 +492,30 @@ export default function AdminPayrollPage() {
               emptyText="Semua shift sudah lunas"
             />
           </div>
+
+          {incompleteRows.length > 0 && (
+            <div
+              style={{
+                display: "flex", alignItems: "flex-start", gap: 10, marginTop: 14,
+                padding: "12px 14px", borderRadius: 12,
+                background: "var(--danger-bg)", border: "1px solid var(--danger-border)"
+              }}
+            >
+              <AlertTriangle size={16} color="var(--danger)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 800, color: "var(--danger)", margin: 0 }}>
+                  {incompleteRows.length} shift tidak dihitung karena absen tidak lengkap
+                </p>
+                <p style={{ fontSize: 12, color: "var(--muted)", margin: "3px 0 0" }}>
+                  Sudah absen masuk tapi tidak pernah absen keluar — estimasi {rupiah(incompleteTotal)} tidak dapat dibayar
+                  sampai admin merevisi jam pulangnya.{" "}
+                  <Link href="/admin/attendance" style={{ color: "var(--primary)", fontWeight: 700 }}>
+                    Lihat &amp; revisi di Data Absensi →
+                  </Link>
+                </p>
+              </div>
+            </div>
+          )}
         </AdminSection>
       )}
 

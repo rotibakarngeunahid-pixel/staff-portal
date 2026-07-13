@@ -1440,6 +1440,19 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     }
   }
 
+  // Shift hari-hari sebelumnya yang checkin tapi tidak pernah checkout — sudah
+  // pasti tidak dibayar (lihat isIncompleteUnpaid di lib/payroll.ts). Staff tidak
+  // bisa memperbaikinya sendiri, tapi perlu tahu supaya tidak kaget saat gajian.
+  const { data: unresolvedPastRows } = await db
+    .from("attendance")
+    .select("id,date,shift,final_salary")
+    .eq("staff_id", staff.id)
+    .not("checkin_time", "is", null)
+    .is("checkout_time", null)
+    .lt("date", effective)
+    .order("date", { ascending: false })
+    .limit(5);
+
   return ok({
     staff: publicStaff(staff),
     outlet,
@@ -1462,6 +1475,7 @@ async function staffAttendanceStatus(db: Db, request: NextRequest, body: Body) {
     shift1WaitingInfo,
     checkinTooEarly,
     tomorrowFullShift,
+    unresolvedPastAttendance: unresolvedPastRows || [],
     // PRD Izin Pulang Awal
     earlyCheckoutPermission,
     earlyCheckoutAllowed: Boolean(earlyCheckoutPermission),
@@ -2545,6 +2559,7 @@ async function staffPayroll(db: Db, request: NextRequest) {
     payments: payments || [],
     fines: finesError ? [] : (fines || []),
     summary,
+    today: todayJakarta(),
     outlet: outlet ? {
       shift1_start: outlet.shift1_start || null,
       shift2_start: outlet.shift2_start || null
@@ -3061,17 +3076,29 @@ async function adminDashboard(db: Db) {
     { data: staff, error: staffError },
     { data: outlets, error: outletsError },
     { data: attendance, error: attendanceError },
-    { data: reports, error: reportsError }
+    { data: reports, error: reportsError },
+    { data: incompleteAttendance, error: incompleteError }
   ] = await Promise.all([
     db.from("staff").select("id,name,outlet_id,active").eq("active", true),
     db.from("outlets").select("*").eq("active", true),
     db.from("attendance").select("*").eq("date", today).order("checkin_time", { ascending: false }),
-    db.from("reports").select("*").eq("date", today)
+    db.from("reports").select("*").eq("date", today),
+    // Shift lampau yang checkin tapi tidak pernah checkout — sudah pasti tidak
+    // dibayar (lihat isIncompleteUnpaid di lib/payroll.ts), butuh tindakan admin.
+    db
+      .from("attendance")
+      .select("id,staff_name,outlet_name,date,shift,final_salary")
+      .not("checkin_time", "is", null)
+      .is("checkout_time", null)
+      .lt("date", today)
+      .order("date", { ascending: false })
+      .limit(20)
   ]);
   if (staffError) throw staffError;
   if (outletsError) throw outletsError;
   if (attendanceError) throw attendanceError;
   if (reportsError) throw reportsError;
+  if (incompleteError) throw incompleteError;
 
   const presentStaff = new Set((attendance || []).filter((row) => row.checkin_time).map((row) => row.staff_id));
   return ok({
@@ -3086,7 +3113,8 @@ async function adminDashboard(db: Db) {
     staff: staff || [],
     outlets: outlets || [],
     attendance: attendance || [],
-    reports: reports || []
+    reports: reports || [],
+    incompleteAttendance: incompleteAttendance || []
   });
 }
 

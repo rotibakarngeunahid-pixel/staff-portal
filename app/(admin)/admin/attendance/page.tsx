@@ -5,6 +5,7 @@ import { Plus, RefreshCw, Trash2, Pencil, ImageIcon, MapPin, X, Clock, Ban } fro
 import { AdminPage, AdminSection, MsgBar } from "@/components/admin/admin-page";
 import { apiFetch } from "@/lib/client-api";
 import { formatDateID, hhmm, rupiah } from "@/lib/format";
+import { isIncompleteUnpaid } from "@/lib/payroll";
 
 type EarlyCheckoutPermission = {
   id: string;
@@ -140,7 +141,7 @@ export default function AdminAttendancePage() {
 
   // Revise modal
   const [reviseTarget, setReviseTarget] = useState<Attendance | null>(null);
-  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "", shift: "", late_reason: "" });
+  const [reviseForm, setReviseForm] = useState({ revision_note: "", late_minutes: "", deduction: "", final_salary: "", shift: "", late_reason: "", checkin_time: "", checkout_time: "" });
   const [revising, setRevising] = useState(false);
 
   // Delete modal
@@ -301,7 +302,9 @@ export default function AdminAttendancePage() {
       deduction: String(row.deduction),
       final_salary: String(row.final_salary),
       shift: String(row.shift),
-      late_reason: row.late_reason || ""
+      late_reason: row.late_reason || "",
+      checkin_time: "",
+      checkout_time: ""
     });
   }
 
@@ -326,7 +329,9 @@ export default function AdminAttendancePage() {
             late_minutes: reviseForm.late_minutes,
             deduction: reviseForm.deduction,
             final_salary: reviseForm.final_salary
-          })
+          }),
+          ...(reviseForm.checkin_time ? { checkin_time: reviseForm.checkin_time } : {}),
+          ...(reviseForm.checkout_time ? { checkout_time: reviseForm.checkout_time } : {})
         }
       });
       await load();
@@ -424,6 +429,11 @@ export default function AdminAttendancePage() {
   const bulkShiftHint = selectedOutlet
     ? (Number(bulkShift) === 2 ? selectedOutlet.shift2_start : selectedOutlet.shift1_start) || "-"
     : null;
+
+  const today = todayWita();
+  const incompleteRows = rows.filter((row) => isIncompleteUnpaid(row, today));
+  const incompleteCount = incompleteRows.length;
+  const incompleteTotal = incompleteRows.reduce((sum, row) => sum + (row.final_salary || 0), 0);
 
   return (
     <AdminPage
@@ -699,8 +709,13 @@ export default function AdminAttendancePage() {
 
       {/* Table */}
       <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(0,0,0,.05)" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface-soft)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <h2 style={{ fontSize: 13, fontWeight: 800 }}>Hasil ({rows.length} data)</h2>
+          {incompleteCount > 0 && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#B91C1C" }}>
+              ⚠️ {incompleteCount} absen tidak lengkap (~{rupiah(incompleteTotal)}) dari data ini
+            </span>
+          )}
         </div>
         <div style={{ overflowX: "auto" }}>
           <table className="data-table">
@@ -761,7 +776,20 @@ export default function AdminAttendancePage() {
                       )}
                     </td>
                     <td data-label="Gaji" style={{ fontWeight: 700 }}>{rupiah(row.final_salary)}</td>
-                    <td data-label="Status Bayar"><span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span></td>
+                    <td data-label="Status Bayar">
+                      {isIncompleteUnpaid(row, today) ? (
+                        <span
+                          className="status-pill status-danger"
+                          title={`Tidak dibayar — tidak checkout. Gaji ${rupiah(row.final_salary)} tidak dihitung.`}
+                        >
+                          Absen Tidak Lengkap
+                        </span>
+                      ) : row.checkin_time && !row.checkout_time && row.date === today ? (
+                        <span className="status-pill status-warn">Bertugas</span>
+                      ) : (
+                        <span className={`status-pill ${row.paid_status ? "status-ok" : "status-warn"}`}>{row.paid_status ? "Dibayar" : "Belum"}</span>
+                      )}
+                    </td>
                     <td data-label="Foto / GPS">
                       <div style={{ display: "flex", gap: 4 }}>
                         {hasSelfie && (
@@ -865,6 +893,31 @@ export default function AdminAttendancePage() {
           </div>
           <form onSubmit={submitRevise}>
             <div style={{ display: "grid", gap: 12, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label className="label">Jam Masuk (koreksi)</label>
+                  <input
+                    className="field"
+                    type="time"
+                    value={reviseForm.checkin_time}
+                    onChange={(e) => setReviseForm({ ...reviseForm, checkin_time: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="label">Jam Pulang (koreksi)</label>
+                  <input
+                    className="field"
+                    type="time"
+                    value={reviseForm.checkout_time}
+                    onChange={(e) => setReviseForm({ ...reviseForm, checkout_time: e.target.value })}
+                  />
+                </div>
+              </div>
+              {!reviseTarget.checkout_time && (
+                <p style={{ fontSize: 12, color: "var(--muted)", marginTop: -6 }}>
+                  Isi Jam Pulang jika staff lupa absen keluar — kosongkan kedua kolom di atas jika tidak ada koreksi jam.
+                </p>
+              )}
               <div>
                 <label className="label">Catatan Revisi <span style={{ color: "var(--danger)" }}>*</span></label>
                 <input
