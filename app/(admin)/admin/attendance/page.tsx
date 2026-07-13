@@ -898,12 +898,14 @@ export default function AdminAttendancePage() {
                         {row.late_minutes > 0 && !row.paid_status && (
                           <button
                             className="btn btn-soft"
-                            style={{ fontSize: 12, padding: "6px 9px", color: "var(--success)", whiteSpace: "nowrap" }}
+                            style={{ fontSize: 12, padding: "6px 9px", color: "var(--success)" }}
                             title={`Maafkan keterlambatan — hapus potongan ${rupiah(row.deduction)}, gaji kembali penuh`}
                             onClick={() => forgiveLate(row)}
                             disabled={forgivingId === row.id}
                           >
-                            <CheckCircle2 size={13} /> {forgivingId === row.id ? "..." : "Maafkan"}
+                            {forgivingId === row.id
+                              ? <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} />
+                              : <CheckCircle2 size={13} />}
                           </button>
                         )}
                         <button
