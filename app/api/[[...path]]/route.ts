@@ -340,6 +340,17 @@ function shiftTypeFromShift(shift: 0 | 1 | 2): ShiftTypeValue {
   return "FULL_SHIFT";
 }
 
+/**
+ * Deteksi error dari trigger DB trg_attendance_prevent_slot_overlap (migration 0010)
+ * atau unique index attendance(staff_id,date,shift): slot shift sudah terisi.
+ * Tanpa mapping ini error PostgREST bocor sebagai 500 tanpa pesan yang bisa dipahami admin.
+ */
+function isSlotConflictError(error: unknown) {
+  const message = String((error as { message?: unknown })?.message || "");
+  const code = String((error as { code?: unknown })?.code || "");
+  return code === "23505" || message.includes("SHIFT_ALREADY_TAKEN");
+}
+
 function shiftFromShiftType(shiftType?: string | null): 0 | 1 | 2 | null {
   if (shiftType === "SHIFT_1") return 1;
   if (shiftType === "SHIFT_2") return 2;
@@ -1855,9 +1866,7 @@ async function checkin(db: Db, request: NextRequest, body: Body) {
     .select("*")
     .single();
   if (error) {
-    const message = String((error as any).message || "");
-    const code = String((error as any).code || "");
-    if (code === "23505" || message.includes("SHIFT_ALREADY_TAKEN")) {
+    if (isSlotConflictError(error)) {
       throw new HttpError("Shift ini sudah diisi staff lain. Muat ulang status lalu coba lagi.", 409, "SHIFT_ALREADY_TAKEN");
     }
     throw error;
@@ -3528,7 +3537,16 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       )
       .select("*")
       .single();
-    if (error) throw error;
+    if (error) {
+      if (isSlotConflictError(error)) {
+        throw new HttpError(
+          `${shiftLabel(shift)} pada ${date} di outlet ini sudah diisi staff lain (setiap slot shift hanya boleh diisi 1 orang). Periksa daftar absensi tanggal tersebut.`,
+          409,
+          "SHIFT_ALREADY_TAKEN"
+        );
+      }
+      throw error;
+    }
     await logAudit(db, "admin_manual_attendance", "Admin", { attendanceId: data.id, staffId, date, shift });
     return ok({ attendance: data });
   }
@@ -3554,48 +3572,81 @@ async function adminAttendance(db: Db, method: string, body: Body) {
 
     // Koreksi shift: jika admin mengubah shift, hitung ulang gaji secara otomatis
     const newShiftRaw = body.shift !== undefined && body.shift !== null && body.shift !== "" ? Number(body.shift) : null;
+    let assignmentShiftType: ShiftTypeValue | null = null;
     if (newShiftRaw !== null && [0, 1, 2].includes(newShiftRaw) && newShiftRaw !== existing.shift && existing.checkin_time) {
       const newShift = newShiftRaw as 0 | 1 | 2;
-      const [{ data: outletRaw }, { data: staffRaw }, revCfg] = await Promise.all([
+
+      // Guard yang sama dengan trigger DB trg_attendance_prevent_slot_overlap: satu slot
+      // shift per outlet/tanggal hanya boleh diisi 1 orang, dan Full Shift menempati kedua
+      // slot. Tanpa pre-check ini trigger menolak update dan admin hanya melihat 500 kosong.
+      const conflictingShifts = newShift === 0 ? [0, 1, 2] : [0, newShift];
+      const { data: slotTaken, error: slotError } = await db
+        .from("attendance")
+        .select("id, staff_name, shift")
+        .eq("outlet_id", existing.outlet_id)
+        .eq("date", existing.date)
+        .neq("staff_id", existing.staff_id)
+        .in("shift", conflictingShifts)
+        .not("checkin_time", "is", null)
+        .or("is_duplicate.is.null,is_duplicate.eq.false")
+        .limit(1);
+      if (slotError) throw slotError;
+      if (slotTaken && slotTaken.length > 0) {
+        const taken = slotTaken[0] as { staff_name?: string; shift?: number };
+        const takenShift = ([0, 1, 2].includes(Number(taken.shift)) ? Number(taken.shift) : 0) as 0 | 1 | 2;
+        const takenName = taken.staff_name || "staff lain";
+        throw new HttpError(
+          `Tidak bisa mengubah ke ${shiftLabel(newShift)}: ${takenName} sudah tercatat absen ${shiftLabel(takenShift)} di outlet yang sama pada tanggal ini, dan setiap slot shift hanya boleh diisi 1 orang. Hapus/revisi dulu absen ${takenName}, atau gunakan koreksi manual (menit telat, potongan, gaji akhir) tanpa mengubah shift.`,
+          409,
+          "SHIFT_ALREADY_TAKEN"
+        );
+      }
+
+      const [{ data: outletRaw, error: revOutletError }, { data: staffRaw, error: revStaffError }, revCfg] = await Promise.all([
         db.from("outlets").select("*").eq("id", existing.outlet_id).single(),
         db.from("staff").select("salary_per_shift").eq("id", existing.staff_id).single(),
         configMap(db)
       ]);
-      if (outletRaw && staffRaw) {
-        const revOutlet = toOutlet(outletRaw);
-        const checkinDt = new Date(existing.checkin_time);
-        const newShiftStart = dateTimeUtc(existing.date, shiftStartTime(revOutlet, newShift));
-        // Full shift di outlet 2-shift = gaji 2x — konsisten dengan alur checkin mandiri staff
-        const isFullShift2x = revOutlet.shift_mode === 2 && newShift === 0;
-        const recalc = calculateSalary(
-          checkinDt,
-          newShiftStart,
-          normalizeCurrency((staffRaw as any).salary_per_shift) * (isFullShift2x ? 2 : 1),
-          configNumber(revCfg, "late_tolerance_minutes", 10),
-          configNumber(revCfg, "deduction_per_minute", configNumber(revCfg, "late_deduction_per_minute", 1000))
+      // Dulu lookup gagal di-skip diam-diam: revisi "tersimpan" tapi shift tidak berubah.
+      if (revOutletError || revStaffError || !outletRaw || !staffRaw) {
+        throw new HttpError(
+          "Data outlet/staff untuk hitung ulang gaji tidak ditemukan. Muat ulang halaman lalu coba lagi.",
+          404,
+          "REVISION_LOOKUP_FAILED"
         );
-        updates.shift = newShift;
-        updates.late_minutes = recalc.lateMinutes;
-        updates.deduction = recalc.deduction;
-        updates.final_salary = recalc.finalSalary;
-        updates.status = recalc.lateMinutes > 0 ? "late" : "present";
-        // Sinkronkan flag FULL_SHIFT_2X dengan shift baru tanpa menghapus flag lain (GPS, dsb.)
-        const flagSet = String(existing.flags || "")
-          .split(",")
-          .filter(Boolean)
-          .filter((flag) => flag !== "FULL_SHIFT_2X");
-        if (isFullShift2x) flagSet.push("FULL_SHIFT_2X");
-        updates.flags = flagSet.join(",");
-
-        // Sinkronkan shift_type di staff_shift_assignments agar status endpoint konsisten
-        const newShiftType = newShift === 1 ? "SHIFT_1" : newShift === 2 ? "SHIFT_2" : "FULL_SHIFT";
-        await db
-          .from("staff_shift_assignments")
-          .update({ shift_type: newShiftType, updated_at: new Date().toISOString() })
-          .eq("staff_id", existing.staff_id)
-          .eq("date", existing.date)
-          .in("status", ["confirmed", "admin_override", "auto_cover", "locked", "completed"]);
       }
+      const revOutlet = toOutlet(outletRaw);
+      // Pakai jam masuk KOREKSI jika ikut diisi, supaya hitung ulang telat/gaji konsisten
+      // dengan jam masuk yang akan tersimpan (dulu selalu pakai jam masuk lama).
+      const checkinDt = body.checkin_time
+        ? dateTimeUtc(existing.date, String(body.checkin_time).slice(0, 5))
+        : new Date(existing.checkin_time);
+      const newShiftStart = dateTimeUtc(existing.date, shiftStartTime(revOutlet, newShift));
+      // Full shift di outlet 2-shift = gaji 2x — konsisten dengan alur checkin mandiri staff
+      const isFullShift2x = revOutlet.shift_mode === 2 && newShift === 0;
+      const recalc = calculateSalary(
+        checkinDt,
+        newShiftStart,
+        normalizeCurrency((staffRaw as any).salary_per_shift) * (isFullShift2x ? 2 : 1),
+        configNumber(revCfg, "late_tolerance_minutes", 10),
+        configNumber(revCfg, "deduction_per_minute", configNumber(revCfg, "late_deduction_per_minute", 1000))
+      );
+      updates.shift = newShift;
+      updates.late_minutes = recalc.lateMinutes;
+      updates.deduction = recalc.deduction;
+      updates.final_salary = recalc.finalSalary;
+      updates.status = recalc.lateMinutes > 0 ? "late" : "present";
+      // Sinkronkan flag FULL_SHIFT_2X dengan shift baru tanpa menghapus flag lain (GPS, dsb.)
+      const flagSet = String(existing.flags || "")
+        .split(",")
+        .filter(Boolean)
+        .filter((flag) => flag !== "FULL_SHIFT_2X");
+      if (isFullShift2x) flagSet.push("FULL_SHIFT_2X");
+      updates.flags = flagSet.join(",");
+
+      // Sinkron shift_type assignment ditunda sampai update attendance benar-benar sukses
+      // (dulu dijalankan sebelum update, jadi saat update ditolak assignment terlanjur berubah).
+      assignmentShiftType = shiftTypeFromShift(newShift);
     } else {
       // Koreksi manual: late_minutes, deduction, final_salary, status, paid_status
       ["late_minutes", "deduction", "final_salary", "status", "paid_status"].forEach((key) => {
@@ -3627,7 +3678,33 @@ async function adminAttendance(db: Db, method: string, body: Body) {
       updates.checkout_time = null;
     }
     const { data, error } = await db.from("attendance").update(updates).eq("id", attendanceId).select("*").single();
-    if (error) throw error;
+    if (error) {
+      // Fallback kalau trigger DB tetap menolak (race dengan checkin staff, atau koreksi
+      // jam masuk pada baris yang bentrok dengan absen lain) — jangan bocorkan 500 kosong.
+      if (isSlotConflictError(error)) {
+        throw new HttpError(
+          "Revisi bentrok dengan absen lain di outlet & tanggal yang sama (slot shift sudah terisi). Muat ulang data, lalu periksa absen staff lain pada tanggal ini.",
+          409,
+          "SHIFT_ALREADY_TAKEN"
+        );
+      }
+      throw error;
+    }
+
+    // Sinkronkan shift_type di staff_shift_assignments agar status endpoint konsisten.
+    // Best-effort: kegagalan di sini tidak membatalkan revisi attendance (sumber kebenaran gaji).
+    if (assignmentShiftType) {
+      const { error: syncError } = await db
+        .from("staff_shift_assignments")
+        .update({ shift_type: assignmentShiftType, updated_at: new Date().toISOString() })
+        .eq("staff_id", existing.staff_id)
+        .eq("date", existing.date)
+        .in("status", [...ACTIVE_ASSIGNMENT_STATUSES]);
+      if (syncError) {
+        console.error(`[admin-attendance] sinkron shift_type assignment gagal: ${syncError.message}`);
+      }
+    }
+
     await logAudit(db, "admin_revise_attendance", "Admin", {
       attendanceId,
       note: updates.revision_note,
@@ -3936,7 +4013,10 @@ async function adminAttendanceBulk(db: Db, body: Body) {
       results.push({ staffId, staffName: String(staff.name), status: "success", attendance: data });
       successCount++;
     } catch (err) {
-      results.push({ staffId, staffName: String(staff.name || staffId), status: "error", message: err instanceof Error ? err.message : "Gagal menyimpan" });
+      const message = isSlotConflictError(err)
+        ? `${shiftLabel(shift)} pada ${date} di outlet ini sudah diisi staff lain`
+        : err instanceof Error ? err.message : "Gagal menyimpan";
+      results.push({ staffId, staffName: String(staff.name || staffId), status: "error", message });
       errorCount++;
     }
   }

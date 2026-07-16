@@ -307,6 +307,7 @@ export default function AdminAttendancePage() {
   }
 
   function openRevise(row: Attendance) {
+    setMessage(""); // pesan lama di halaman jangan ikut tampil di dalam modal
     setReviseTarget(row);
     setReviseForm({
       revision_note: row.revision_note || "",
@@ -449,6 +450,7 @@ export default function AdminAttendancePage() {
   }
 
   function openEarly(row: Attendance) {
+    setMessage("");
     setEarlyTarget(row);
     setEarlyForm({ reason: "", note: "" });
   }
@@ -478,6 +480,7 @@ export default function AdminAttendancePage() {
   }
 
   function openCancel(row: Attendance) {
+    setMessage("");
     setCancelTarget(row);
     setCancelReason("");
   }
@@ -1082,6 +1085,8 @@ export default function AdminAttendancePage() {
                 </div>
               )}
             </div>
+            {/* MsgBar halaman tertutup overlay modal — tampilkan juga di sini agar error simpan terlihat */}
+            <MsgBar message={message} type={msgType} />
             <div style={{ display: "flex", gap: 10 }}>
               <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={revising}>
                 {revising ? "Menyimpan..." : "Simpan Revisi"}
@@ -1231,6 +1236,7 @@ export default function AdminAttendancePage() {
             }}>
               ⚠️ Staff tetap wajib mengirim Laporan Tutup Toko sebelum absen pulang. Izin ini hanya membuka blokir jam checkout, bukan melewati alur penutupan toko (GPS, selfie, dan inventori tetap wajib).
             </div>
+            <MsgBar message={message} type={msgType} />
             <div style={{ display: "flex", gap: 10 }}>
               <button type="submit" className="btn btn-primary" style={{ fontSize: 13 }} disabled={earlySaving}>
                 {earlySaving ? "Menyimpan..." : "Simpan Izin"}
@@ -1265,6 +1271,7 @@ export default function AdminAttendancePage() {
                 minLength={5}
               />
             </div>
+            <MsgBar message={message} type={msgType} />
             <div style={{ display: "flex", gap: 10 }}>
               <button type="submit" className="btn btn-primary" style={{ fontSize: 13, background: "var(--danger)", borderColor: "var(--danger)" }} disabled={cancelSaving}>
                 {cancelSaving ? "Membatalkan..." : "Batalkan Izin"}
